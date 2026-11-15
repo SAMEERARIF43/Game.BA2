@@ -1,0 +1,6 @@
+{
+  "name": "Strike Force",
+  "description": "Tactical 3D browser first-person shooter built with Babylon.js, TypeScript, and Vite.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

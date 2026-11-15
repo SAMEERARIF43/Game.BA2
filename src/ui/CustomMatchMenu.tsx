@@ -1,0 +1,398 @@
+import React, { useEffect, useState } from 'react';
+import { ArrowLeft, KeyRound, Plus, Shield, Users } from 'lucide-react';
+import { MAP_LIST } from '../maps/MapManager';
+import { MapId } from '../maps/types';
+import { CreatePrivateMatchOptions, RoomLookupSummary } from '../multiplayer/types';
+
+interface CustomMatchMenuProps {
+  initialJoinCode?: string;
+  initialMapId: MapId;
+  initialCallsign: string;
+  errorBanner: string | null;
+  onCallsignChange?: (callsign: string) => void;
+  onCreateMatch: (options: CreatePrivateMatchOptions) => Promise<void>;
+  onJoinMatch: (roomCode: string, playerName: string, password?: string) => Promise<void>;
+  onLookupRoom: (roomCode: string) => Promise<RoomLookupSummary>;
+  onBack: () => void;
+}
+
+export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
+  initialJoinCode,
+  initialMapId,
+  initialCallsign,
+  errorBanner,
+  onCallsignChange,
+  onCreateMatch,
+  onJoinMatch,
+  onLookupRoom,
+  onBack,
+}) => {
+  const [playerName, setPlayerName] = useState<string>(() => initialCallsign || 'Operator-101');
+
+  // Create form state
+  const [roomName, setRoomName] = useState('Strike Force Private');
+  const [mapId, setMapId] = useState<MapId>(initialMapId);
+  const [killLimit, setKillLimit] = useState(30);
+  const [timeLimit, setTimeLimit] = useState(300);
+  const [friendlyFire, setFriendlyFire] = useState(false);
+  const [botCount, setBotCount] = useState(4);
+  const [createPassword, setCreatePassword] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  // Join form state
+  const [joinCode, setJoinCode] = useState(initialJoinCode?.toUpperCase() || '');
+  const [joinPassword, setJoinPassword] = useState('');
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [roomPreview, setRoomPreview] = useState<RoomLookupSummary | null>(null);
+
+  useEffect(() => {
+    if (initialJoinCode) {
+      const normalized = initialJoinCode.trim().toUpperCase().slice(0, 6);
+      setJoinCode(normalized);
+    }
+  }, [initialJoinCode]);
+
+  useEffect(() => {
+    const code = joinCode.trim().toUpperCase();
+    if (code.length !== 6) {
+      setRoomPreview(null);
+      return;
+    }
+
+    let cancelled = false;
+    onLookupRoom(code)
+      .then((summary) => {
+        if (!cancelled) {
+          setRoomPreview(summary);
+          setJoinError(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRoomPreview(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [joinCode, onLookupRoom]);
+
+  const persistCallsign = (name: string) => {
+    const clean = name.trim() || 'Operator-101';
+    onCallsignChange?.(clean);
+    return clean;
+  };
+
+  const handleCreateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateError(null);
+    setCreating(true);
+    try {
+      const cleanName = persistCallsign(playerName);
+      await onCreateMatch({
+        playerName: cleanName,
+        roomName: roomName.trim() || 'Strike Force Private',
+        mapId,
+        killLimit,
+        timeLimit,
+        respawnDelay: 3,
+        friendlyFire,
+        botCount,
+        password: createPassword.trim() || undefined,
+      });
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'Could not create private match.');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleJoinSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setJoinError(null);
+    const code = joinCode.trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+      setJoinError('Enter a valid 6-character room code (e.g. WAR482).');
+      return;
+    }
+
+    setJoining(true);
+    try {
+      const cleanName = persistCallsign(playerName);
+      await onJoinMatch(code, cleanName, joinPassword.trim() || undefined);
+    } catch (err) {
+      setJoinError(err instanceof Error ? err.message : 'Unable to join room.');
+    } finally {
+      setJoining(false);
+    }
+  };
+
+  return (
+    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/80 p-6 backdrop-blur-sm md:p-10">
+      <div className="w-full max-w-5xl border border-white/15 bg-[#0e131b]/95 p-7 shadow-2xl">
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
+          <div>
+            <h1 className="font-display text-2xl font-bold text-white">Custom Private Match</h1>
+            <p className="mt-1 text-xs text-slate-400">
+              Host an authoritative Colyseus lobby or join with a 6-character invite code
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <span>Callsign</span>
+              <input
+                type="text"
+                maxLength={20}
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value)}
+                className="w-36 border border-white/15 bg-black/50 px-2.5 py-1.5 text-xs text-white outline-none focus:border-amber-400"
+                placeholder="Operator"
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex cursor-pointer items-center gap-2 border border-white/15 bg-white/5 px-4 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 whitespace-nowrap"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back
+            </button>
+          </div>
+        </div>
+
+        {errorBanner && (
+          <div className="mt-4 border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-xs text-red-200">
+            {errorBanner}
+          </div>
+        )}
+
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
+          {/* Create Private Match Form */}
+          <form
+            onSubmit={handleCreateSubmit}
+            className="border border-white/10 bg-black/35 p-5 lg:col-span-7"
+          >
+            <div className="flex items-center gap-2 border-b border-white/10 pb-3">
+              <Plus className="h-4 w-4 text-amber-400" />
+              <h2 className="font-display text-base font-bold text-white">Create Private Match</h2>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="block sm:col-span-2">
+                <span className="text-xs text-slate-300">Room Name</span>
+                <input
+                  type="text"
+                  maxLength={28}
+                  value={roomName}
+                  onChange={(e) => setRoomName(e.target.value)}
+                  className="mt-1.5 w-full border border-white/15 bg-black/50 px-3 py-2 text-xs text-white outline-none focus:border-amber-400"
+                  placeholder="Strike Force Private"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-xs text-slate-300">Map</span>
+                <select
+                  value={mapId}
+                  onChange={(e) => setMapId(e.target.value as MapId)}
+                  className="mt-1.5 w-full border border-white/15 bg-[#0b1017] px-3 py-2 text-xs text-white outline-none focus:border-amber-400"
+                >
+                  {MAP_LIST.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-xs text-slate-300">Optional Password</span>
+                <input
+                  type="password"
+                  maxLength={24}
+                  value={createPassword}
+                  onChange={(e) => setCreatePassword(e.target.value)}
+                  className="mt-1.5 w-full border border-white/15 bg-black/50 px-3 py-2 text-xs text-white outline-none focus:border-amber-400"
+                  placeholder="Leave blank for open invite"
+                />
+              </label>
+
+              <div>
+                <span className="text-xs text-slate-300">Kill Limit</span>
+                <div className="mt-1.5 flex gap-1.5">
+                  {[15, 30, 50].map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setKillLimit(v)}
+                      className={`flex-1 cursor-pointer border py-1.5 font-mono-tabular text-xs font-semibold ${
+                        killLimit === v
+                          ? 'border-amber-400 bg-amber-400/15 text-amber-300'
+                          : 'border-white/10 bg-white/5 text-slate-300'
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <span className="text-xs text-slate-300">Time Limit</span>
+                <div className="mt-1.5 flex gap-1.5">
+                  {[
+                    { label: '3m', sec: 180 },
+                    { label: '5m', sec: 300 },
+                    { label: '10m', sec: 600 },
+                  ].map((opt) => (
+                    <button
+                      key={opt.sec}
+                      type="button"
+                      onClick={() => setTimeLimit(opt.sec)}
+                      className={`flex-1 cursor-pointer border py-1.5 font-mono-tabular text-xs font-semibold ${
+                        timeLimit === opt.sec
+                          ? 'border-amber-400 bg-amber-400/15 text-amber-300'
+                          : 'border-white/10 bg-white/5 text-slate-300'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label className="block">
+                <div className="flex justify-between text-xs text-slate-300">
+                  <span>AI Bot Slots</span>
+                  <span className="font-mono-tabular text-white">{botCount}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={8}
+                  step={1}
+                  value={botCount}
+                  onChange={(e) => setBotCount(parseInt(e.target.value, 10))}
+                  className="mt-2.5 w-full cursor-pointer accent-amber-400"
+                />
+              </label>
+
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={() => setFriendlyFire((v) => !v)}
+                  className={`flex w-full cursor-pointer items-center justify-between border px-3 py-2 text-xs ${
+                    friendlyFire
+                      ? 'border-red-400/60 bg-red-500/15 text-red-200'
+                      : 'border-white/15 bg-white/5 text-slate-300'
+                  }`}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <Shield className="h-3.5 w-3.5" />
+                    Friendly Fire
+                  </span>
+                  <span className="font-mono-tabular font-semibold">
+                    {friendlyFire ? 'ON' : 'OFF'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {createError && (
+              <div className="mt-4 border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                {createError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={creating}
+              className="mt-5 flex w-full cursor-pointer items-center justify-center gap-2 bg-amber-500 px-5 py-3 font-display text-xs font-bold tracking-wide text-slate-950 transition-colors hover:bg-amber-400 disabled:opacity-50"
+            >
+              {creating ? 'Creating Match Room...' : 'Create Private Match'}
+            </button>
+          </form>
+
+          {/* Join Private Match Form */}
+          <form
+            onSubmit={handleJoinSubmit}
+            className="flex flex-col justify-between border border-white/10 bg-black/35 p-5 lg:col-span-5"
+          >
+            <div>
+              <div className="flex items-center gap-2 border-b border-white/10 pb-3">
+                <Users className="h-4 w-4 text-blue-400" />
+                <h2 className="font-display text-base font-bold text-white">Join by Room Code</h2>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <label className="block">
+                  <span className="text-xs text-slate-300">6-Character Room Code</span>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={joinCode}
+                    onChange={(e) =>
+                      setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
+                    }
+                    className="mt-1.5 w-full border border-white/15 bg-black/60 px-3.5 py-2.5 font-mono-tabular text-lg font-bold tracking-[0.25em] text-amber-300 uppercase outline-none focus:border-amber-400"
+                    placeholder="WAR482"
+                  />
+                </label>
+
+                {roomPreview && (
+                  <div className="border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs">
+                    <div className="flex items-center justify-between font-medium text-emerald-200">
+                      <span>{roomPreview.roomName}</span>
+                      <span className="font-mono-tabular">
+                        {roomPreview.playerCount}/{roomPreview.maxPlayers}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-emerald-300/80">
+                      Map: {roomPreview.mapId} · {roomPreview.phase}
+                      {roomPreview.hasPassword ? ' · Password Required' : ''}
+                    </div>
+                  </div>
+                )}
+
+                <label className="block">
+                  <span className="inline-flex items-center gap-1.5 text-xs text-slate-300">
+                    <KeyRound className="h-3.5 w-3.5 text-slate-400" />
+                    Room Password (if locked)
+                  </span>
+                  <input
+                    type="password"
+                    maxLength={24}
+                    value={joinPassword}
+                    onChange={(e) => setJoinPassword(e.target.value)}
+                    className="mt-1.5 w-full border border-white/15 bg-black/50 px-3 py-2 text-xs text-white outline-none focus:border-amber-400"
+                    placeholder="Optional password"
+                  />
+                </label>
+
+                {joinError && (
+                  <div className="border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                    {joinError}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={joining}
+              className="mt-6 flex w-full cursor-pointer items-center justify-center gap-2 border border-blue-400/50 bg-blue-500/20 px-5 py-3 font-display text-xs font-bold tracking-wide text-blue-200 transition-colors hover:bg-blue-500/30 disabled:opacity-50"
+            >
+              {joining ? 'Connecting...' : 'Join Private Match'}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+};

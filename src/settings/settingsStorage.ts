@@ -1,0 +1,102 @@
+import { GameSettings, GraphicsQuality } from '../game/types';
+
+export const SETTINGS_STORAGE_KEY = 'strike_force_profile_v1';
+const LEGACY_CALLSIGN_KEY = 'sf_callsign';
+
+const VALID_QUALITY = new Set<GraphicsQuality>(['LOW', 'MEDIUM', 'HIGH']);
+
+export const DEFAULT_SETTINGS: GameSettings = {
+  callsign: 'Operator-101',
+  sensitivity: 0.0021,
+  adsSensitivityMultiplier: 0.68,
+  fovDeg: 78,
+  volume: 0.65,
+  sfxVolume: 0.85,
+  musicVolume: 0.35,
+  muted: false,
+  graphicsQuality: 'HIGH',
+  killLimit: 30,
+  botsPerTeam: 4,
+};
+
+function clampNumber(val: unknown, min: number, max: number, fallback: number): number {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return fallback;
+  return Math.max(min, Math.min(max, val));
+}
+
+function sanitizeCallsign(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string') return fallback;
+  const cleaned = raw.trim().slice(0, 20);
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_SETTINGS): GameSettings {
+  if (!raw || typeof raw !== 'object') {
+    return { ...fallback };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const quality = VALID_QUALITY.has(obj.graphicsQuality as GraphicsQuality)
+    ? (obj.graphicsQuality as GraphicsQuality)
+    : fallback.graphicsQuality;
+
+  return {
+    callsign: sanitizeCallsign(obj.callsign, fallback.callsign),
+    sensitivity: clampNumber(obj.sensitivity, 0.0005, 0.008, fallback.sensitivity),
+    adsSensitivityMultiplier: clampNumber(
+      obj.adsSensitivityMultiplier,
+      0.3,
+      1.2,
+      fallback.adsSensitivityMultiplier
+    ),
+    fovDeg: Math.round(clampNumber(obj.fovDeg, 70, 110, fallback.fovDeg)),
+    volume: clampNumber(obj.volume, 0, 1, fallback.volume),
+    sfxVolume: clampNumber(obj.sfxVolume, 0, 1, fallback.sfxVolume),
+    musicVolume: clampNumber(obj.musicVolume, 0, 1, fallback.musicVolume),
+    muted: typeof obj.muted === 'boolean' ? obj.muted : fallback.muted,
+    graphicsQuality: quality,
+    killLimit: Math.round(clampNumber(obj.killLimit, 5, 100, fallback.killLimit)),
+    botsPerTeam: Math.round(clampNumber(obj.botsPerTeam, 1, 6, fallback.botsPerTeam)),
+  };
+}
+
+export function loadPersistedSettings(): GameSettings {
+  try {
+    const legacyCallsign = window.localStorage.getItem(LEGACY_CALLSIGN_KEY);
+    const baseDefault: GameSettings = {
+      ...DEFAULT_SETTINGS,
+      callsign: sanitizeCallsign(
+        legacyCallsign,
+        `Operator-${Math.floor(100 + Math.random() * 899)}`
+      ),
+    };
+
+    const rawJson = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!rawJson) {
+      savePersistedSettings(baseDefault);
+      return baseDefault;
+    }
+
+    const parsed: unknown = JSON.parse(rawJson);
+    const validated = validateSettings(parsed, baseDefault);
+    return validated;
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+export function savePersistedSettings(settings: GameSettings): GameSettings {
+  const validated = validateSettings(settings);
+  try {
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(validated));
+    window.localStorage.setItem(LEGACY_CALLSIGN_KEY, validated.callsign);
+  } catch {
+    // Ignore storage quota or private browsing errors
+  }
+  return validated;
+}
+
+export function resetPersistedSettings(): GameSettings {
+  const reset: GameSettings = { ...DEFAULT_SETTINGS };
+  return savePersistedSettings(reset);
+}
