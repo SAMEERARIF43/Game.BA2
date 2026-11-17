@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   graphicsQuality: 'HIGH',
   killLimit: 30,
   botsPerTeam: 4,
+  screenShakeScale: 1.0,
 };
 
 function clampNumber(val: unknown, min: number, max: number, fallback: number): number {
@@ -57,6 +58,7 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     graphicsQuality: quality,
     killLimit: Math.round(clampNumber(obj.killLimit, 5, 100, fallback.killLimit)),
     botsPerTeam: Math.round(clampNumber(obj.botsPerTeam, 1, 6, fallback.botsPerTeam)),
+    screenShakeScale: clampNumber(obj.screenShakeScale, 0, 1, fallback.screenShakeScale ?? 1.0),
   };
 }
 

@@ -254,6 +254,7 @@ export class EngineManager {
     this.player.setSensitivity(initialSettings.sensitivity);
     this.player.setAdsSensitivityMultiplier(initialSettings.adsSensitivityMultiplier);
     this.player.setBaseFov(initialSettings.fovDeg);
+    this.player.setScreenShakeScale(initialSettings.screenShakeScale);
 
     this.botManager = new BotManager(this.scene, this.matchManager, {
       getPlayerTarget: () => ({
@@ -512,20 +513,25 @@ export class EngineManager {
 
   public handleNetworkDamaged(event: NetworkDamagedEvent): void {
     this.lastDamageTimestamp = performance.now();
-    this.audio.playLand(7.0);
-    const attackerPos =
-      typeof event.attackerX === 'number' && typeof event.attackerZ === 'number'
-        ? new Vector3(event.attackerX, event.attackerY ?? 0, event.attackerZ)
-        : null;
-    if (attackerPos) {
-      this.pushDamageIndicator(attackerPos);
+    this.audio.playPlayerHurt();
+    const sanitizedPos = this.sanitizeAttackerPosition(
+      null,
+      event.attackerX,
+      event.attackerY,
+      event.attackerZ
+    );
+    if (sanitizedPos) {
+      this.pushDamageIndicator(sanitizedPos);
+    }
+    if (!event.killed) {
+      this.player.applyDamageImpact(event.damage, sanitizedPos, event.headshot === true);
     }
     if (event.killed) {
       this.playerIsAlive = false;
       this.lastKillerName = event.attackerName;
       this.lastKillerWeapon = event.weaponName;
-      const dist = attackerPos
-        ? Math.round(Vector3.Distance(this.player.collider.position, attackerPos) * 10) / 10
+      const dist = sanitizedPos
+        ? Math.round(Vector3.Distance(this.player.collider.position, sanitizedPos) * 10) / 10
         : 0;
       const local = this.mpSnapshot?.players.find((p) => p.id === this.mpSnapshot?.localPlayerId);
       const attacker = this.mpSnapshot?.players.find((p) => p.name === event.attackerName);
@@ -538,7 +544,7 @@ export class EngineManager {
         headshot: event.headshot,
         killerHpRemaining: attacker?.health,
       };
-      this.onPlayerEliminatedCleanup(attackerPos);
+      this.onPlayerEliminatedCleanup(sanitizedPos);
     }
     this.emitHudState(true);
   }
@@ -594,6 +600,7 @@ export class EngineManager {
     this.player.setSensitivity(settings.sensitivity);
     this.player.setAdsSensitivityMultiplier(settings.adsSensitivityMultiplier);
     this.player.setBaseFov(settings.fovDeg);
+    this.player.setScreenShakeScale(settings.screenShakeScale);
     this.audio.setVolumes(settings.volume, settings.sfxVolume, settings.musicVolume, settings.muted);
     this.applyGraphicsQuality(settings.graphicsQuality);
   }
@@ -1139,10 +1146,15 @@ export class EngineManager {
 
     this.playerHealth = Math.max(0, this.playerHealth - damage);
     this.lastDamageTimestamp = performance.now();
-    this.pushDamageIndicator(attackerPos);
-    this.audio.playLand(7.0);
+    const sanitizedPos = this.sanitizeAttackerPosition(attackerPos);
+    if (sanitizedPos) {
+      this.pushDamageIndicator(sanitizedPos);
+    }
+    this.audio.playPlayerHurt();
 
-    if (this.playerHealth <= 0) {
+    if (this.playerHealth > 0) {
+      this.player.applyDamageImpact(damage, sanitizedPos, headshot === true);
+    } else {
       this.playerIsAlive = false;
       this.playerRespawnTimer = RESPAWN_DELAY_SEC;
       this.lastKillerName = attackerName;
@@ -1155,7 +1167,7 @@ export class EngineManager {
         headshot,
         killerHpRemaining: attackerHpRemaining,
       };
-      this.onPlayerEliminatedCleanup(attackerPos);
+      this.onPlayerEliminatedCleanup(sanitizedPos);
       this.matchManager.recordKill(attackerId, 'player', weaponName, headshot, distanceMeters);
 
       if (this.matchManager.getPhase() === 'ended') {
@@ -1166,6 +1178,52 @@ export class EngineManager {
       }
       this.emitHudState(true);
     }
+  }
+
+  private sanitizeAttackerPosition(
+    rawPos?: Vector3 | null,
+    rawX?: number,
+    rawY?: number,
+    rawZ?: number
+  ): Vector3 | null {
+    let x: number;
+    let y: number;
+    let z: number;
+
+    if (rawPos && typeof rawPos.x === 'number' && typeof rawPos.z === 'number') {
+      x = rawPos.x;
+      y = typeof rawPos.y === 'number' ? rawPos.y : 0;
+      z = rawPos.z;
+    } else if (typeof rawX === 'number' && typeof rawZ === 'number') {
+      x = rawX;
+      y = typeof rawY === 'number' ? rawY : 0;
+      z = rawZ;
+    } else {
+      return null;
+    }
+
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+      return null;
+    }
+
+    const playerPos = this.player?.collider?.position;
+    if (!playerPos || !Number.isFinite(playerPos.x) || !Number.isFinite(playerPos.z)) {
+      return null;
+    }
+
+    const dx = x - playerPos.x;
+    const dz = z - playerPos.z;
+
+    if (Math.abs(dx) > 2000 || Math.abs(dz) > 2000) {
+      return null;
+    }
+
+    const distSq = dx * dx + dz * dz;
+    if (distSq < 0.01 || distSq > 4000000) {
+      return null;
+    }
+
+    return new Vector3(x, y, z);
   }
 
   private pushDamageIndicator(attackerPos: Vector3): void {

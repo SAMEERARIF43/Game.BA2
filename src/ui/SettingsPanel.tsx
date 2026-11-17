@@ -138,6 +138,29 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             className="mt-2 w-full cursor-pointer accent-amber-400"
           />
         </label>
+
+        <label className="block">
+          <div className="flex justify-between text-xs text-slate-300">
+            <span>Screen Shake &amp; Feedback</span>
+            <span className="font-mono-tabular text-white">
+              {Math.round((settings.screenShakeScale ?? 1.0) * 100)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={settings.screenShakeScale ?? 1.0}
+            onChange={(e) =>
+              onUpdateSettings({
+                ...settings,
+                screenShakeScale: parseFloat(e.target.value),
+              })
+            }
+            className="mt-2 w-full cursor-pointer accent-amber-400"
+          />
+        </label>
       </div>
 
       {/* Graphics Quality & Display */}

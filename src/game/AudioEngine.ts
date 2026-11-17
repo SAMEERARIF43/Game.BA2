@@ -88,25 +88,46 @@ export class AudioEngine {
     this.applyAmbientProfile();
   }
 
+  private getPitchVariance(range = 0.035): number {
+    return 1 + (Math.random() * 2 - 1) * range;
+  }
+
   public playGunshot(weaponId: WeaponId): void {
     this.unlock();
     if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
 
     const now = this.ctx.currentTime;
+    const p = this.getPitchVariance(0.035);
 
     if (weaponId === 'm4a1') {
       // Sharp supersonic crack + low chest punch
-      this.triggerNoiseBurst(now, 0.14, 1850, 0.72, 0.85);
-      this.triggerTone(now, 160, 42, 0.11, 'triangle', 0.65);
+      this.triggerNoiseBurst(now, 0.14, 1850 * p, 0.72, 0.85);
+      this.triggerTone(now, 160 * p, 42 * p, 0.11, 'triangle', 0.65);
     } else if (weaponId === 'mp5') {
       // Suppressed submachine gun thump + short air hiss
-      this.triggerNoiseBurst(now, 0.085, 950, 1.4, 0.48);
-      this.triggerTone(now, 130, 58, 0.07, 'sine', 0.42);
+      this.triggerNoiseBurst(now, 0.085, 950 * p, 1.4, 0.48);
+      this.triggerTone(now, 130 * p, 58 * p, 0.07, 'sine', 0.42);
+    } else if (weaponId === 'intervention') {
+      // High-caliber .50 BMG heavy sniper blast: explosive crack + sub-bass room shake
+      this.triggerNoiseBurst(now, 0.26, 2100 * p, 0.65, 0.92);
+      this.triggerTone(now, 115 * p, 28 * p, 0.30, 'triangle', 0.82);
+      this.triggerTone(now, 260 * p, 52 * p, 0.16, 'sawtooth', 0.42);
     } else {
       // Punchy .45 ACP sidearm snap
-      this.triggerNoiseBurst(now, 0.16, 1500, 0.9, 0.8);
-      this.triggerTone(now, 185, 48, 0.12, 'sawtooth', 0.45);
+      this.triggerNoiseBurst(now, 0.16, 1500 * p, 0.9, 0.8);
+      this.triggerTone(now, 185 * p, 48 * p, 0.12, 'sawtooth', 0.45);
     }
+  }
+
+  public playPlayerHurt(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+    const now = this.ctx.currentTime;
+    const p = this.getPitchVariance(0.04);
+    // Ballistic blunt trauma impact + sharp visceral breath intake
+    this.triggerNoiseBurst(now, 0.11, 420 * p, 1.25, 0.38);
+    this.triggerTone(now, 320 * p, 110 * p, 0.10, 'triangle', 0.32);
+    this.triggerTone(now + 0.02, 140 * p, 45 * p, 0.14, 'sine', 0.45);
   }
 
   public playDryFire(): void {
@@ -146,14 +167,15 @@ export class AudioEngine {
     this.unlock();
     if (!this.ctx || !this.sfxGain || this.muted) return;
     const now = this.ctx.currentTime;
+    const p = this.getPitchVariance(headshot ? 0.02 : 0.03);
     if (headshot) {
       // Crisp metallic headshot ping chime
-      this.triggerTone(now, 1950, 2550, 0.07, 'sine', 0.38);
-      this.triggerTone(now + 0.02, 2750, 3150, 0.085, 'triangle', 0.26);
+      this.triggerTone(now, 1950 * p, 2550 * p, 0.07, 'sine', 0.38);
+      this.triggerTone(now + 0.02, 2750 * p, 3150 * p, 0.085, 'triangle', 0.26);
     } else {
       // Tactical body hitmarker thud + tick
-      this.triggerTone(now, 1180, 760, 0.035, 'triangle', 0.24);
-      this.triggerTone(now, 180, 68, 0.055, 'sine', 0.32);
+      this.triggerTone(now, 1180 * p, 760 * p, 0.035, 'triangle', 0.24);
+      this.triggerTone(now, 180 * p, 68 * p, 0.055, 'sine', 0.32);
     }
   }
 

@@ -262,7 +262,12 @@ export class WeaponSystem {
   }
 
   public getWeaponSlots(): WeaponRuntimeState[] {
-    return [this.slots.m4a1, this.slots.mp5, this.slots.m1911].map((s) => ({ ...s }));
+    return [
+      this.slots.m4a1,
+      this.slots.mp5,
+      this.slots.intervention,
+      this.slots.m1911,
+    ].map((s) => ({ ...s }));
   }
 
   public getIsReloading(): boolean {

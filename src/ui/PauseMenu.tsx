@@ -91,8 +91,8 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
 
             <div className="mt-6 border-t border-white/10 pt-4">
               <div className="text-xs font-medium text-slate-400">Loadout Selection</div>
-              <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {(['m4a1', 'mp5', 'm1911'] as WeaponId[]).map((id) => {
+              <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {(['m4a1', 'mp5', 'intervention', 'm1911'] as WeaponId[]).map((id) => {
                   const cfg = WEAPONS[id];
                   const selected = hud.activeWeapon.id === id;
                   return (

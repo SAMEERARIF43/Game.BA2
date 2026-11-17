@@ -274,4 +274,5 @@ export interface GameSettings {
   graphicsQuality: GraphicsQuality;
   killLimit: number;
   botsPerTeam: number;
+  screenShakeScale: number;
 }

@@ -78,6 +78,10 @@ export class PlayerController {
   private stepAccum = 0;
   private landDip = 0;
   private shakeIntensity = 0;
+  private flinchPitch = 0;
+  private flinchRoll = 0;
+  private flinchYaw = 0;
+  private screenShakeScale = 1.0;
   private moveSpeedMultiplier = 1.0;
   private deathLookTarget: Vector3 | null = null;
   private isPointerLocked = false;
@@ -204,7 +208,300 @@ export class PlayerController {
   }
 
   public addCameraShake(amount: number): void {
-    this.shakeIntensity = Math.min(0.25, this.shakeIntensity + amount);
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) return;
+    const scaled = amount * this.screenShakeScale;
+    if (scaled <= 0.0001) return;
+    this.shakeIntensity = Math.min(0.25, this.shakeIntensity + scaled);
+  }
+
+  public setScreenShakeScale(rawScale: unknown): void {
+    let newScale = 1.0;
+    if (typeof rawScale === 'number' && Number.isFinite(rawScale)) {
+      newScale = Math.max(0.0, Math.min(1.0, rawScale));
+    } else if (rawScale === null || rawScale === undefined) {
+      newScale = 1.0;
+    }
+
+    let shakeValid = true;
+    if (!Number.isFinite(this.shakeIntensity) || this.shakeIntensity < 0) {
+      this.shakeIntensity = 0.0;
+      shakeValid = false;
+    } else if (this.shakeIntensity > 0.25) {
+      this.shakeIntensity = 0.25;
+    }
+
+    let flinchValid = true;
+    if (
+      !Number.isFinite(this.flinchPitch) ||
+      !Number.isFinite(this.flinchRoll) ||
+      !Number.isFinite(this.flinchYaw)
+    ) {
+      this.flinchPitch = 0.0;
+      this.flinchRoll = 0.0;
+      this.flinchYaw = 0.0;
+      flinchValid = false;
+    } else {
+      this.flinchPitch = Math.max(-0.045, Math.min(0.045, this.flinchPitch));
+      this.flinchRoll = Math.max(-0.030, Math.min(0.030, this.flinchRoll));
+      this.flinchYaw = Math.max(-0.018, Math.min(0.018, this.flinchYaw));
+
+      const curNormSq =
+        this.flinchPitch * this.flinchPitch +
+        this.flinchRoll * this.flinchRoll +
+        this.flinchYaw * this.flinchYaw;
+      if (curNormSq > 0.05 * 0.05) {
+        const curNorm = Math.sqrt(curNormSq);
+        if (Number.isFinite(curNorm) && curNorm > 0.00001) {
+          const s = 0.05 / curNorm;
+          this.flinchPitch *= s;
+          this.flinchRoll *= s;
+          this.flinchYaw *= s;
+        } else {
+          this.flinchPitch = 0.0;
+          this.flinchRoll = 0.0;
+          this.flinchYaw = 0.0;
+          flinchValid = false;
+        }
+      }
+    }
+
+    const storedScale = this.screenShakeScale;
+    const storedScaleValid =
+      typeof storedScale === 'number' &&
+      Number.isFinite(storedScale) &&
+      storedScale >= 0.0 &&
+      storedScale <= 1.0;
+
+    if (!storedScaleValid) {
+      this.shakeIntensity = 0.0;
+      this.flinchPitch = 0.0;
+      this.flinchRoll = 0.0;
+      this.flinchYaw = 0.0;
+      this.screenShakeScale = newScale;
+      return;
+    }
+
+    if (Math.abs(storedScale - newScale) < 0.0001) {
+      this.screenShakeScale = newScale;
+      return;
+    }
+
+    const oldScale = storedScale;
+    this.screenShakeScale = newScale;
+
+    if (this.screenShakeScale <= 0.0001) {
+      this.shakeIntensity = 0.0;
+      this.flinchPitch = 0.0;
+      this.flinchRoll = 0.0;
+      this.flinchYaw = 0.0;
+      return;
+    }
+
+    if (oldScale > 0.0001) {
+      const ratio = this.screenShakeScale / oldScale;
+      if (Number.isFinite(ratio) && ratio > 0) {
+        if (shakeValid && this.shakeIntensity > 0) {
+          const rebasedShake = this.shakeIntensity * ratio;
+          this.shakeIntensity = Number.isFinite(rebasedShake)
+            ? Math.max(0.0, Math.min(0.25, rebasedShake))
+            : 0.0;
+        }
+
+        if (flinchValid) {
+          let p = this.flinchPitch * ratio;
+          let r = this.flinchRoll * ratio;
+          let y = this.flinchYaw * ratio;
+
+          const MAX_PITCH = 0.045;
+          const MAX_ROLL = 0.030;
+          const MAX_YAW = 0.018;
+          const MAX_NORM = 0.05;
+
+          p = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, p));
+          r = Math.max(-MAX_ROLL, Math.min(MAX_ROLL, r));
+          y = Math.max(-MAX_YAW, Math.min(MAX_YAW, y));
+
+          const normSq = p * p + r * r + y * y;
+          if (normSq > MAX_NORM * MAX_NORM) {
+            const norm = Math.sqrt(normSq);
+            if (norm > 0.00001) {
+              const s = MAX_NORM / norm;
+              p *= s;
+              r *= s;
+              y *= s;
+            }
+          }
+
+          if (Number.isFinite(p) && Number.isFinite(r) && Number.isFinite(y)) {
+            this.flinchPitch = p;
+            this.flinchRoll = r;
+            this.flinchYaw = y;
+          } else {
+            this.flinchPitch = 0.0;
+            this.flinchRoll = 0.0;
+            this.flinchYaw = 0.0;
+          }
+        }
+      }
+    } else {
+      this.shakeIntensity = 0.0;
+      this.flinchPitch = 0.0;
+      this.flinchRoll = 0.0;
+      this.flinchYaw = 0.0;
+    }
+  }
+
+  public applyDamageImpact(
+    damage: number,
+    attackerPos: Vector3 | null,
+    isHeadshot: unknown = false
+  ): void {
+    if (this.isDead || !this.canControl) return;
+    if (typeof damage !== 'number' || !Number.isFinite(damage) || damage <= 0) return;
+
+    const scale = this.screenShakeScale;
+    if (scale <= 0.0001) return;
+
+    const boundedDamage = Math.min(300, damage);
+    const BASE_IMPULSE = 0.032;
+    const dmgRatio = Math.max(0.35, Math.min(1.6, Math.sqrt(boundedDamage / 25.0)));
+    const headshotMult = isHeadshot === true ? 1.35 : 1.0;
+    const adsMult = this.isAds ? 0.4 : 1.0;
+    const impulse = BASE_IMPULSE * dmgRatio * headshotMult * adsMult;
+
+    let useFallback = true;
+    let forwardAlign = 1.0;
+    let rightAlign = 0.0;
+
+    if (
+      attackerPos &&
+      typeof attackerPos.x === 'number' &&
+      Number.isFinite(attackerPos.x) &&
+      typeof attackerPos.z === 'number' &&
+      Number.isFinite(attackerPos.z)
+    ) {
+      const pPos = this.collider.position;
+      if (Number.isFinite(pPos.x) && Number.isFinite(pPos.z)) {
+        const dx = attackerPos.x - pPos.x;
+        const dz = attackerPos.z - pPos.z;
+
+        if (Number.isFinite(dx) && Number.isFinite(dz) && Math.abs(dx) <= 2000 && Math.abs(dz) <= 2000) {
+          const distSq = dx * dx + dz * dz;
+          if (Number.isFinite(distSq) && distSq >= 0.01 && distSq <= 4000000) {
+            const worldBearing = Math.atan2(dx, dz);
+            if (Number.isFinite(worldBearing)) {
+              let relBearing = worldBearing - this.yaw;
+              relBearing = Math.atan2(Math.sin(relBearing), Math.cos(relBearing));
+              if (Number.isFinite(relBearing)) {
+                forwardAlign = Math.cos(relBearing);
+                rightAlign = Math.sin(relBearing);
+                useFallback = false;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    let dPitch = 0;
+    let dRoll = 0;
+    let dYaw = 0;
+
+    if (useFallback) {
+      dPitch = impulse;
+      dRoll = 0;
+      dYaw = 0;
+    } else {
+      dPitch = forwardAlign * impulse;
+      dRoll = -rightAlign * (impulse * 0.65);
+      dYaw = -rightAlign * (impulse * 0.35);
+    }
+
+    this.accumulateFlinch(dPitch * scale, dRoll * scale, dYaw * scale);
+  }
+
+  private accumulateFlinch(dPitch: number, dRoll: number, dYaw: number): void {
+    const MAX_PITCH = 0.045;
+    const MAX_ROLL = 0.030;
+    const MAX_YAW = 0.018;
+    const MAX_NORM = 0.05;
+    const FLINCH_EPSILON = 0.0005;
+
+    let curP = this.flinchPitch;
+    let curR = this.flinchRoll;
+    let curY = this.flinchYaw;
+
+    if (!Number.isFinite(curP) || !Number.isFinite(curR) || !Number.isFinite(curY)) {
+      curP = 0.0;
+      curR = 0.0;
+      curY = 0.0;
+    } else {
+      curP = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, curP));
+      curR = Math.max(-MAX_ROLL, Math.min(MAX_ROLL, curR));
+      curY = Math.max(-MAX_YAW, Math.min(MAX_YAW, curY));
+
+      const curNormSq = curP * curP + curR * curR + curY * curY;
+      if (curNormSq > MAX_NORM * MAX_NORM) {
+        const curNorm = Math.sqrt(curNormSq);
+        if (Number.isFinite(curNorm) && curNorm > 0.00001) {
+          const s = MAX_NORM / curNorm;
+          curP *= s;
+          curR *= s;
+          curY *= s;
+        } else {
+          curP = 0.0;
+          curR = 0.0;
+          curY = 0.0;
+        }
+      }
+    }
+
+    if (!Number.isFinite(dPitch) || !Number.isFinite(dRoll) || !Number.isFinite(dYaw)) {
+      this.flinchPitch = curP;
+      this.flinchRoll = curR;
+      this.flinchYaw = curY;
+      return;
+    }
+
+    let p = curP + dPitch;
+    let r = curR + dRoll;
+    let y = curY + dYaw;
+
+    p = Number.isFinite(p) ? Math.max(-MAX_PITCH, Math.min(MAX_PITCH, p)) : (dPitch > 0 ? MAX_PITCH : -MAX_PITCH);
+    r = Number.isFinite(r) ? Math.max(-MAX_ROLL, Math.min(MAX_ROLL, r)) : (dRoll > 0 ? MAX_ROLL : -MAX_ROLL);
+    y = Number.isFinite(y) ? Math.max(-MAX_YAW, Math.min(MAX_YAW, y)) : (dYaw > 0 ? MAX_YAW : -MAX_YAW);
+
+    const normSq = p * p + r * r + y * y;
+    if (Number.isFinite(normSq) && normSq > MAX_NORM * MAX_NORM) {
+      const norm = Math.sqrt(normSq);
+      if (Number.isFinite(norm) && norm > 0.00001) {
+        const s = MAX_NORM / norm;
+        p *= s;
+        r *= s;
+        y *= s;
+      } else {
+        p = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, p));
+        r = 0.0;
+        y = 0.0;
+      }
+    }
+
+    const finalNormSq = p * p + r * r + y * y;
+    if (finalNormSq < FLINCH_EPSILON * FLINCH_EPSILON) {
+      p = 0.0;
+      r = 0.0;
+      y = 0.0;
+    }
+
+    if (Number.isFinite(p) && Number.isFinite(r) && Number.isFinite(y)) {
+      this.flinchPitch = p;
+      this.flinchRoll = r;
+      this.flinchYaw = y;
+    } else {
+      this.flinchPitch = 0.0;
+      this.flinchRoll = 0.0;
+      this.flinchYaw = 0.0;
+    }
   }
 
   public setSensitivity(sens: number): void {
@@ -548,7 +845,13 @@ export class PlayerController {
   private onKeyDown = (e: KeyboardEvent): void => {
     if (!this.isPointerLocked || !this.canControl) return;
 
-    if (e.code === 'Space' || e.code === 'Tab') {
+    if (
+      e.code === 'Space' ||
+      e.code === 'Tab' ||
+      e.code === 'F1' ||
+      e.code === 'F2' ||
+      e.code === 'F3'
+    ) {
       e.preventDefault();
     }
 
@@ -581,10 +884,12 @@ export class PlayerController {
     } else if (e.code === 'Digit3' && !e.repeat) {
       this.callbacks.onSelectSlot(3);
     } else if (e.code === 'Digit4' && !e.repeat) {
+      this.callbacks.onSelectSlot(4);
+    } else if ((e.code === 'F1' || e.code === 'Digit5') && !e.repeat) {
       this.callbacks.onActivateKillstreak?.(4);
-    } else if (e.code === 'Digit5' && !e.repeat) {
+    } else if ((e.code === 'F2' || e.code === 'Digit6') && !e.repeat) {
       this.callbacks.onActivateKillstreak?.(5);
-    } else if (e.code === 'Digit6' && !e.repeat) {
+    } else if ((e.code === 'F3' || e.code === 'Digit7') && !e.repeat) {
       this.callbacks.onActivateKillstreak?.(6);
     } else if (e.code === 'KeyB' && !e.repeat) {
       this.callbacks.onCycleScopeMagnification?.();
