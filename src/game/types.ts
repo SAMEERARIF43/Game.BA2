@@ -44,8 +44,8 @@ export const WEAPONS: Record<WeaponId, WeaponConfig> = {
     magSize: 30,
     reserveMax: 120,
     reloadTimeSec: 1.75,
-    hipSpread: 0.024,
-    adsSpread: 0.0025,
+    hipSpread: 0.022,
+    adsSpread: 0.002,
     recoilPitch: 0.022,
     recoilYaw: 0.009,
     adsFovRatio: 0.74,
@@ -59,13 +59,13 @@ export const WEAPONS: Record<WeaponId, WeaponConfig> = {
     category: 'Submachine Gun',
     fireMode: 'auto',
     rpm: 900,
-    damage: 22,
+    damage: 24,
     headshotMultiplier: 1.85,
     magSize: 35,
     reserveMax: 140,
-    reloadTimeSec: 1.5,
-    hipSpread: 0.018,
-    adsSpread: 0.004,
+    reloadTimeSec: 1.4,
+    hipSpread: 0.015,
+    adsSpread: 0.0035,
     recoilPitch: 0.014,
     recoilYaw: 0.007,
     adsFovRatio: 0.8,
@@ -79,13 +79,13 @@ export const WEAPONS: Record<WeaponId, WeaponConfig> = {
     category: 'Heavy Sniper',
     fireMode: 'semi',
     rpm: 72,
-    damage: 95,
+    damage: 110,
     headshotMultiplier: 2.5,
     magSize: 8,
     reserveMax: 32,
     reloadTimeSec: 2.4,
-    hipSpread: 0.065,
-    adsSpread: 0.0002,
+    hipSpread: 0.055,
+    adsSpread: 0.0001,
     recoilPitch: 0.085,
     recoilYaw: 0.015,
     adsFovRatio: 0.25,
@@ -98,15 +98,15 @@ export const WEAPONS: Record<WeaponId, WeaponConfig> = {
     name: 'M1911 Sidearm',
     category: 'Sidearm',
     fireMode: 'semi',
-    rpm: 300,
-    damage: 35,
-    headshotMultiplier: 2.1,
+    rpm: 340,
+    damage: 36,
+    headshotMultiplier: 2.2,
     magSize: 12,
     reserveMax: 48,
-    reloadTimeSec: 1.25,
-    hipSpread: 0.016,
-    adsSpread: 0.0018,
-    recoilPitch: 0.032,
+    reloadTimeSec: 1.15,
+    hipSpread: 0.015,
+    adsSpread: 0.0016,
+    recoilPitch: 0.030,
     recoilYaw: 0.006,
     adsFovRatio: 0.84,
     range: 120,
@@ -229,6 +229,7 @@ export interface HudState {
   stance: Stance;
   isGrounded: boolean;
   isAds: boolean;
+  adsBlend: number;
   speed: number;
   headingDeg: number;
   activeWeapon: WeaponConfig;
@@ -259,6 +260,9 @@ export interface HudState {
   targetingEnemy: boolean;
   scopeMagnification: 4 | 6 | 8;
   showScoreboard: boolean;
+  showOnboarding: boolean;
+  lowHealthPulse: boolean;
+  fps: number;
   match: MatchSnapshot;
 }
 
@@ -266,7 +270,9 @@ export interface GameSettings {
   callsign: string;
   sensitivity: number;
   adsSensitivityMultiplier: number;
+  invertY: boolean;
   fovDeg: number;
+  showFps: boolean;
   volume: number;
   sfxVolume: number;
   musicVolume: number;

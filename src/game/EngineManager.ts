@@ -138,6 +138,9 @@ export class EngineManager {
   private lastKillerWeapon: string | null = null;
   private killerBanner: KillerBannerInfo | null = null;
   private showScoreboard = false;
+  private showOnboarding = false;
+  private onboardingDismissed = false;
+  private heartbeatCooldown = 0;
 
   // CoD4-style Killstreaks, Progression & Popups
   private currentStreak = 0;
@@ -179,8 +182,8 @@ export class EngineManager {
     this.scene.clearColor = new Color4(0.11, 0.14, 0.19, 1.0);
     this.scene.collisionsEnabled = true;
 
-    // Prevent weapon viewmodel (renderingGroupId = 1) from clipping into walls
-    this.scene.setRenderingAutoClearDepthStencil(1, true, false, false);
+    // Keep the world depth buffer for the viewmodel and avoid a no-op buffer clear.
+    this.scene.setRenderingAutoClearDepthStencil(1, false, false, false);
 
     this.setupLighting();
 
@@ -213,6 +216,10 @@ export class EngineManager {
       },
       onSelectSlot: (slot) => {
         this.weapons.selectSlot(slot);
+        this.emitHudState(true);
+      },
+      onCycleSlot: (delta) => {
+        this.weapons.cycleSlot(delta);
         this.emitHudState(true);
       },
       onActivateKillstreak: (slot) => {
@@ -253,6 +260,7 @@ export class EngineManager {
 
     this.player.setSensitivity(initialSettings.sensitivity);
     this.player.setAdsSensitivityMultiplier(initialSettings.adsSensitivityMultiplier);
+    this.player.setInvertY(initialSettings.invertY);
     this.player.setBaseFov(initialSettings.fovDeg);
     this.player.setScreenShakeScale(initialSettings.screenShakeScale);
 
@@ -346,11 +354,9 @@ export class EngineManager {
     this.sessionMode = 'offline';
     this.mpSnapshot = null;
     this.mpPaused = false;
-    this.mpKillFeed = [];
-    this.damageIndicators = [];
     this.resetCombatArcadeState(true);
     this.remoteRenderer.clear();
-    this.weapons.clearDecals();
+    this.weapons.resetForNewMatch();
     this.weapons.setMultiplayerContext(false, 'blue', false);
     this.player.exitPointerLock();
     this.player.setCanControl(false);
@@ -367,10 +373,8 @@ export class EngineManager {
     this.sessionMode = 'offline';
     this.mpSnapshot = null;
     this.mpPaused = false;
-    this.damageIndicators = [];
     this.resetCombatArcadeState(true);
     this.remoteRenderer.clear();
-    this.weapons.clearDecals();
     this.weapons.setMultiplayerContext(false, 'blue', false);
 
     const def =
@@ -400,6 +404,8 @@ export class EngineManager {
     this.player.setCanControl(true);
     this.weapons.setViewModelVisible(true);
     this.showScoreboard = false;
+    this.showOnboarding = !this.onboardingDismissed;
+    this.heartbeatCooldown = 0;
 
     if (requestLock) {
       this.matchManager.setPhase('playing');
@@ -414,11 +420,8 @@ export class EngineManager {
   public startMultiplayerMatch(snapshot: LobbyRoomSnapshot, requestLock: boolean): void {
     this.sessionMode = 'multiplayer';
     this.botManager.clearBots();
-    this.weapons.clearDecals();
-    this.damageIndicators = [];
     this.resetCombatArcadeState(true);
     this.mpSnapshot = snapshot;
-    this.mpKillFeed = [];
     this.mpPaused = !requestLock;
 
     if (this.mapManager.getCurrentMapId() !== snapshot.mapId) {
@@ -441,6 +444,8 @@ export class EngineManager {
     this.player.setCanControl(true);
     this.weapons.setViewModelVisible(true);
     this.showScoreboard = false;
+    this.showOnboarding = !this.onboardingDismissed;
+    this.heartbeatCooldown = 0;
     this.remoteRenderer.syncPlayers(snapshot.players, snapshot.localPlayerId);
 
     if (requestLock) {
@@ -459,9 +464,8 @@ export class EngineManager {
       this.audio.setAmbientEnvironment('menu');
       if (this.sessionMode === 'multiplayer') {
         this.remoteRenderer.clear();
-        this.weapons.clearDecals();
-        this.damageIndicators = [];
         this.resetCombatArcadeState(true);
+        this.weapons.resetForNewMatch();
         this.player.exitPointerLock();
         this.player.setCanControl(false);
         this.player.setOrbitPreview(true);
@@ -551,7 +555,7 @@ export class EngineManager {
 
   public handleNetworkRespawn(pos: { x: number; y: number; z: number; rotY: number }): void {
     this.resetPlayerForLife(new Vector3(pos.x, pos.y + 0.95, pos.z), pos.rotY);
-    this.weapons.resupplyAll();
+    this.weapons.resetForLife();
     this.weapons.setViewModelVisible(true);
     this.emitHudState(true);
   }
@@ -599,6 +603,7 @@ export class EngineManager {
     this.settings = { ...settings };
     this.player.setSensitivity(settings.sensitivity);
     this.player.setAdsSensitivityMultiplier(settings.adsSensitivityMultiplier);
+    this.player.setInvertY(settings.invertY);
     this.player.setBaseFov(settings.fovDeg);
     this.player.setScreenShakeScale(settings.screenShakeScale);
     this.audio.setVolumes(settings.volume, settings.sfxVolume, settings.musicVolume, settings.muted);
@@ -645,15 +650,15 @@ export class EngineManager {
       if (this.currentStreak === 3 && !this.unlockedStreaks.uav) {
         this.unlockedStreaks.uav = true;
         this.audio.playKillstreakReady();
-        this.pushKillstreakBanner('UAV RECON READY', 'Press [F1] to sweep enemy positions');
+        this.pushKillstreakBanner('[F1] UAV SWEEP READY', 'Enemy positions will appear on your radar');
       } else if (this.currentStreak === 5 && !this.unlockedStreaks.airstrike) {
         this.unlockedStreaks.airstrike = true;
         this.audio.playKillstreakReady();
-        this.pushKillstreakBanner('PRECISION BARRAGE READY', 'Press [F2] to call orbital strike');
+        this.pushKillstreakBanner('[F2] PRECISION BARRAGE READY', 'Ordnance support is standing by');
       } else if (this.currentStreak === 7 && !this.unlockedStreaks.overdrive) {
         this.unlockedStreaks.overdrive = true;
         this.audio.playKillstreakReady();
-        this.pushKillstreakBanner('TACTICAL OVERDRIVE READY', 'Press [F3] for speed, reload & regen surge');
+        this.pushKillstreakBanner('[F3] TACTICAL OVERDRIVE READY', 'Speed, reload and armor regen boosted');
       }
     }
 
@@ -907,6 +912,7 @@ export class EngineManager {
     this.player.setDeathLookTarget(attackerPos);
     this.player.setDeadState(true);
     this.weapons.setViewModelVisible(false);
+    this.weapons.clearTransientEffects();
   }
 
   private resetCombatArcadeState(clearSession: boolean): void {
@@ -919,9 +925,14 @@ export class EngineManager {
     this.killstreakBanner = null;
     this.scorePopups = [];
     this.killerBanner = null;
+    this.mpKillFeed = [];
+    this.damageIndicators = [];
+    this.lastDamageTimestamp = 0;
+    this.showScoreboard = false;
     this.player.setMoveSpeedMultiplier(1.0);
     this.player.setDeathLookTarget(null);
     this.weapons.setReloadSpeedMultiplier(1.0);
+    this.matchManager.clearKillFeed();
 
     for (const s of this.barrageShells) {
       s.mat.dispose();
@@ -952,8 +963,8 @@ export class EngineManager {
     pipeline.imageProcessingEnabled = true;
     pipeline.imageProcessing.toneMappingEnabled = true;
     pipeline.imageProcessing.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
-    pipeline.imageProcessing.exposure = 1.05;
-    pipeline.imageProcessing.contrast = 1.08;
+    pipeline.imageProcessing.exposure = 1.1;
+    pipeline.imageProcessing.contrast = 1.14;
     pipeline.imageProcessing.vignetteColor = new Color4(0, 0, 0, 0);
     pipeline.sharpenEnabled = false;
     this.renderPipeline = pipeline;
@@ -1079,7 +1090,7 @@ export class EngineManager {
 
     const now = performance.now();
     if (this.mpKillFeed.length > 0) {
-      this.mpKillFeed = this.mpKillFeed.filter((k) => now - k.timestamp < 8000);
+      this.mpKillFeed = this.mpKillFeed.filter((k) => now - k.timestamp < 4500);
     }
 
     if (phase === 'playing' && this.playerIsAlive && now - this.lastMoveSendTime >= 50) {
@@ -1103,6 +1114,23 @@ export class EngineManager {
     this.matchManager.update(dt);
     this.updateArcadeEffects(dt);
 
+    // Dismiss onboarding overlay on first player movement
+    if (this.showOnboarding && this.player.getHorizontalSpeed() > 0.3) {
+      this.showOnboarding = false;
+      this.onboardingDismissed = true;
+    }
+
+    // Low-health heartbeat audio pulse (~1Hz when alive and health ≤ 25)
+    if (this.playerIsAlive && this.playerHealth <= 25) {
+      this.heartbeatCooldown -= dt;
+      if (this.heartbeatCooldown <= 0) {
+        this.audio.playHeartbeatPulse();
+        this.heartbeatCooldown = 1.0;
+      }
+    } else {
+      this.heartbeatCooldown = 0;
+    }
+
     if (this.matchManager.getPhase() === 'ended') {
       const snap = this.matchManager.getSnapshot();
       this.awardMatchCompletionXp(snap.winner === 'blue');
@@ -1124,7 +1152,7 @@ export class EngineManager {
         const spawn = this.botManager.pickBestSpawn('blue');
         const toCenterYaw = Math.atan2(-spawn.x, -spawn.z);
         this.resetPlayerForLife(spawn, toCenterYaw);
-        this.weapons.resupplyAll();
+        this.weapons.resetForLife();
         this.weapons.setViewModelVisible(true);
         this.emitHudState(true);
       }
@@ -1260,13 +1288,13 @@ export class EngineManager {
 
   private setupLighting(): void {
     this.hemiLight = new HemisphericLight('hemiLight', new Vector3(0.15, 1, 0.2), this.scene);
-    this.hemiLight.intensity = 0.62;
-    this.hemiLight.diffuse = new Color3(0.88, 0.92, 0.98);
-    this.hemiLight.groundColor = new Color3(0.18, 0.19, 0.22);
+    this.hemiLight.intensity = 0.52;
+    this.hemiLight.diffuse = new Color3(0.82, 0.88, 0.96);
+    this.hemiLight.groundColor = new Color3(0.16, 0.17, 0.2);
 
     this.sunLight = new DirectionalLight('sunLight', new Vector3(-0.48, -0.82, -0.32), this.scene);
     this.sunLight.position = new Vector3(24, 38, 18);
-    this.sunLight.intensity = 1.35;
+    this.sunLight.intensity = 1.48;
     this.sunLight.diffuse = new Color3(1.0, 0.94, 0.84);
 
     this.shadowGenerator = new ShadowGenerator(1024, this.sunLight);
@@ -1373,7 +1401,7 @@ export class EngineManager {
     if (this.scorePopups.length > 0) {
       this.scorePopups = this.scorePopups.filter((p) => now - p.timestamp < 1450);
     }
-    if (this.killstreakBanner && now - this.killstreakBanner.timestamp > 3200) {
+    if (this.killstreakBanner && now - this.killstreakBanner.timestamp > 4500) {
       this.killstreakBanner = null;
     }
 
@@ -1428,6 +1456,7 @@ export class EngineManager {
       stance: this.player.getStance(),
       isGrounded: this.player.getIsGrounded(),
       isAds: this.player.getIsAds(),
+      adsBlend: this.player.getAdsBlend(),
       speed: Math.round(this.player.getHorizontalSpeed() * 10) / 10,
       headingDeg: Math.round(this.player.getHeadingDeg()),
       activeWeapon: this.weapons.getActiveConfig(),
@@ -1458,6 +1487,9 @@ export class EngineManager {
       targetingEnemy: stats.targetingEnemy,
       scopeMagnification: this.weapons.getScopeMagnification(),
       showScoreboard: this.showScoreboard,
+      showOnboarding: this.showOnboarding,
+      lowHealthPulse: this.playerIsAlive && this.playerHealth <= 25,
+      fps: Math.round(this.engine.getFps()),
       match,
     });
   }

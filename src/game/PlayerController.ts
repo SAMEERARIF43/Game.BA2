@@ -1,4 +1,5 @@
 import {
+  AbstractMesh,
   Mesh,
   MeshBuilder,
   Ray,
@@ -15,6 +16,7 @@ export interface PlayerInputCallbacks {
   onAdsChange: (isAds: boolean) => void;
   onReload: () => void;
   onSelectSlot: (slot: 1 | 2 | 3 | 4) => void;
+  onCycleSlot?: (delta: 1 | -1) => void;
   onActivateKillstreak?: (slot: 4 | 5 | 6) => void; // F1, F2, F3
   onScoreboardChange: (open: boolean) => void;
   onPointerLockChange: (locked: boolean) => void;
@@ -32,16 +34,26 @@ const DEAD_EYE_OFFSET = -0.58;
 const WALK_SPEED = 6.2;
 const SPRINT_SPEED = 9.1;
 const CROUCH_SPEED = 3.5;
+const SLIDE_MIN_SPEED = SPRINT_SPEED * 0.62;
 const SLIDE_BURST_SPEED = SPRINT_SPEED * 1.6;
 const SLIDE_END_SPEED = CROUCH_SPEED * 1.15;
-const SLIDE_DURATION_SEC = 0.65;
-const SLIDE_COOLDOWN_SEC = 0.5;
+const SLIDE_DURATION_SEC = 0.75;
+const SLIDE_COOLDOWN_SEC = 0.8;
 const SLIDE_ROLL_RAD = (5 * Math.PI) / 180;
+const JUMP_BUFFER_SEC = 0.12;
+const COYOTE_TIME_SEC = 0.12;
 const ADS_SPEED_MULTIPLIER = 0.65;
 const GROUND_ACCEL = 16.0;
-const AIR_ACCEL = 4.5;
+const AIR_ACCEL = 9.0;
 const GRAVITY = -23.5;
 const JUMP_VELOCITY = 8.4;
+const GROUND_RAY_OFFSETS = [
+  new Vector3(0, 0, 0),
+  new Vector3(0.26, 0, 0.26),
+  new Vector3(-0.26, 0, 0.26),
+  new Vector3(0.26, 0, -0.26),
+  new Vector3(-0.26, 0, -0.26),
+];
 
 export class PlayerController {
   public readonly camera: UniversalCamera;
@@ -59,12 +71,32 @@ export class PlayerController {
   private recoilYaw = 0;
 
   private velocity = new Vector3(0, 0, 0);
+  private readonly forwardDir = new Vector3();
+  private readonly rightDir = new Vector3();
+  private readonly wishDir = new Vector3();
+  private readonly steeredDir = new Vector3();
+  private readonly horizontalStep = new Vector3();
+  private readonly verticalStep = new Vector3();
+  private readonly deathLookVector = new Vector3();
+  private readonly groundRays = GROUND_RAY_OFFSETS.map(
+    () => new Ray(Vector3.Zero(), new Vector3(0, -1, 0), PLAYER_HALF_HEIGHT + 0.08)
+  );
+  private readonly standUpRay = new Ray(
+    Vector3.Zero(),
+    new Vector3(0, 1, 0),
+    PLAYER_HALF_HEIGHT + 0.15
+  );
+  private readonly collisionPickPredicate = (mesh: AbstractMesh): boolean =>
+    mesh !== this.collider && mesh.checkCollisions && mesh.isEnabled();
   private isGrounded = false;
+  private jumpBufferTimer = 0;
+  private coyoteTimer = 0;
   private isCrouching = false;
   private crouchToggled = false;
   private isSliding = false;
   private slideTimer = 0;
   private slideCooldown = 0;
+  private slideJumpCarryTimer = 0;
   private slideDir = new Vector3(0, 0, 1);
   private isAds = false;
   private currentEyeOffset = STAND_EYE_OFFSET;
@@ -72,8 +104,10 @@ export class PlayerController {
 
   private sensitivity = 0.0021;
   private adsSensitivityMultiplier = 0.68;
+  private invertY = false;
   private baseFovRad = (78 * Math.PI) / 180;
   private currentFovRad = (78 * Math.PI) / 180;
+  private lastAdsFovRatio = 0.74;
 
   private stepAccum = 0;
   private landDip = 0;
@@ -89,6 +123,7 @@ export class PlayerController {
   private canControl = false;
   private isDead = false;
   private orbitPreviewActive = true;
+  private lastWheelTime = 0;
 
   constructor(
     scene: Scene,
@@ -142,11 +177,23 @@ export class PlayerController {
       this.keys.clear();
       this.isFireHeld = false;
       this.isAds = false;
+      this.isCrouching = false;
+      this.crouchToggled = false;
       this.isSliding = false;
       this.slideTimer = 0;
+      this.slideCooldown = 0;
+      this.jumpBufferTimer = 0;
+      this.coyoteTimer = 0;
+      this.slideJumpCarryTimer = 0;
+      this.currentFovRad = this.baseFovRad;
+      this.camera.fov = this.baseFovRad;
+      this.currentEyeOffset = STAND_EYE_OFFSET;
+      this.currentRoll = 0;
+      this.landDip = 0;
       this.callbacks.onFireRelease();
       this.callbacks.onAdsChange(false);
       this.callbacks.onScoreboardChange(false);
+      this.syncCameraTransform();
     }
   }
 
@@ -174,8 +221,17 @@ export class PlayerController {
       this.isAds = false;
       this.isSliding = false;
       this.slideTimer = 0;
+      this.crouchToggled = false;
+      this.isCrouching = false;
+      this.jumpBufferTimer = 0;
+      this.coyoteTimer = 0;
+      this.slideJumpCarryTimer = 0;
+      this.currentFovRad = this.baseFovRad;
+      this.camera.fov = this.baseFovRad;
+      this.currentRoll = 0;
       this.callbacks.onFireRelease();
       this.callbacks.onAdsChange(false);
+      this.callbacks.onScoreboardChange(false);
     }
   }
 
@@ -186,16 +242,33 @@ export class PlayerController {
     this.pitch = 0;
     this.recoilPitch = 0;
     this.recoilYaw = 0;
+    this.isAds = false;
+    this.isFireHeld = false;
+    this.keys.clear();
     this.isCrouching = false;
     this.crouchToggled = false;
     this.isSliding = false;
     this.slideTimer = 0;
     this.slideCooldown = 0;
+    this.jumpBufferTimer = 0;
+    this.coyoteTimer = 0;
+    this.slideJumpCarryTimer = 0;
     this.isDead = false;
     this.deathLookTarget = null;
+    this.isGrounded = false;
+    this.currentFovRad = this.baseFovRad;
+    this.camera.fov = this.baseFovRad;
+    this.stepAccum = 0;
+    this.landDip = 0;
     this.shakeIntensity = 0;
+    this.flinchPitch = 0;
+    this.flinchRoll = 0;
+    this.flinchYaw = 0;
     this.currentEyeOffset = STAND_EYE_OFFSET;
     this.currentRoll = 0;
+    this.callbacks.onFireRelease();
+    this.callbacks.onAdsChange(false);
+    this.callbacks.onScoreboardChange(false);
     this.syncCameraTransform();
   }
 
@@ -215,108 +288,120 @@ export class PlayerController {
   }
 
   public setScreenShakeScale(rawScale: unknown): void {
-    let newScale = 1.0;
-    if (typeof rawScale === 'number' && Number.isFinite(rawScale)) {
-      newScale = Math.max(0.0, Math.min(1.0, rawScale));
-    } else if (rawScale === null || rawScale === undefined) {
-      newScale = 1.0;
-    }
-
-    let shakeValid = true;
-    if (!Number.isFinite(this.shakeIntensity) || this.shakeIntensity < 0) {
-      this.shakeIntensity = 0.0;
-      shakeValid = false;
-    } else if (this.shakeIntensity > 0.25) {
-      this.shakeIntensity = 0.25;
-    }
-
-    let flinchValid = true;
-    if (
-      !Number.isFinite(this.flinchPitch) ||
-      !Number.isFinite(this.flinchRoll) ||
-      !Number.isFinite(this.flinchYaw)
-    ) {
-      this.flinchPitch = 0.0;
-      this.flinchRoll = 0.0;
-      this.flinchYaw = 0.0;
-      flinchValid = false;
-    } else {
-      this.flinchPitch = Math.max(-0.045, Math.min(0.045, this.flinchPitch));
-      this.flinchRoll = Math.max(-0.030, Math.min(0.030, this.flinchRoll));
-      this.flinchYaw = Math.max(-0.018, Math.min(0.018, this.flinchYaw));
-
-      const curNormSq =
-        this.flinchPitch * this.flinchPitch +
-        this.flinchRoll * this.flinchRoll +
-        this.flinchYaw * this.flinchYaw;
-      if (curNormSq > 0.05 * 0.05) {
-        const curNorm = Math.sqrt(curNormSq);
-        if (Number.isFinite(curNorm) && curNorm > 0.00001) {
-          const s = 0.05 / curNorm;
-          this.flinchPitch *= s;
-          this.flinchRoll *= s;
-          this.flinchYaw *= s;
-        } else {
-          this.flinchPitch = 0.0;
-          this.flinchRoll = 0.0;
-          this.flinchYaw = 0.0;
-          flinchValid = false;
-        }
-      }
-    }
-
     const storedScale = this.screenShakeScale;
+    const currentShake = this.shakeIntensity;
+    const currentPitch = this.flinchPitch;
+    const currentRoll = this.flinchRoll;
+    const currentYaw = this.flinchYaw;
+
     const storedScaleValid =
       typeof storedScale === 'number' &&
       Number.isFinite(storedScale) &&
       storedScale >= 0.0 &&
       storedScale <= 1.0;
 
+    let candShake = 0.0;
+    if (typeof currentShake === 'number' && Number.isFinite(currentShake) && currentShake > 0.0) {
+      candShake = Math.min(0.25, currentShake);
+    }
+
+    const MAX_PITCH = 0.045;
+    const MAX_ROLL = 0.030;
+    const MAX_YAW = 0.018;
+    const MAX_NORM = 0.050;
+    const FLINCH_EPSILON = 0.0005;
+
+    let candPitch = 0.0;
+    let candRoll = 0.0;
+    let candYaw = 0.0;
+
+    if (
+      typeof currentPitch === 'number' && Number.isFinite(currentPitch) &&
+      typeof currentRoll === 'number' && Number.isFinite(currentRoll) &&
+      typeof currentYaw === 'number' && Number.isFinite(currentYaw)
+    ) {
+      let p = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, currentPitch));
+      let r = Math.max(-MAX_ROLL, Math.min(MAX_ROLL, currentRoll));
+      let y = Math.max(-MAX_YAW, Math.min(MAX_YAW, currentYaw));
+
+      const normSq = p * p + r * r + y * y;
+      if (normSq > MAX_NORM * MAX_NORM) {
+        const norm = Math.sqrt(normSq);
+        if (Number.isFinite(norm) && norm > 0.00001) {
+          const s = MAX_NORM / norm;
+          p *= s;
+          r *= s;
+          y *= s;
+        } else {
+          p = 0.0;
+          r = 0.0;
+          y = 0.0;
+        }
+      }
+
+      if (normSq < FLINCH_EPSILON * FLINCH_EPSILON) {
+        p = 0.0;
+        r = 0.0;
+        y = 0.0;
+      }
+
+      candPitch = p;
+      candRoll = r;
+      candYaw = y;
+    }
+
+    let newScale = 0.0;
+    if (typeof rawScale === 'number' && Number.isFinite(rawScale)) {
+      newScale = Math.max(0.0, Math.min(1.0, rawScale));
+    } else {
+      newScale = 0.0;
+    }
+
+    let targetScale = newScale;
+    let targetShake = 0.0;
+    let targetPitch = 0.0;
+    let targetRoll = 0.0;
+    let targetYaw = 0.0;
+
     if (!storedScaleValid) {
-      this.shakeIntensity = 0.0;
-      this.flinchPitch = 0.0;
-      this.flinchRoll = 0.0;
-      this.flinchYaw = 0.0;
-      this.screenShakeScale = newScale;
-      return;
-    }
-
-    if (Math.abs(storedScale - newScale) < 0.0001) {
-      this.screenShakeScale = newScale;
-      return;
-    }
-
-    const oldScale = storedScale;
-    this.screenShakeScale = newScale;
-
-    if (this.screenShakeScale <= 0.0001) {
-      this.shakeIntensity = 0.0;
-      this.flinchPitch = 0.0;
-      this.flinchRoll = 0.0;
-      this.flinchYaw = 0.0;
-      return;
-    }
-
-    if (oldScale > 0.0001) {
-      const ratio = this.screenShakeScale / oldScale;
-      if (Number.isFinite(ratio) && ratio > 0) {
-        if (shakeValid && this.shakeIntensity > 0) {
-          const rebasedShake = this.shakeIntensity * ratio;
-          this.shakeIntensity = Number.isFinite(rebasedShake)
+      targetScale = newScale;
+      targetShake = 0.0;
+      targetPitch = 0.0;
+      targetRoll = 0.0;
+      targetYaw = 0.0;
+    } else if (newScale <= 0.0001) {
+      targetScale = newScale;
+      targetShake = 0.0;
+      targetPitch = 0.0;
+      targetRoll = 0.0;
+      targetYaw = 0.0;
+    } else if (Math.abs(storedScale - newScale) < 0.0001) {
+      targetScale = newScale;
+      targetShake = candShake;
+      targetPitch = candPitch;
+      targetRoll = candRoll;
+      targetYaw = candYaw;
+    } else if (storedScale <= 0.0001) {
+      targetScale = newScale;
+      targetShake = 0.0;
+      targetPitch = 0.0;
+      targetRoll = 0.0;
+      targetYaw = 0.0;
+    } else {
+      const ratio = newScale / storedScale;
+      if (Number.isFinite(ratio) && ratio > 0.0) {
+        if (candShake > 0.0) {
+          const rebasedShake = candShake * ratio;
+          targetShake = Number.isFinite(rebasedShake)
             ? Math.max(0.0, Math.min(0.25, rebasedShake))
             : 0.0;
         }
 
-        if (flinchValid) {
-          let p = this.flinchPitch * ratio;
-          let r = this.flinchRoll * ratio;
-          let y = this.flinchYaw * ratio;
+        let p = candPitch * ratio;
+        let r = candRoll * ratio;
+        let y = candYaw * ratio;
 
-          const MAX_PITCH = 0.045;
-          const MAX_ROLL = 0.030;
-          const MAX_YAW = 0.018;
-          const MAX_NORM = 0.05;
-
+        if (Number.isFinite(p) && Number.isFinite(r) && Number.isFinite(y)) {
           p = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, p));
           r = Math.max(-MAX_ROLL, Math.min(MAX_ROLL, r));
           y = Math.max(-MAX_YAW, Math.min(MAX_YAW, y));
@@ -324,26 +409,46 @@ export class PlayerController {
           const normSq = p * p + r * r + y * y;
           if (normSq > MAX_NORM * MAX_NORM) {
             const norm = Math.sqrt(normSq);
-            if (norm > 0.00001) {
+            if (Number.isFinite(norm) && norm > 0.00001) {
               const s = MAX_NORM / norm;
               p *= s;
               r *= s;
               y *= s;
+            } else {
+              p = 0.0;
+              r = 0.0;
+              y = 0.0;
             }
           }
 
-          if (Number.isFinite(p) && Number.isFinite(r) && Number.isFinite(y)) {
-            this.flinchPitch = p;
-            this.flinchRoll = r;
-            this.flinchYaw = y;
-          } else {
-            this.flinchPitch = 0.0;
-            this.flinchRoll = 0.0;
-            this.flinchYaw = 0.0;
+          if (normSq < FLINCH_EPSILON * FLINCH_EPSILON) {
+            p = 0.0;
+            r = 0.0;
+            y = 0.0;
           }
+
+          targetPitch = p;
+          targetRoll = r;
+          targetYaw = y;
         }
       }
+      targetScale = newScale;
+    }
+
+    if (
+      Number.isFinite(targetScale) && targetScale >= 0.0 && targetScale <= 1.0 &&
+      Number.isFinite(targetShake) && targetShake >= 0.0 && targetShake <= 0.25 &&
+      Number.isFinite(targetPitch) && Math.abs(targetPitch) <= MAX_PITCH &&
+      Number.isFinite(targetRoll) && Math.abs(targetRoll) <= MAX_ROLL &&
+      Number.isFinite(targetYaw) && Math.abs(targetYaw) <= MAX_YAW
+    ) {
+      this.screenShakeScale = targetScale;
+      this.shakeIntensity = targetShake;
+      this.flinchPitch = targetPitch;
+      this.flinchRoll = targetRoll;
+      this.flinchYaw = targetYaw;
     } else {
+      this.screenShakeScale = Number.isFinite(newScale) ? Math.max(0.0, Math.min(1.0, newScale)) : 0.0;
       this.shakeIntensity = 0.0;
       this.flinchPitch = 0.0;
       this.flinchRoll = 0.0;
@@ -512,6 +617,10 @@ export class PlayerController {
     this.adsSensitivityMultiplier = Math.max(0.3, Math.min(1.2, mult));
   }
 
+  public setInvertY(invert: boolean): void {
+    this.invertY = invert;
+  }
+
   public setBaseFov(fovDeg: number): void {
     const clamped = Math.max(70, Math.min(110, fovDeg));
     this.baseFovRad = (clamped * Math.PI) / 180;
@@ -535,6 +644,20 @@ export class PlayerController {
 
   public getIsAds(): boolean {
     return this.isAds && !this.isDead;
+  }
+
+  public getAdsBlend(): number {
+    if (this.orbitPreviewActive || this.isDead) return 0;
+    const denom = this.baseFovRad * (1 - this.lastAdsFovRatio);
+    if (denom < 1e-5) return this.isAds ? 1 : 0;
+    return Math.max(0, Math.min(1, (this.baseFovRad - this.currentFovRad) / denom));
+  }
+
+  public getLocalMoveAxes(out: { forward: number; right: number }): void {
+    const sinY = Math.sin(this.yaw);
+    const cosY = Math.cos(this.yaw);
+    out.forward = this.velocity.x * sinY + this.velocity.z * cosY;
+    out.right = this.velocity.x * cosY - this.velocity.z * sinY;
   }
 
   public getIsFireHeld(): boolean {
@@ -582,12 +705,24 @@ export class PlayerController {
       if (this.keys.has('KeyA')) strafeInput -= 1;
     }
 
-    const forwardDir = new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    const rightDir = new Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    this.forwardDir.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    this.rightDir.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    this.wishDir.set(
+      this.forwardDir.x * forwardInput + this.rightDir.x * strafeInput,
+      0,
+      this.forwardDir.z * forwardInput + this.rightDir.z * strafeInput
+    );
+    if (this.wishDir.lengthSquared() > 0.0001) {
+      this.wishDir.normalize();
+    }
 
-    const wishDir = forwardDir.scale(forwardInput).addInPlace(rightDir.scale(strafeInput));
-    if (wishDir.lengthSquared() > 0.0001) {
-      wishDir.normalize();
+    if (this.jumpBufferTimer > 0) {
+      this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - clampedDt);
+    }
+    if (this.isGrounded) {
+      this.coyoteTimer = COYOTE_TIME_SEC;
+    } else if (this.coyoteTimer > 0) {
+      this.coyoteTimer = Math.max(0, this.coyoteTimer - clampedDt);
     }
 
     if (!this.isSliding && this.slideCooldown > 0) {
@@ -601,9 +736,14 @@ export class PlayerController {
         this.slideTimer -= clampedDt;
 
         // Allow jump-cancel mid-slide while preserving forward momentum
-        if (this.keys.has('Space') && this.isGrounded) {
+        const wantsJump = activeInput && this.jumpBufferTimer > 0;
+        const canJump = this.isGrounded || this.coyoteTimer > 0;
+        if (wantsJump && canJump) {
           this.velocity.y = JUMP_VELOCITY;
           this.isGrounded = false;
+          this.coyoteTimer = 0;
+          this.jumpBufferTimer = 0;
+          this.slideJumpCarryTimer = 0.18;
           this.audio.playJump();
           this.endSlide(false);
         } else if (this.slideTimer <= 0) {
@@ -619,14 +759,15 @@ export class PlayerController {
       const slideSpeed = SLIDE_END_SPEED + (SLIDE_BURST_SPEED - SLIDE_END_SPEED) * frictionCurve;
 
       // Subtle lateral steering while locked into slide momentum
-      const steeredDir = this.slideDir.clone();
-      if (wishDir.lengthSquared() > 0.0001) {
-        steeredDir.addInPlace(rightDir.scale(strafeInput * 0.22));
-        steeredDir.normalize();
+      this.steeredDir.copyFrom(this.slideDir);
+      if (this.wishDir.lengthSquared() > 0.0001) {
+        this.steeredDir.x += this.rightDir.x * strafeInput * 0.22;
+        this.steeredDir.z += this.rightDir.z * strafeInput * 0.22;
+        this.steeredDir.normalize();
       }
       const blend = 1 - Math.exp(-18 * clampedDt);
-      this.velocity.x += (steeredDir.x * slideSpeed - this.velocity.x) * blend;
-      this.velocity.z += (steeredDir.z * slideSpeed - this.velocity.z) * blend;
+      this.velocity.x += (this.steeredDir.x * slideSpeed - this.velocity.x) * blend;
+      this.velocity.z += (this.steeredDir.z * slideSpeed - this.velocity.z) * blend;
     } else {
       const wantCrouch = activeInput && (this.keys.has('ControlLeft') || this.crouchToggled);
       if (!wantCrouch && this.isCrouching) {
@@ -649,33 +790,41 @@ export class PlayerController {
       }
       targetSpeed *= this.moveSpeedMultiplier;
 
-      const targetVelX = activeInput ? wishDir.x * targetSpeed : 0;
-      const targetVelZ = activeInput ? wishDir.z * targetSpeed : 0;
+      const targetVelX = activeInput ? this.wishDir.x * targetSpeed : 0;
+      const targetVelZ = activeInput ? this.wishDir.z * targetSpeed : 0;
       const accel = this.isGrounded ? GROUND_ACCEL : AIR_ACCEL;
-      const blend = 1 - Math.exp(-accel * clampedDt);
+      const carryingSlideJump = !this.isGrounded && this.slideJumpCarryTimer > 0;
+      const blend = 1 - Math.exp(-accel * (carryingSlideJump ? 0.2 : 1) * clampedDt);
 
       this.velocity.x += (targetVelX - this.velocity.x) * blend;
       this.velocity.z += (targetVelZ - this.velocity.z) * blend;
+      if (carryingSlideJump) {
+        this.slideJumpCarryTimer = Math.max(0, this.slideJumpCarryTimer - clampedDt);
+      }
 
-      if (activeInput && this.keys.has('Space') && this.isGrounded) {
+      const wantsJump = activeInput && this.jumpBufferTimer > 0;
+      const canJump = this.isGrounded || this.coyoteTimer > 0;
+      if (wantsJump && canJump && this.velocity.y <= 1.0) {
         this.velocity.y = JUMP_VELOCITY;
         this.isGrounded = false;
+        this.coyoteTimer = 0;
+        this.jumpBufferTimer = 0;
         this.audio.playJump();
       }
     }
 
     this.velocity.y += GRAVITY * clampedDt;
 
-    const horizStep = new Vector3(this.velocity.x * clampedDt, 0, this.velocity.z * clampedDt);
-    this.collider.moveWithCollisions(horizStep);
+    this.horizontalStep.set(this.velocity.x * clampedDt, 0, this.velocity.z * clampedDt);
+    this.collider.moveWithCollisions(this.horizontalStep);
 
     const prevY = this.collider.position.y;
     const preImpactVy = this.velocity.y;
-    const vertStep = new Vector3(0, this.velocity.y * clampedDt, 0);
-    this.collider.moveWithCollisions(vertStep);
+    this.verticalStep.set(0, this.velocity.y * clampedDt, 0);
+    this.collider.moveWithCollisions(this.verticalStep);
 
     const actualDeltaY = this.collider.position.y - prevY;
-    const intendedDeltaY = vertStep.y;
+    const intendedDeltaY = this.verticalStep.y;
 
     if (intendedDeltaY > 0 && actualDeltaY < intendedDeltaY * 0.45) {
       this.velocity.y = 0;
@@ -706,7 +855,12 @@ export class PlayerController {
     this.currentEyeOffset += (targetEye - this.currentEyeOffset) * (1 - Math.exp(-eyeLerpRate * clampedDt));
     this.landDip *= Math.exp(-12 * clampedDt);
 
-    const targetRoll = this.isDead ? 0.28 : this.isSliding ? SLIDE_ROLL_RAD : 0;
+    const slideRollDirection = strafeInput === 0 ? 1 : Math.sign(strafeInput);
+    const targetRoll = this.isDead
+      ? 0.28
+      : this.isSliding
+        ? SLIDE_ROLL_RAD * slideRollDirection
+        : 0;
     this.currentRoll += (targetRoll - this.currentRoll) * (1 - Math.exp(-14 * clampedDt));
 
     const horizSpeed = this.getHorizontalSpeed();
@@ -723,12 +877,39 @@ export class PlayerController {
 
     this.shakeIntensity *= Math.exp(-8 * clampedDt);
 
+    const flinchDecay = Math.exp(-26 * clampedDt);
+    this.flinchPitch *= flinchDecay;
+    this.flinchRoll *= flinchDecay;
+    this.flinchYaw *= flinchDecay;
+
+    if (Math.abs(this.flinchPitch) < 0.0005) {
+      this.flinchPitch = 0.0;
+    }
+    if (Math.abs(this.flinchRoll) < 0.0005) {
+      this.flinchRoll = 0.0;
+    }
+    if (Math.abs(this.flinchYaw) < 0.0005) {
+      this.flinchYaw = 0.0;
+    }
+
+    const flinchNormSq =
+      this.flinchPitch * this.flinchPitch +
+      this.flinchRoll * this.flinchRoll +
+      this.flinchYaw * this.flinchYaw;
+    if (flinchNormSq < 0.0005 * 0.0005) {
+      this.flinchPitch = 0.0;
+      this.flinchRoll = 0.0;
+      this.flinchYaw = 0.0;
+    }
+
     if (this.isDead && this.deathLookTarget) {
-      const toKiller = this.deathLookTarget.subtract(this.camera.position);
-      const flatDist = Math.hypot(toKiller.x, toKiller.z);
+      this.deathLookVector
+        .copyFrom(this.deathLookTarget)
+        .subtractInPlace(this.camera.position);
+      const flatDist = Math.hypot(this.deathLookVector.x, this.deathLookVector.z);
       if (flatDist > 0.2) {
-        const targetYaw = Math.atan2(toKiller.x, toKiller.z);
-        const targetPitch = Math.atan2(-toKiller.y + 1.25, flatDist);
+        const targetYaw = Math.atan2(this.deathLookVector.x, this.deathLookVector.z);
+        const targetPitch = Math.atan2(-this.deathLookVector.y + 1.25, flatDist);
         let yawDiff = ((targetYaw - this.yaw + Math.PI) % (Math.PI * 2)) - Math.PI;
         if (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
         const trackBlend = 1 - Math.exp(-6 * clampedDt);
@@ -737,9 +918,12 @@ export class PlayerController {
       }
     }
 
+    this.lastAdsFovRatio = targetAdsFovRatio;
     const desiredFov =
       this.isAds && !this.isDead ? this.baseFovRad * targetAdsFovRatio : this.baseFovRad;
-    this.currentFovRad += (desiredFov - this.currentFovRad) * (1 - Math.exp(-16 * clampedDt));
+    const zoomDepth = 1 - Math.max(0.08, Math.min(1, targetAdsFovRatio));
+    const fovRate = this.isAds ? 9.5 + zoomDepth * 4.5 : 13.5;
+    this.currentFovRad += (desiredFov - this.currentFovRad) * (1 - Math.exp(-fovRate * clampedDt));
     this.camera.fov = this.currentFovRad;
 
     this.syncCameraTransform();
@@ -753,22 +937,25 @@ export class PlayerController {
       this.slideCooldown > 0 ||
       this.isCrouching ||
       this.isAds ||
-      !this.isSprinting()
+      !this.isSprinting() ||
+      this.getHorizontalSpeed() < SLIDE_MIN_SPEED
     ) {
       return false;
     }
 
-    const dir = new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    const rightDir = new Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-    if (this.keys.has('KeyD')) dir.addInPlace(rightDir.scale(0.28));
-    if (this.keys.has('KeyA')) dir.addInPlace(rightDir.scale(-0.28));
-    if (dir.lengthSquared() > 0.0001) {
-      dir.normalize();
+    this.forwardDir.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    this.rightDir.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    this.forwardDir.x += this.rightDir.x * (this.keys.has('KeyD') ? 0.28 : 0);
+    this.forwardDir.z += this.rightDir.z * (this.keys.has('KeyD') ? 0.28 : 0);
+    this.forwardDir.x -= this.rightDir.x * (this.keys.has('KeyA') ? 0.28 : 0);
+    this.forwardDir.z -= this.rightDir.z * (this.keys.has('KeyA') ? 0.28 : 0);
+    if (this.forwardDir.lengthSquared() > 0.0001) {
+      this.forwardDir.normalize();
     }
 
-    this.slideDir.copyFrom(dir);
-    this.velocity.x = dir.x * SLIDE_BURST_SPEED;
-    this.velocity.z = dir.z * SLIDE_BURST_SPEED;
+    this.slideDir.copyFrom(this.forwardDir);
+    this.velocity.x = this.forwardDir.x * SLIDE_BURST_SPEED;
+    this.velocity.z = this.forwardDir.z * SLIDE_BURST_SPEED;
 
     this.isSliding = true;
     this.slideTimer = SLIDE_DURATION_SEC;
@@ -798,20 +985,12 @@ export class PlayerController {
   }
 
   private checkGroundRay(): boolean {
-    const offsets = [
-      new Vector3(0, 0, 0),
-      new Vector3(0.26, 0, 0.26),
-      new Vector3(-0.26, 0, 0.26),
-      new Vector3(0.26, 0, -0.26),
-      new Vector3(-0.26, 0, -0.26),
-    ];
-
-    for (const offset of offsets) {
-      const origin = this.collider.position.add(offset);
-      const ray = new Ray(origin, new Vector3(0, -1, 0), PLAYER_HALF_HEIGHT + 0.08);
+    for (let i = 0; i < this.groundRays.length; i++) {
+      const ray = this.groundRays[i];
+      ray.origin.copyFrom(this.collider.position).addInPlace(GROUND_RAY_OFFSETS[i]);
       const hit = this.scene.pickWithRay(
         ray,
-        (mesh) => mesh !== this.collider && mesh.checkCollisions && mesh.isEnabled()
+        this.collisionPickPredicate
       );
       if (hit?.hit) {
         return true;
@@ -821,10 +1000,10 @@ export class PlayerController {
   }
 
   private canStandUp(): boolean {
-    const ray = new Ray(this.collider.position, new Vector3(0, 1, 0), PLAYER_HALF_HEIGHT + 0.15);
+    this.standUpRay.origin.copyFrom(this.collider.position);
     const hit = this.scene.pickWithRay(
-      ray,
-      (mesh) => mesh !== this.collider && mesh.checkCollisions && mesh.isEnabled()
+      this.standUpRay,
+      this.collisionPickPredicate
     );
     return !hit?.hit;
   }
@@ -837,9 +1016,16 @@ export class PlayerController {
       this.collider.position.y + this.currentEyeOffset - this.landDip + shakeY,
       this.collider.position.z
     );
-    const effectivePitch = Math.max(-1.48, Math.min(1.48, this.pitch - this.recoilPitch));
-    const effectiveYaw = this.yaw + this.recoilYaw;
-    this.camera.rotation.set(effectivePitch, effectiveYaw, this.currentRoll);
+    const effectivePitch = Math.max(
+      -1.48,
+      Math.min(1.48, this.pitch - this.recoilPitch - this.flinchPitch)
+    );
+    const effectiveYaw = this.yaw + this.recoilYaw + this.flinchYaw;
+    this.camera.rotation.set(
+      effectivePitch,
+      effectiveYaw,
+      this.currentRoll + this.flinchRoll
+    );
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -856,6 +1042,10 @@ export class PlayerController {
     }
 
     this.keys.add(e.code);
+
+    if (e.code === 'Space' && !e.repeat) {
+      this.jumpBufferTimer = JUMP_BUFFER_SEC;
+    }
 
     if (e.code === 'Tab' && !e.repeat) {
       this.callbacks.onScoreboardChange(true);
@@ -905,9 +1095,16 @@ export class PlayerController {
 
   private onMouseMove = (e: MouseEvent): void => {
     if (!this.isPointerLocked || !this.canControl || this.isDead) return;
-    const sens = this.isAds ? this.sensitivity * this.adsSensitivityMultiplier : this.sensitivity;
+    const adsMix = this.getAdsBlend();
+    const adsMult = 1 + (this.adsSensitivityMultiplier - 1) * adsMix;
+    const opticalScale = Math.max(0.2, this.currentFovRad / this.baseFovRad);
+    const sens = this.sensitivity * adsMult * opticalScale;
     this.yaw += e.movementX * sens;
-    this.pitch = Math.max(-1.46, Math.min(1.46, this.pitch + e.movementY * sens));
+    const verticalDirection = this.invertY ? -1 : 1;
+    this.pitch = Math.max(
+      -1.46,
+      Math.min(1.46, this.pitch + e.movementY * sens * verticalDirection)
+    );
   };
 
   private onMouseDown = (e: MouseEvent): void => {
@@ -945,6 +1142,17 @@ export class PlayerController {
     e.preventDefault();
   };
 
+  private onWheel = (e: WheelEvent): void => {
+    if (!this.isPointerLocked || !this.canControl || this.isDead) return;
+    if (Math.abs(e.deltaY) < 1) return;
+    e.preventDefault();
+    const now = performance.now();
+    if (now - this.lastWheelTime < 120) return;
+    this.lastWheelTime = now;
+    const delta: 1 | -1 = e.deltaY > 0 ? 1 : -1;
+    this.callbacks.onCycleSlot?.(delta);
+  };
+
   private onPointerLockChange = (): void => {
     const locked = document.pointerLockElement === this.canvas;
     this.isPointerLocked = locked;
@@ -963,6 +1171,14 @@ export class PlayerController {
     this.keys.clear();
     this.isFireHeld = false;
     this.isAds = false;
+    this.isCrouching = false;
+    this.crouchToggled = false;
+    this.isSliding = false;
+    this.slideTimer = 0;
+    this.jumpBufferTimer = 0;
+    this.coyoteTimer = 0;
+    this.slideJumpCarryTimer = 0;
+    this.currentRoll = 0;
     this.callbacks.onFireRelease();
     this.callbacks.onAdsChange(false);
     this.callbacks.onScoreboardChange(false);
@@ -990,6 +1206,7 @@ export class PlayerController {
     window.addEventListener('blur', this.onWindowBlur);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     this.canvas.addEventListener('contextmenu', this.onContextMenu);
+    window.addEventListener('wheel', this.onWheel, { passive: false });
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
@@ -999,10 +1216,14 @@ export class PlayerController {
     window.removeEventListener('mousemove', this.onMouseMove);
     window.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
+    window.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('blur', this.onWindowBlur);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.canvas.removeEventListener('contextmenu', this.onContextMenu);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
+    if (document.pointerLockElement === this.canvas) {
+      document.exitPointerLock();
+    }
     this.collider.dispose();
     this.camera.dispose();
   }

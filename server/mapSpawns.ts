@@ -156,7 +156,7 @@ export const SERVER_MAP_LAYOUTS: Record<ServerMapId, ServerMapLayout> = {
 };
 
 export interface ServerWeaponSpec {
-  id: 'm4a1' | 'mp5' | 'm1911';
+  id: 'm4a1' | 'mp5' | 'intervention' | 'm1911';
   name: string;
   damage: number;
   headshotMultiplier: number;
@@ -168,7 +168,7 @@ export const SERVER_WEAPONS: Record<string, ServerWeaponSpec> = {
   m4a1: {
     id: 'm4a1',
     name: 'M4A1 Tactical',
-    damage: 32,
+    damage: 28,
     headshotMultiplier: 2.0,
     minFireIntervalMs: 55,
     range: 180,
@@ -183,11 +183,19 @@ export const SERVER_WEAPONS: Record<string, ServerWeaponSpec> = {
   },
   m1911: {
     id: 'm1911',
-    name: 'M1911 Ops',
-    damage: 42,
-    headshotMultiplier: 2.1,
-    minFireIntervalMs: 95,
+    name: 'M1911 Sidearm',
+    damage: 36,
+    headshotMultiplier: 2.2,
+    minFireIntervalMs: 176,
     range: 120,
+  },
+  intervention: {
+    id: 'intervention',
+    name: 'Intervention .50',
+    damage: 110,
+    headshotMultiplier: 2.5,
+    minFireIntervalMs: 833,
+    range: 300,
   },
 };
 

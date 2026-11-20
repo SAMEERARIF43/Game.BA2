@@ -1,5 +1,8 @@
 import {
+  AbstractMesh,
+  BaseTexture,
   Color3,
+  DynamicTexture,
   Material,
   Mesh,
   MeshBuilder,
@@ -8,6 +11,7 @@ import {
   Ray,
   Scene,
   StandardMaterial,
+  Texture,
   TransformNode,
   UniversalCamera,
   Vector3,
@@ -45,6 +49,7 @@ interface WeaponModelRig {
   ejectionPort: TransformNode;
   hipPos: Vector3;
   adsPos: Vector3;
+  adsRot: Vector3;
 }
 
 export class WeaponSystem {
@@ -58,7 +63,14 @@ export class WeaponSystem {
   private models = new Map<WeaponId, WeaponModelRig>();
   private muzzleFlashMesh: Mesh;
   private muzzleLight: PointLight;
+  private vmFillLight: PointLight;
+  private vmRimLight: PointLight;
   private muzzleFlashTimer = 0;
+  private readonly rangeRay = new Ray(Vector3.Zero(), new Vector3(0, 0, 1), 160);
+  private readonly forwardAxis = new Vector3(0, 0, 1);
+  private readonly moveAxes = { forward: 0, right: 0 };
+  private readonly rangePickPredicate = (mesh: AbstractMesh): boolean =>
+    mesh.isPickable && mesh.isEnabled() && mesh !== this.player.collider;
 
   private activeId: WeaponId = 'm4a1';
   private slots: Record<WeaponId, WeaponRuntimeState> = {
@@ -79,6 +91,8 @@ export class WeaponSystem {
   private kickBackZ = 0;
   private kickRotX = 0;
   private bobTimer = 0;
+  private swayRoll = 0;
+  private swayPitch = 0;
   private equipDrop = 0;
   private viewModelVisible = false;
 
@@ -91,7 +105,11 @@ export class WeaponSystem {
   private tracerMaterial: StandardMaterial;
   private tracerSuppMaterial: StandardMaterial;
   private brassMaterial: PBRMaterial;
+  private impactMatTarget: StandardMaterial;
+  private impactMatSparkA: StandardMaterial;
+  private impactMatSparkB: StandardMaterial;
   private materialsToDispose: Material[] = [];
+  private texturesToDispose: BaseTexture[] = [];
 
   private shotsFired = 0;
   private shotsHit = 0;
@@ -155,8 +173,24 @@ export class WeaponSystem {
     this.muzzleLight = new PointLight('muzzleLight', Vector3.Zero(), this.scene);
     this.muzzleLight.diffuse = new Color3(1.0, 0.72, 0.35);
     this.muzzleLight.intensity = 0;
-    this.muzzleLight.range = 15;
+    this.muzzleLight.range = 8;
     this.muzzleLight.parent = this.weaponPivot;
+
+    this.vmFillLight = new PointLight('vmFillLight', new Vector3(0.14, 0.18, 0.06), this.scene);
+    this.vmFillLight.parent = this.camera;
+    this.vmFillLight.diffuse = new Color3(1.0, 0.97, 0.93);
+    this.vmFillLight.specular = new Color3(0.35, 0.36, 0.38);
+    this.vmFillLight.intensity = 0.72;
+    this.vmFillLight.range = 1.85;
+    this.vmFillLight.shadowEnabled = false;
+
+    this.vmRimLight = new PointLight('vmRimLight', new Vector3(-0.28, 0.08, 0.42), this.scene);
+    this.vmRimLight.parent = this.camera;
+    this.vmRimLight.diffuse = new Color3(0.52, 0.68, 0.92);
+    this.vmRimLight.specular = new Color3(0.2, 0.24, 0.32);
+    this.vmRimLight.intensity = 0.38;
+    this.vmRimLight.range = 2.2;
+    this.vmRimLight.shadowEnabled = false;
 
     this.decalMaterial = new StandardMaterial('bulletDecalMat', this.scene);
     this.decalMaterial.diffuseColor = new Color3(0.06, 0.06, 0.07);
@@ -176,14 +210,30 @@ export class WeaponSystem {
     this.brassMaterial.metallic = 0.95;
     this.brassMaterial.roughness = 0.24;
 
+    this.impactMatTarget = new StandardMaterial('impactMatTarget', this.scene);
+    this.impactMatTarget.disableLighting = true;
+    this.impactMatTarget.emissiveColor = new Color3(1.2, 0.32, 0.22);
+
+    this.impactMatSparkA = new StandardMaterial('impactMatSparkA', this.scene);
+    this.impactMatSparkA.disableLighting = true;
+    this.impactMatSparkA.emissiveColor = new Color3(1.2, 0.85, 0.38);
+
+    this.impactMatSparkB = new StandardMaterial('impactMatSparkB', this.scene);
+    this.impactMatSparkB.disableLighting = true;
+    this.impactMatSparkB.emissiveColor = new Color3(0.95, 0.95, 1.0);
+
     this.materialsToDispose.push(
       this.decalMaterial,
       this.tracerMaterial,
       this.tracerSuppMaterial,
-      this.brassMaterial
+      this.brassMaterial,
+      this.impactMatTarget,
+      this.impactMatSparkA,
+      this.impactMatSparkB
     );
 
     this.buildAllWeaponModels();
+    this.bindViewModelLights();
     this.selectWeapon('m4a1');
     this.setViewModelVisible(false);
   }
@@ -211,9 +261,12 @@ export class WeaponSystem {
   public setViewModelVisible(visible: boolean): void {
     this.viewModelVisible = visible;
     this.weaponPivot.setEnabled(visible);
+    this.vmFillLight.setEnabled(visible);
+    this.vmRimLight.setEnabled(visible);
     if (!visible) {
       this.muzzleFlashMesh.isVisible = false;
       this.muzzleLight.intensity = 0;
+      this.muzzleFlashTimer = 0;
     }
   }
 
@@ -302,6 +355,20 @@ export class WeaponSystem {
     this.selectWeapon(id);
   }
 
+  public cycleSlot(delta: 1 | -1): void {
+    const order: WeaponId[] = ['m4a1', 'mp5', 'intervention', 'm1911'];
+    const curIdx = order.indexOf(this.activeId);
+    if (curIdx === -1) {
+      this.selectWeapon('m4a1');
+      return;
+    }
+    const nextIdx = (curIdx + delta + order.length) % order.length;
+    const nextId = order[nextIdx];
+    if (WEAPONS[nextId]) {
+      this.selectWeapon(nextId);
+    }
+  }
+
   public selectWeapon(id: WeaponId): void {
     if (this.activeId === id && this.models.get(id)?.root.isEnabled()) return;
 
@@ -310,6 +377,7 @@ export class WeaponSystem {
     this.semiTriggerConsumed = false;
     this.activeId = id;
     this.equipDrop = 0.14;
+    this.audio.playWeaponEquip();
 
     this.models.forEach((rig, key) => {
       rig.root.setEnabled(key === id);
@@ -319,7 +387,8 @@ export class WeaponSystem {
     if (activeRig) {
       this.muzzleFlashMesh.parent = activeRig.muzzlePoint;
       this.muzzleFlashMesh.position.setAll(0);
-      this.muzzleLight.position.copyFrom(activeRig.muzzlePoint.position);
+      this.muzzleLight.parent = activeRig.muzzlePoint;
+      this.muzzleLight.position.setAll(0);
     }
   }
 
@@ -343,10 +412,7 @@ export class WeaponSystem {
     const cfg = this.getActiveConfig();
     const state = this.slots[this.activeId];
     if (state.ammoInMag >= cfg.magSize) return;
-
-    if (state.reserveAmmo <= 0) {
-      state.reserveAmmo = cfg.reserveMax;
-    }
+    if (state.reserveAmmo <= 0) return;
 
     this.isReloading = true;
     this.reloadElapsed = 0;
@@ -361,18 +427,43 @@ export class WeaponSystem {
     });
     this.isReloading = false;
     this.reloadElapsed = 0;
+    this.reloadMagClickPlayed = false;
+    this.semiTriggerConsumed = false;
   }
 
-  public resetForNewMatch(): void {
+  public resetForLife(): void {
     this.resupplyAll();
-    this.shotsFired = 0;
-    this.shotsHit = 0;
-    this.headshots = 0;
-    this.eliminations = 0;
+    this.fireCooldown = 0;
+    this.semiTriggerConsumed = false;
+    this.muzzleFlashTimer = 0;
+    this.muzzleFlashMesh.isVisible = false;
+    this.muzzleLight.intensity = 0;
     this.lastHitMarker = null;
     this.spreadBloom = 0;
     this.kickBackZ = 0;
     this.kickRotX = 0;
+    this.swayRoll = 0;
+    this.swayPitch = 0;
+    this.bobTimer = 0;
+    this.equipDrop = 0;
+    this.rangeDistanceMeters = null;
+    this.targetingEnemy = false;
+    this.clearTransientEffects();
+
+    const activeRig = this.models.get(this.activeId);
+    if (activeRig) {
+      this.weaponPivot.position.copyFrom(activeRig.hipPos);
+      this.weaponPivot.rotation.setAll(0);
+    }
+  }
+
+  public resetForNewMatch(): void {
+    this.resetForLife();
+    this.clearDecals();
+    this.shotsFired = 0;
+    this.shotsHit = 0;
+    this.headshots = 0;
+    this.eliminations = 0;
   }
 
   public update(dt: number): void {
@@ -395,9 +486,6 @@ export class WeaponSystem {
         const transfer = Math.min(needed, state.reserveAmmo);
         state.ammoInMag += transfer;
         state.reserveAmmo -= transfer;
-        if (state.reserveAmmo === 0) {
-          state.reserveAmmo = cfg.reserveMax;
-        }
         this.isReloading = false;
         this.reloadElapsed = 0;
         this.reloadMagClickPlayed = false;
@@ -458,10 +546,14 @@ export class WeaponSystem {
     this.fireCooldown = 60 / cfg.rpm;
     this.shotsFired += 1;
 
+    if (state.ammoInMag > 0 && state.ammoInMag === Math.ceil(cfg.magSize * 0.2)) {
+      this.audio.playLowAmmoWarning();
+    }
+
     this.audio.playGunshot(cfg.id);
 
-    this.kickBackZ = Math.min(0.08, this.kickBackZ + 0.048);
-    this.kickRotX = Math.min(0.14, this.kickRotX + 0.06);
+    this.kickBackZ = Math.min(0.11, this.kickBackZ + 0.062);
+    this.kickRotX = Math.min(0.2, this.kickRotX + 0.09);
 
     const adsRecoilScale = this.player.getIsAds() ? 0.68 : 1.0;
     const yawRand = (Math.random() * 2 - 1) * cfg.recoilYaw * adsRecoilScale;
@@ -573,6 +665,7 @@ export class WeaponSystem {
             headshot: result.zone === 'head',
             distanceMeters,
           });
+          this.audio.playKillConfirmation();
         }
 
         this.lastHitMarker = {
@@ -595,12 +688,11 @@ export class WeaponSystem {
   }
 
   private updateRangefinder(): void {
-    const origin = this.camera.globalPosition;
-    const forward = this.camera.getDirection(Vector3.Forward());
-    const ray = new Ray(origin, forward, 160);
+    this.rangeRay.origin.copyFrom(this.camera.position);
+    this.camera.getDirectionToRef(this.forwardAxis, this.rangeRay.direction);
     const pick = this.scene.pickWithRay(
-      ray,
-      (mesh) => mesh.isPickable && mesh.isEnabled() && mesh !== this.player.collider
+      this.rangeRay,
+      this.rangePickPredicate
     );
     if (pick?.hit) {
       this.rangeDistanceMeters = Math.round(pick.distance);
@@ -635,7 +727,7 @@ export class WeaponSystem {
     this.muzzleFlashMesh.rotation.z = Math.random() * Math.PI * 2;
     const scale = suppressed ? 0.45 : 0.95 + Math.random() * 0.55;
     this.muzzleFlashMesh.scaling.setAll(scale);
-    this.muzzleLight.intensity = suppressed ? 1.8 : 14.0;
+    this.muzzleLight.intensity = suppressed ? 0.7 : 6.0;
   }
 
   private spawnShellCasing(): void {
@@ -704,14 +796,11 @@ export class WeaponSystem {
       spark.position.copyFrom(point);
       spark.isPickable = false;
 
-      const mat = new StandardMaterial('impactMat', this.scene);
-      mat.disableLighting = true;
-      mat.emissiveColor = isTargetHit
-        ? new Color3(1.2, 0.32, 0.22)
+      spark.material = isTargetHit
+        ? this.impactMatTarget
         : i % 2 === 0
-          ? new Color3(1.2, 0.85, 0.38)
-          : new Color3(0.95, 0.95, 1.0);
-      spark.material = mat;
+          ? this.impactMatSparkA
+          : this.impactMatSparkB;
 
       const vel = new Vector3(
         normal.x * (1.8 + Math.random() * 2.2) + (Math.random() - 0.5) * 3.0,
@@ -766,7 +855,9 @@ export class WeaponSystem {
         c.mesh.dispose();
         this.casings.splice(i, 1);
       } else {
-        c.mesh.position.addInPlace(c.vel.scale(dt));
+        c.mesh.position.x += c.vel.x * dt;
+        c.mesh.position.y += c.vel.y * dt;
+        c.mesh.position.z += c.vel.z * dt;
         c.vel.y -= 14.5 * dt;
         if (c.mesh.position.y < 0.015 && c.vel.y < 0) {
           c.mesh.position.y = 0.015;
@@ -784,11 +875,12 @@ export class WeaponSystem {
       const imp = this.impacts[i];
       imp.life -= dt;
       if (imp.life <= 0) {
-        imp.mesh.material?.dispose();
         imp.mesh.dispose();
         this.impacts.splice(i, 1);
       } else {
-        imp.mesh.position.addInPlace(imp.vel.scale(dt));
+        imp.mesh.position.x += imp.vel.x * dt;
+        imp.mesh.position.y += imp.vel.y * dt;
+        imp.mesh.position.z += imp.vel.z * dt;
         imp.vel.y -= 9.5 * dt;
         const ratio = imp.life / imp.maxLife;
         imp.mesh.scaling.setAll(0.35 + ratio * 0.85);
@@ -801,59 +893,84 @@ export class WeaponSystem {
     if (!rig) return;
 
     const stance = this.player.getStance();
+    const adsBlend = this.player.getAdsBlend();
     const isAds = this.player.getIsAds() && !this.isReloading;
-    if (this.activeId === 'intervention') {
-      rig.root.setEnabled(!isAds);
-    }
+    const fullyScoped = this.activeId === 'intervention' && adsBlend > 0.88 && !this.isReloading;
+    rig.root.setEnabled(!fullyScoped);
+    this.vmFillLight.setEnabled(this.viewModelVisible && !fullyScoped);
+    this.vmRimLight.setEnabled(this.viewModelVisible && !fullyScoped);
+
     const speed = this.player.getHorizontalSpeed();
+    this.player.getLocalMoveAxes(this.moveAxes);
+    const axes = this.moveAxes;
     const isMoving = this.player.getIsGrounded() && speed > 0.6 && stance !== 'slide';
 
     if (isMoving) {
-      this.bobTimer += dt * (stance === 'sprint' ? 12.5 : 8.5);
+      this.bobTimer += dt * (stance === 'sprint' ? 13.2 : 8.6);
     }
 
-    const bobScale = isMoving ? (isAds ? 0.0025 : 0.011) : 0.0012;
+    const hipWeight = 1 - adsBlend;
+    const bobScale = isMoving ? 0.0022 * adsBlend + 0.012 * hipWeight : 0.0012;
     const bobX = isMoving ? Math.cos(this.bobTimer * 0.5) * bobScale : 0;
     const bobY = isMoving
       ? Math.abs(Math.sin(this.bobTimer)) * -bobScale * 1.15
       : Math.sin(performance.now() * 0.002) * 0.0015;
 
-    this.kickBackZ *= Math.exp(-18 * dt);
-    this.kickRotX *= Math.exp(-16 * dt);
+    const strafeN = Math.max(-1, Math.min(1, axes.right / 9.1));
+    const fwdN = Math.max(-1, Math.min(1, axes.forward / 9.1));
+    const swayAmt = isAds ? 0.004 : 0.016;
+    const swayX = strafeN * swayAmt;
+    const swayZ = -fwdN * swayAmt * 0.45;
+
+    const targetSwayRoll = -strafeN * (stance === 'sprint' && !isAds ? 0.11 : 0.045) * hipWeight;
+    const targetSwayPitch = fwdN * (stance === 'sprint' && !isAds ? 0.03 : 0.012) * hipWeight;
+    const swayLerp = 1 - Math.exp(-10 * dt);
+    this.swayRoll += (targetSwayRoll - this.swayRoll) * swayLerp;
+    this.swayPitch += (targetSwayPitch - this.swayPitch) * swayLerp;
+
+    this.kickBackZ *= Math.exp(-22 * dt);
+    this.kickRotX *= Math.exp(-20 * dt);
     this.equipDrop *= Math.exp(-12 * dt);
 
-    const baseTarget = isAds ? rig.adsPos : rig.hipPos;
+    const baseTargetX = rig.hipPos.x + (rig.adsPos.x - rig.hipPos.x) * adsBlend;
+    const baseTargetY = rig.hipPos.y + (rig.adsPos.y - rig.hipPos.y) * adsBlend;
+    const baseTargetZ = rig.hipPos.z + (rig.adsPos.z - rig.hipPos.z) * adsBlend;
     const reloadOffsetY = this.isReloading ? -0.11 * Math.sin(this.getReloadProgress() * Math.PI) : 0;
     const reloadTiltZ = this.isReloading ? 0.42 * Math.sin(this.getReloadProgress() * Math.PI) : 0;
 
     const sprinting = stance === 'sprint' && !isAds && !this.isReloading;
-    const slidingHip = stance === 'slide' && !isAds && !this.isReloading;
+    const slidingHip = stance === 'slide' && adsBlend < 0.4 && !this.isReloading;
     const slidingAds = stance === 'slide' && isAds && !this.isReloading;
 
-    const sprintRotY = sprinting ? -0.38 : 0;
-    const sprintRotX = sprinting ? 0.14 : 0;
+    const sprintRotY = sprinting ? -0.42 : 0;
+    const sprintRotX = sprinting ? 0.16 : 0;
 
     const slideOffsetX = slidingHip ? -0.025 : 0;
     const slideOffsetY = slidingHip ? -0.025 : 0;
     const slideRotY = slidingHip ? -0.14 : 0;
-    const slideRotZ = slidingHip ? 0.24 : slidingAds ? 0.05 : 0;
+    const slideRotZ = slidingHip ? 0.14 : slidingAds ? 0.035 : 0;
 
-    const targetX = baseTarget.x + bobX + slideOffsetX;
-    const targetY = baseTarget.y + bobY + reloadOffsetY - this.equipDrop + slideOffsetY;
-    const targetZ = baseTarget.z - this.kickBackZ;
+    const targetX = baseTargetX + bobX + swayX + slideOffsetX;
+    const targetY = baseTargetY + bobY + reloadOffsetY - this.equipDrop + slideOffsetY;
+    const targetZ = baseTargetZ - this.kickBackZ + swayZ;
 
-    const lerpFactor = 1 - Math.exp(-16 * dt);
-    this.weaponPivot.position.x += (targetX - this.weaponPivot.position.x) * lerpFactor;
-    this.weaponPivot.position.y += (targetY - this.weaponPivot.position.y) * lerpFactor;
-    this.weaponPivot.position.z += (targetZ - this.weaponPivot.position.z) * lerpFactor;
+    const posLerp = 1 - Math.exp(-(isAds ? 20 : 14) * dt);
+    this.weaponPivot.position.x += (targetX - this.weaponPivot.position.x) * posLerp;
+    this.weaponPivot.position.y += (targetY - this.weaponPivot.position.y) * posLerp;
+    this.weaponPivot.position.z += (targetZ - this.weaponPivot.position.z) * posLerp;
 
-    const targetRotX = -this.kickRotX + sprintRotX;
-    const targetRotY = sprintRotY + slideRotY;
-    const targetRotZ = reloadTiltZ + slideRotZ;
+    const adsRotX = rig.adsRot.x * adsBlend;
+    const adsRotY = rig.adsRot.y * adsBlend;
+    const adsRotZ = rig.adsRot.z * adsBlend;
 
-    this.weaponPivot.rotation.x += (targetRotX - this.weaponPivot.rotation.x) * lerpFactor;
-    this.weaponPivot.rotation.y += (targetRotY - this.weaponPivot.rotation.y) * lerpFactor;
-    this.weaponPivot.rotation.z += (targetRotZ - this.weaponPivot.rotation.z) * lerpFactor;
+    const targetRotX = -this.kickRotX + sprintRotX + this.swayPitch + adsRotX;
+    const targetRotY = sprintRotY + slideRotY + adsRotY;
+    const targetRotZ = reloadTiltZ + slideRotZ + this.swayRoll + adsRotZ;
+
+    const rotLerp = 1 - Math.exp(-(isAds ? 18 : 14) * dt);
+    this.weaponPivot.rotation.x += (targetRotX - this.weaponPivot.rotation.x) * rotLerp;
+    this.weaponPivot.rotation.y += (targetRotY - this.weaponPivot.rotation.y) * rotLerp;
+    this.weaponPivot.rotation.z += (targetRotZ - this.weaponPivot.rotation.z) * rotLerp;
   }
 
   private createMuzzleFlash(): Mesh {
@@ -869,28 +986,70 @@ export class WeaponSystem {
     return flash;
   }
 
+  private bindViewModelLights(): void {
+    const meshes = this.weaponPivot.getChildMeshes(false);
+    this.vmFillLight.includedOnlyMeshes = meshes;
+    this.vmRimLight.includedOnlyMeshes = meshes;
+  }
+
+  private createWeaponFinish(
+    name: string,
+    albedoHex: string,
+    metallic: number,
+    roughness: number,
+    kind: 'anodized' | 'brushed' | 'polymer' | 'scope'
+  ): PBRMaterial {
+    const tex = new DynamicTexture(`${name}_tex`, { width: 256, height: 256 }, this.scene, true);
+    const ctx = tex.getContext();
+    ctx.fillStyle = albedoHex;
+    ctx.fillRect(0, 0, 256, 256);
+
+    if (kind === 'brushed') {
+      for (let y = 0; y < 256; y++) {
+        const shade = (y % 3 === 0 ? 18 : 8) + ((y * 13) % 10);
+        ctx.fillStyle = `rgba(255,255,255,${0.015 + (shade % 7) * 0.004})`;
+        ctx.fillRect(0, y, 256, 1);
+        ctx.fillStyle = `rgba(0,0,0,${0.02 + (y % 5) * 0.004})`;
+        ctx.fillRect(0, y, 256, 1);
+      }
+    } else if (kind === 'polymer') {
+      for (let i = 0; i < 2800; i++) {
+        ctx.fillStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.08)';
+        ctx.fillRect(Math.random() * 256, Math.random() * 256, 2.2, 2.2);
+      }
+    } else if (kind === 'anodized') {
+      for (let i = 0; i < 900; i++) {
+        ctx.fillStyle = 'rgba(255,255,255,0.025)';
+        ctx.fillRect(Math.random() * 256, Math.random() * 256, 1.4, 1.4);
+      }
+    } else {
+      for (let x = 0; x < 256; x += 18) {
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fillRect(x, 0, 4, 256);
+      }
+    }
+
+    tex.update();
+    tex.wrapU = Texture.WRAP_ADDRESSMODE;
+    tex.wrapV = Texture.WRAP_ADDRESSMODE;
+    this.texturesToDispose.push(tex);
+
+    const mat = new PBRMaterial(name, this.scene);
+    mat.albedoColor = Color3.White();
+    mat.albedoTexture = tex;
+    mat.metallic = metallic;
+    mat.roughness = roughness;
+    mat.environmentIntensity = kind === 'polymer' || kind === 'anodized' ? 0.85 : 1.25;
+    this.materialsToDispose.push(mat);
+    return mat;
+  }
+
   private buildAllWeaponModels(): void {
-    const gunmetal = new PBRMaterial('gunmetalMat', this.scene);
-    gunmetal.albedoColor = Color3.FromHexString('#282e38');
-    gunmetal.metallic = 0.85;
-    gunmetal.roughness = 0.34;
-    gunmetal.environmentIntensity = 1.15;
-
-    const polymer = new PBRMaterial('polymerMat', this.scene);
-    polymer.albedoColor = Color3.FromHexString('#181b20');
-    polymer.metallic = 0.08;
-    polymer.roughness = 0.62;
-
-    const coyote = new PBRMaterial('coyoteMat', this.scene);
-    coyote.albedoColor = Color3.FromHexString('#746249');
-    coyote.metallic = 0.06;
-    coyote.roughness = 0.68;
-
-    const steelSilver = new PBRMaterial('steelSilverMat', this.scene);
-    steelSilver.albedoColor = Color3.FromHexString('#7a8490');
-    steelSilver.metallic = 0.94;
-    steelSilver.roughness = 0.24;
-    steelSilver.environmentIntensity = 1.25;
+    const gunmetal = this.createWeaponFinish('anodizedRecvMat', '#1a1d22', 0.72, 0.46, 'anodized');
+    const polymer = this.createWeaponFinish('polymerMat', '#16181c', 0.06, 0.78, 'polymer');
+    const coyote = this.createWeaponFinish('coyoteMat', '#6d5a42', 0.05, 0.74, 'polymer');
+    const steelSilver = this.createWeaponFinish('brushedGunmetalMat', '#6e7884', 0.94, 0.22, 'brushed');
+    const scopeTube = this.createWeaponFinish('scopeTubeMat', '#2a3038', 0.92, 0.18, 'scope');
 
     const reticleRed = new StandardMaterial('reticleRedMat', this.scene);
     reticleRed.disableLighting = true;
@@ -900,21 +1059,26 @@ export class WeaponSystem {
     tritiumGreen.disableLighting = true;
     tritiumGreen.emissiveColor = new Color3(0.35, 1.7, 0.65);
 
-    const holoGlass = new StandardMaterial('holoGlassMat', this.scene);
-    holoGlass.diffuseColor = new Color3(0.18, 0.55, 0.72);
-    holoGlass.emissiveColor = new Color3(0.05, 0.18, 0.24);
-    holoGlass.alpha = 0.22;
+    const holoGlass = new PBRMaterial('holoGlassMat', this.scene);
+    holoGlass.albedoColor = new Color3(0.12, 0.38, 0.48);
+    holoGlass.metallic = 0.05;
+    holoGlass.roughness = 0.08;
+    holoGlass.alpha = 0.28;
+    holoGlass.transparencyMode = PBRMaterial.PBRMATERIAL_ALPHABLEND;
     holoGlass.backFaceCulling = false;
+    holoGlass.indexOfRefraction = 1.45;
 
-    this.materialsToDispose.push(
-      gunmetal,
-      polymer,
-      coyote,
-      steelSilver,
-      reticleRed,
-      tritiumGreen,
-      holoGlass
-    );
+    const scopeLens = new PBRMaterial('scopeLensMat', this.scene);
+    scopeLens.albedoColor = new Color3(0.05, 0.12, 0.1);
+    scopeLens.metallic = 0.08;
+    scopeLens.roughness = 0.04;
+    scopeLens.alpha = 0.42;
+    scopeLens.transparencyMode = PBRMaterial.PBRMATERIAL_ALPHABLEND;
+    scopeLens.indexOfRefraction = 1.52;
+    scopeLens.environmentIntensity = 1.4;
+    scopeLens.backFaceCulling = false;
+
+    this.materialsToDispose.push(reticleRed, tritiumGreen, holoGlass, scopeLens);
 
     // 1. M4A1 Tactical
     {
@@ -957,6 +1121,7 @@ export class WeaponSystem {
         ejectionPort,
         hipPos: new Vector3(0.21, -0.19, 0.42),
         adsPos: new Vector3(0, -0.066, 0.29),
+        adsRot: Vector3.Zero(),
       });
     }
 
@@ -998,6 +1163,7 @@ export class WeaponSystem {
         ejectionPort,
         hipPos: new Vector3(0.2, -0.18, 0.42),
         adsPos: new Vector3(0, -0.056, 0.3),
+        adsRot: Vector3.Zero(),
       });
     }
 
@@ -1014,16 +1180,15 @@ export class WeaponSystem {
       this.addPart(root, 'int_stock', { width: 0.044, height: 0.12, depth: 0.28 }, new Vector3(0, -0.02, -0.32), coyote);
 
       this.addPart(root, 'int_scope_base', { width: 0.036, height: 0.02, depth: 0.16 }, new Vector3(0, 0.05, 0.04), polymer);
-      this.addCylinder(root, 'int_scope_tube', 0.22, 0.045, new Vector3(0, 0.082, 0.04), Math.PI / 2, gunmetal);
-      this.addPart(root, 'int_scope_glass_f', { width: 0.038, height: 0.038, depth: 0.003 }, new Vector3(0, 0.082, 0.15), holoGlass);
-      this.addPart(root, 'int_scope_glass_r', { width: 0.038, height: 0.038, depth: 0.003 }, new Vector3(0, 0.082, -0.07), holoGlass);
-
-      const crosshair = MeshBuilder.CreateSphere('int_crosshair', { diameter: 0.004 }, this.scene);
-      crosshair.position = new Vector3(0, 0.082, 0.15);
-      crosshair.parent = root;
-      crosshair.material = tritiumGreen;
-      crosshair.isPickable = false;
-      crosshair.renderingGroupId = 1;
+      this.addPart(root, 'int_scope_rings', { width: 0.042, height: 0.028, depth: 0.09 }, new Vector3(0, 0.07, 0.04), gunmetal);
+      this.addCylinder(root, 'int_scope_tube', 0.168, 0.034, new Vector3(0, 0.088, 0.04), Math.PI / 2, scopeTube);
+      this.addCylinder(root, 'int_scope_obj', 0.038, 0.054, new Vector3(0, 0.088, 0.146), Math.PI / 2, scopeTube);
+      this.addCylinder(root, 'int_scope_obj_lip', 0.01, 0.06, new Vector3(0, 0.088, 0.168), Math.PI / 2, gunmetal);
+      this.addCylinder(root, 'int_scope_oc', 0.034, 0.048, new Vector3(0, 0.088, -0.066), Math.PI / 2, scopeTube);
+      this.addCylinder(root, 'int_scope_oc_lip', 0.01, 0.052, new Vector3(0, 0.088, -0.088), Math.PI / 2, gunmetal);
+      this.addCylinder(root, 'int_scope_turret', 0.026, 0.02, new Vector3(0, 0.114, 0.04), 0, steelSilver);
+      this.addCylinder(root, 'int_lens_f', 0.006, 0.048, new Vector3(0, 0.088, 0.172), Math.PI / 2, scopeLens);
+      this.addCylinder(root, 'int_lens_r', 0.005, 0.042, new Vector3(0, 0.088, -0.094), Math.PI / 2, scopeLens);
 
       const ejectionPort = new TransformNode('int_eject', this.scene);
       ejectionPort.parent = root;
@@ -1038,7 +1203,8 @@ export class WeaponSystem {
         muzzlePoint,
         ejectionPort,
         hipPos: new Vector3(0.22, -0.2, 0.45),
-        adsPos: new Vector3(0, -0.082, 0.32),
+        adsPos: new Vector3(0, -0.088, 0.3),
+        adsRot: Vector3.Zero(),
       });
     }
 
@@ -1075,6 +1241,7 @@ export class WeaponSystem {
         ejectionPort,
         hipPos: new Vector3(0.22, -0.19, 0.48),
         adsPos: new Vector3(0, -0.042, 0.38),
+        adsRot: Vector3.Zero(),
       });
     }
   }
@@ -1106,7 +1273,7 @@ export class WeaponSystem {
     rotX: number,
     mat: Material
   ): Mesh {
-    const mesh = MeshBuilder.CreateCylinder(name, { height, diameter, tessellation: 14 }, this.scene);
+    const mesh = MeshBuilder.CreateCylinder(name, { height, diameter, tessellation: 18 }, this.scene);
     mesh.parent = parent;
     mesh.position.copyFrom(pos);
     mesh.rotation.x = rotX;
@@ -1116,23 +1283,28 @@ export class WeaponSystem {
     return mesh;
   }
 
+  public clearTransientEffects(): void {
+    for (const tracer of this.tracers) tracer.mesh.dispose();
+    for (const casing of this.casings) casing.mesh.dispose();
+    for (const impact of this.impacts) impact.mesh.dispose();
+    this.tracers.length = 0;
+    this.casings.length = 0;
+    this.impacts.length = 0;
+  }
+
   public dispose(): void {
     this.clearDecals();
-    this.tracers.forEach((t) => t.mesh.dispose());
-    this.casings.forEach((c) => c.mesh.dispose());
-    this.impacts.forEach((i) => {
-      i.mesh.material?.dispose();
-      i.mesh.dispose();
-    });
-    this.tracers = [];
-    this.casings = [];
-    this.impacts = [];
+    this.clearTransientEffects();
     this.models.forEach((rig) => rig.root.dispose());
     this.models.clear();
     this.muzzleFlashMesh.dispose();
     this.muzzleLight.dispose();
+    this.vmFillLight.dispose();
+    this.vmRimLight.dispose();
     this.weaponPivot.dispose();
     this.materialsToDispose.forEach((m) => m.dispose());
     this.materialsToDispose = [];
+    this.texturesToDispose.forEach((t) => t.dispose());
+    this.texturesToDispose = [];
   }
 }

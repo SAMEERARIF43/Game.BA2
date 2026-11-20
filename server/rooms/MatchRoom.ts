@@ -12,6 +12,7 @@ import {
   PlayerSchema,
   type PlayerSchemaType,
 } from '../schema/MatchState.ts';
+import { validateAuthoritativeHit } from '../hitValidation.ts';
 
 export interface CreateRoomOptions {
   playerName?: string;
@@ -335,10 +336,13 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
           p.z = clamp(payload.z, -29.5, 29.5);
         }
         if (typeof payload.rotY === 'number' && Number.isFinite(payload.rotY)) {
-          p.rotY = payload.rotY;
+          // VULN-5: normalise yaw to (-π, +π] to prevent extreme-value exploits
+          const twoPi = 2 * Math.PI;
+          p.rotY = ((((payload.rotY % twoPi) + twoPi) % twoPi) + Math.PI) % twoPi - Math.PI;
         }
         if (typeof payload.pitch === 'number' && Number.isFinite(payload.pitch)) {
-          p.pitch = clamp(payload.pitch, -1.5, 1.5);
+          // VULN-5: clamp pitch to match client camera limits [-1.46, +1.46] + small margin
+          p.pitch = clamp(payload.pitch, -1.48, 1.48);
         }
         if (typeof payload.weaponId === 'string' && SERVER_WEAPONS[payload.weaponId]) {
           p.weaponId = payload.weaponId;
@@ -392,8 +396,18 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
 
         // Server-side hit validation & damage calculation
         if (payload.targetId) {
-          const zone = payload.zone === 'head' ? 'head' : 'body';
-          this.applyAuthoritativeHit(shooter, payload.targetId, weapon.id, zone);
+          this.applyAuthoritativeHit(
+            shooter,
+            payload.targetId,
+            weapon.id,
+            payload.zone,
+            payload.endX,
+            payload.endY,
+            payload.endZ,
+            payload.muzzleX,
+            payload.muzzleY,
+            payload.muzzleZ
+          );
         }
       }
     );
@@ -454,34 +468,66 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     shooter: PlayerSchemaType,
     targetId: string,
     weaponId: string,
-    zone: 'head' | 'body'
+    claimedZone?: 'head' | 'body',
+    endX?: number,
+    endY?: number,
+    endZ?: number,
+    muzzleX?: number,
+    muzzleY?: number,
+    muzzleZ?: number,
+    isBotShooter = false
   ): void {
     const target = this.state.players.get(targetId);
-    if (!target || !target.isAlive || target.id === shooter.id) return;
-
-    const sameTeam = target.team === shooter.team;
-    if (sameTeam && !this.state.friendlyFire) return;
+    if (!target) return;
 
     const now = Date.now();
     const protUntil = this.spawnProtectionUntil.get(target.id) ?? 0;
-    if (now < protUntil) return;
+    const mapId = this.state.mapId;
 
-    const weapon = SERVER_WEAPONS[weaponId] ?? SERVER_WEAPONS.m4a1;
-    const dx = target.x - shooter.x;
-    const dy = target.y - shooter.y;
-    const dz = target.z - shooter.z;
-    const distance = Math.hypot(dx, dy, dz);
-    if (distance > weapon.range + 6) return;
+    const validation = validateAuthoritativeHit(
+      shooter,
+      target,
+      {
+        // Client-supplied muzzle coordinates are accepted in the payload but the
+        // server validation module (hitValidation.ts) derives its own authoritative
+        // muzzle from shooter position + fixed height offset (VULN-3).
+        muzzleX,
+        muzzleY,
+        muzzleZ,
+        endX,
+        endY,
+        endZ,
+        weaponId,
+        targetId,
+        claimedZone,
+      },
+      {
+        friendlyFire: this.state.friendlyFire,
+        spawnProtectionUntil: protUntil,
+        currentTime: now,
+        // Wire server-held orientation for VULN-2 / VULN-5 checks
+        shooterRotY:  shooter.rotY,
+        shooterPitch: shooter.pitch,
+        // Wire mapId for VULN-1 occlusion check
+        mapId,
+        // Bot shooters use server-computed coordinates — skip client-coord checks
+        isBotShooter,
+      }
+    );
 
-    const damage = Math.round(weapon.damage * (zone === 'head' ? weapon.headshotMultiplier : 1));
+    if (!validation.accepted) return;
+
+    const { verifiedZone, damage, isHeadshot, weapon } = validation;
+    const sameTeam = target.team === shooter.team;
+    const distance = Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z);
+
     target.health = Math.max(0, target.health - damage);
-
     const killed = target.health <= 0;
 
     if (!shooter.isBot) {
       const shooterClient = this.clients.find((c) => c.sessionId === shooter.id);
       shooterClient?.send('hit_confirm', {
-        zone,
+        zone: verifiedZone,
         killed,
         damage,
       });
@@ -493,7 +539,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         damage,
         attackerName: shooter.name,
         weaponName: weapon.name,
-        headshot: zone === 'head',
+        headshot: isHeadshot,
         killed,
         attackerX: shooter.x,
         attackerY: shooter.y,
@@ -522,7 +568,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         victimName: target.name,
         victimTeam: target.team,
         weaponName: weapon.name,
-        headshot: zone === 'head',
+        headshot: isHeadshot,
         distanceMeters: Math.round(distance * 10) / 10,
       });
 
@@ -640,7 +686,23 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         });
 
         if (hit) {
-          this.applyAuthoritativeHit(bot, target.id, bot.weaponId, zone);
+          // VULN-4: Bot hits previously passed no end-coordinates, causing coordinate
+          // validation to reject every bot shot. The server now supplies authoritative
+          // target coordinates (body-centre or head-centre based on zone probability).
+          // isBotShooter=true skips client-coord checks that do not apply to server bots.
+          const isHeadZone = zone === 'head';
+          const botEndX = target.x;
+          const botEndY = target.y + (isHeadZone ? 1.70 : 1.25);
+          const botEndZ = target.z;
+          const botMuzzleX = bot.x;
+          const botMuzzleY = bot.y + 1.35; // bot eye height (server constant)
+          const botMuzzleZ = bot.z;
+          this.applyAuthoritativeHit(
+            bot, target.id, bot.weaponId, zone,
+            botEndX, botEndY, botEndZ,
+            botMuzzleX, botMuzzleY, botMuzzleZ,
+            true // isBotShooter
+          );
         }
       }
       return;

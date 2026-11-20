@@ -75,6 +75,7 @@ export class MapManager {
     this.sunLight.intensity = def.sunIntensity;
 
     this.hemiLight.intensity = def.ambientIntensity;
+    this.hemiLight.diffuse = Color3.FromHexString(def.skyHorizonHex);
     this.hemiLight.groundColor = Color3.FromHexString(def.ambientGroundHex);
 
     const ctx = new MapBuildContext(this.scene, this.shadowGenerator);
@@ -117,6 +118,9 @@ export class MapManager {
     }
     for (const tex of this.activeResources.textures) {
       tex.dispose();
+    }
+    for (const light of this.activeResources.lights) {
+      light.dispose();
     }
 
     this.activeResources = null;

@@ -14,11 +14,17 @@ interface SettingsPanelProps {
   onResetSettings?: () => void;
 }
 
+type SettingsTab = 'controls' | 'graphics' | 'audio' | 'match';
+
 const QUALITY_OPTIONS: { id: GraphicsQuality; label: string; detail: string }[] = [
-  { id: 'LOW', label: 'LOW', detail: 'Max FPS' },
-  { id: 'MEDIUM', label: 'MEDIUM', detail: 'Balanced' },
-  { id: 'HIGH', label: 'HIGH', detail: 'Full Shadows' },
+  { id: 'LOW', label: 'LOW', detail: 'Shadows off · reduced FX' },
+  { id: 'MEDIUM', label: 'MEDIUM', detail: 'Dynamic shadows · balanced' },
+  { id: 'HIGH', label: 'HIGH', detail: 'Full shadows · enhanced FX' },
 ];
+
+const RANGE_CLASS = 'mt-2 w-full cursor-pointer accent-amber-400';
+const LABEL_CLASS = 'text-xs text-slate-300';
+const FOCUS_CLASS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b]';
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   settings,
@@ -26,8 +32,15 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onUpdateSettings,
   onResetSettings,
 }) => {
+  const [activeTab, setActiveTab] = useState<SettingsTab>('controls');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => isFullscreenActive());
   const fullscreenSupported = isFullscreenSupported();
+  const tabs: { id: SettingsTab; label: string }[] = [
+    { id: 'controls', label: 'Controls' },
+    { id: 'graphics', label: 'Graphics' },
+    { id: 'audio', label: 'Audio' },
+    ...(!inMatch ? [{ id: 'match' as const, label: 'Match' }] : []),
+  ];
 
   useEffect(() => {
     const syncFs = () => setIsFullscreen(isFullscreenActive());
@@ -43,314 +56,333 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     void toggleFullscreen().then((active) => setIsFullscreen(active));
   };
 
+  const renderToggle = (
+    label: string,
+    checked: boolean,
+    onChange: () => void
+  ) => (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onChange}
+      className={`flex w-full items-center justify-between gap-4 border border-white/10 bg-black/25 px-3 py-2.5 text-left text-xs text-slate-200 transition-colors hover:border-white/20 ${FOCUS_CLASS}`}
+    >
+      <span>{label}</span>
+      <span
+        aria-hidden="true"
+        className={`relative h-5 w-9 shrink-0 rounded-full border transition-colors ${
+          checked ? 'border-amber-400 bg-amber-400/30' : 'border-slate-600 bg-slate-800'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-3.5 w-3.5 rounded-full transition-transform ${
+            checked ? 'translate-x-4 bg-amber-300' : 'translate-x-0.5 bg-slate-300'
+          }`}
+        />
+      </span>
+    </button>
+  );
+
+  const renderSlider = (
+    label: string,
+    value: number,
+    min: number,
+    max: number,
+    step: number,
+    displayValue: string,
+    onChange: (value: number) => void
+  ) => (
+    <label className="block border border-white/10 bg-black/25 p-3">
+      <span className="flex items-center justify-between gap-3">
+        <span className={LABEL_CLASS}>{label}</span>
+        <span className="font-mono-tabular text-xs text-white">{displayValue}</span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className={RANGE_CLASS}
+      />
+    </label>
+  );
+
   return (
     <div className="space-y-4">
-      {!inMatch && (
-        <label className="block">
-          <span className="text-xs text-slate-300">Operator Callsign</span>
-          <input
-            type="text"
-            maxLength={20}
-            value={settings.callsign}
-            onChange={(e) =>
-              onUpdateSettings({
-                ...settings,
-                callsign: e.target.value,
-              })
-            }
-            onBlur={(e) => {
-              const trimmed = e.target.value.trim();
-              if (!trimmed) {
-                onUpdateSettings({ ...settings, callsign: 'Operator-101' });
+      <div
+        className={`grid gap-1 border-b border-white/10 pb-3 ${
+          inMatch ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'
+        }`}
+        role="tablist"
+        aria-label="Settings categories"
+      >
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            id={`settings-tab-${tab.id}`}
+            type="button"
+            role="tab"
+            tabIndex={activeTab === tab.id ? 0 : -1}
+            aria-selected={activeTab === tab.id}
+            aria-controls="settings-tab-panel"
+            onClick={() => setActiveTab(tab.id)}
+            onKeyDown={(event) => {
+              const currentIndex = tabs.findIndex((entry) => entry.id === tab.id);
+              let nextIndex: number | null = null;
+              if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
+              if (event.key === 'ArrowLeft') {
+                nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
               }
+              if (event.key === 'Home') nextIndex = 0;
+              if (event.key === 'End') nextIndex = tabs.length - 1;
+              if (nextIndex === null) return;
+              event.preventDefault();
+              const nextTab = tabs[nextIndex];
+              setActiveTab(nextTab.id);
+              document.getElementById(`settings-tab-${nextTab.id}`)?.focus();
             }}
-            className="mt-1.5 w-full border border-white/15 bg-black/50 px-3 py-1.5 text-xs text-white outline-none focus:border-amber-400"
-            placeholder="Operator-101"
-          />
-        </label>
-      )}
-
-      {/* Controls & Camera */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <label className="block">
-          <div className="flex justify-between text-xs text-slate-300">
-            <span>Sensitivity</span>
-            <span className="font-mono-tabular text-white">
-              {(settings.sensitivity * 1000).toFixed(1)}
-            </span>
-          </div>
-          <input
-            type="range"
-            min={0.0005}
-            max={0.008}
-            step={0.0001}
-            value={settings.sensitivity}
-            onChange={(e) =>
-              onUpdateSettings({
-                ...settings,
-                sensitivity: parseFloat(e.target.value),
-              })
-            }
-            className="mt-2 w-full cursor-pointer accent-amber-400"
-          />
-        </label>
-
-        <label className="block">
-          <div className="flex justify-between text-xs text-slate-300">
-            <span>ADS Mult</span>
-            <span className="font-mono-tabular text-white">
-              {settings.adsSensitivityMultiplier.toFixed(2)}x
-            </span>
-          </div>
-          <input
-            type="range"
-            min={0.3}
-            max={1.2}
-            step={0.02}
-            value={settings.adsSensitivityMultiplier}
-            onChange={(e) =>
-              onUpdateSettings({
-                ...settings,
-                adsSensitivityMultiplier: parseFloat(e.target.value),
-              })
-            }
-            className="mt-2 w-full cursor-pointer accent-amber-400"
-          />
-        </label>
-
-        <label className="block">
-          <div className="flex justify-between text-xs text-slate-300">
-            <span>FOV</span>
-            <span className="font-mono-tabular text-white">{settings.fovDeg}°</span>
-          </div>
-          <input
-            type="range"
-            min={70}
-            max={110}
-            step={1}
-            value={settings.fovDeg}
-            onChange={(e) =>
-              onUpdateSettings({
-                ...settings,
-                fovDeg: parseInt(e.target.value, 10),
-              })
-            }
-            className="mt-2 w-full cursor-pointer accent-amber-400"
-          />
-        </label>
-
-        <label className="block">
-          <div className="flex justify-between text-xs text-slate-300">
-            <span>Screen Shake &amp; Feedback</span>
-            <span className="font-mono-tabular text-white">
-              {Math.round((settings.screenShakeScale ?? 1.0) * 100)}%
-            </span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={settings.screenShakeScale ?? 1.0}
-            onChange={(e) =>
-              onUpdateSettings({
-                ...settings,
-                screenShakeScale: parseFloat(e.target.value),
-              })
-            }
-            className="mt-2 w-full cursor-pointer accent-amber-400"
-          />
-        </label>
-      </div>
-
-      {/* Graphics Quality & Display */}
-      <div className="grid grid-cols-1 gap-4 border-t border-white/10 pt-4 sm:grid-cols-12">
-        <div className="sm:col-span-8">
-          <div className="text-xs text-slate-300">Graphics Quality</div>
-          <div className="mt-1.5 grid grid-cols-3 gap-1.5">
-            {QUALITY_OPTIONS.map((q) => {
-              const active = settings.graphicsQuality === q.id;
-              return (
-                <button
-                  key={q.id}
-                  type="button"
-                  onClick={() => onUpdateSettings({ ...settings, graphicsQuality: q.id })}
-                  className={`cursor-pointer border px-2 py-1.5 text-left transition-colors ${
-                    active
-                      ? 'border-amber-400 bg-amber-400/15 text-amber-300'
-                      : 'border-white/10 bg-white/5 text-slate-300 hover:border-white/25'
-                  }`}
-                >
-                  <div className="font-mono-tabular text-xs font-bold">{q.label}</div>
-                  <div className="text-[10px] text-slate-400">{q.detail}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex flex-col justify-end sm:col-span-4">
-          <div className="text-xs text-slate-300">Display [F]</div>
-          <button
-            type="button"
-            disabled={!fullscreenSupported}
-            onClick={handleToggleFullscreen}
-            className="mt-1.5 flex h-[42px] w-full cursor-pointer items-center justify-center gap-2 border border-white/15 bg-white/5 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 disabled:opacity-40 whitespace-nowrap"
+            className={`border px-2 py-2 text-xs font-semibold transition-colors ${FOCUS_CLASS} ${
+              activeTab === tab.id
+                ? 'border-amber-400/70 bg-amber-400/10 text-amber-300'
+                : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-white/25 hover:text-white'
+            }`}
           >
-            {isFullscreen ? (
-              <>
-                <Minimize2 className="h-3.5 w-3.5 text-amber-400" />
-                Exit Fullscreen
-              </>
-            ) : (
-              <>
-                <Maximize2 className="h-3.5 w-3.5 text-amber-400" />
-                Fullscreen
-              </>
-            )}
+            {tab.label}
           </button>
-        </div>
+        ))}
       </div>
 
-      {/* Audio Channels */}
-      <div className="space-y-3 border-t border-white/10 pt-4">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => onUpdateSettings({ ...settings, muted: !settings.muted })}
-            className="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center border border-white/15 bg-white/5 text-slate-200 hover:bg-white/10"
-            aria-label={settings.muted ? 'Unmute audio' : 'Mute audio'}
-          >
-            {settings.muted ? (
-              <VolumeX className="h-4 w-4 text-red-400" />
-            ) : (
-              <Volume2 className="h-4 w-4 text-amber-400" />
+      <section
+        id="settings-tab-panel"
+        role="tabpanel"
+        aria-labelledby={`settings-tab-${activeTab}`}
+        className="max-h-[min(56vh,480px)] space-y-3 overflow-y-auto pr-1"
+      >
+        {activeTab === 'controls' && (
+          <>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {renderSlider(
+                'Mouse Sensitivity',
+                settings.sensitivity,
+                0.0005,
+                0.008,
+                0.0001,
+                (settings.sensitivity * 1000).toFixed(1),
+                (sensitivity) => onUpdateSettings({ ...settings, sensitivity })
+              )}
+              {renderSlider(
+                'ADS Scope Sensitivity',
+                settings.adsSensitivityMultiplier,
+                0.3,
+                1.2,
+                0.02,
+                `${settings.adsSensitivityMultiplier.toFixed(2)}x`,
+                (adsSensitivityMultiplier) =>
+                  onUpdateSettings({ ...settings, adsSensitivityMultiplier })
+              )}
+            </div>
+            {renderToggle('Invert Y Axis', settings.invertY, () =>
+              onUpdateSettings({ ...settings, invertY: !settings.invertY })
             )}
-          </button>
-          <div className="flex-1">
-            <div className="flex justify-between text-xs text-slate-300">
-              <span>Master Volume</span>
-              <span className="font-mono-tabular text-white">
-                {settings.muted ? 'Muted' : `${Math.round(settings.volume * 100)}%`}
-              </span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={settings.volume}
-              onChange={(e) =>
-                onUpdateSettings({
-                  ...settings,
-                  volume: parseFloat(e.target.value),
-                  muted: false,
-                })
-              }
-              className="mt-1.5 w-full cursor-pointer accent-amber-400"
-            />
-          </div>
-        </div>
+            {renderSlider(
+              'Screen Shake & Feedback',
+              settings.screenShakeScale ?? 1,
+              0,
+              1,
+              0.05,
+              `${Math.round((settings.screenShakeScale ?? 1) * 100)}%`,
+              (screenShakeScale) => onUpdateSettings({ ...settings, screenShakeScale })
+            )}
+          </>
+        )}
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <label className="block">
-            <div className="flex justify-between text-xs text-slate-300">
-              <span>Combat SFX Volume</span>
-              <span className="font-mono-tabular text-white">
-                {Math.round(settings.sfxVolume * 100)}%
-              </span>
+        {activeTab === 'graphics' && (
+          <>
+            {renderSlider(
+              'Field of View',
+              settings.fovDeg,
+              70,
+              110,
+              1,
+              `${settings.fovDeg}°`,
+              (fovDeg) => onUpdateSettings({ ...settings, fovDeg })
+            )}
+            <div>
+              <div className="mb-1.5 text-xs text-slate-300">Graphics Quality</div>
+              <div className="grid grid-cols-3 gap-2">
+                {QUALITY_OPTIONS.map((quality) => {
+                  const selected = settings.graphicsQuality === quality.id;
+                  return (
+                    <button
+                      key={quality.id}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() =>
+                        onUpdateSettings({ ...settings, graphicsQuality: quality.id })
+                      }
+                      className={`border px-2 py-2 text-left transition-colors ${FOCUS_CLASS} ${
+                        selected
+                          ? 'border-amber-400 bg-amber-400/15 text-amber-300'
+                          : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25'
+                      }`}
+                    >
+                      <span className="block font-mono-tabular text-xs font-bold">
+                        {quality.label}
+                      </span>
+                      <span className="mt-0.5 block text-[10px] text-slate-400">
+                        {quality.detail}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={settings.sfxVolume}
-              onChange={(e) =>
-                onUpdateSettings({
-                  ...settings,
-                  sfxVolume: parseFloat(e.target.value),
-                })
-              }
-              className="mt-1.5 w-full cursor-pointer accent-amber-400"
-            />
-          </label>
+            {renderToggle('Show FPS', settings.showFps, () =>
+              onUpdateSettings({ ...settings, showFps: !settings.showFps })
+            )}
+            <div className="flex items-center justify-between gap-3 border border-white/10 bg-black/25 px-3 py-2.5">
+              <span className="text-xs text-slate-300">Display</span>
+              <button
+                type="button"
+                disabled={!fullscreenSupported}
+                onClick={handleToggleFullscreen}
+                className={`inline-flex cursor-pointer items-center justify-center gap-2 border border-white/15 bg-white/5 px-3 py-2 text-xs text-slate-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS_CLASS}`}
+              >
+                {isFullscreen ? (
+                  <>
+                    <Minimize2 className="h-3.5 w-3.5 text-amber-400" />
+                    Exit Fullscreen
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="h-3.5 w-3.5 text-amber-400" />
+                    Fullscreen
+                  </>
+                )}
+              </button>
+            </div>
+          </>
+        )}
 
-          <label className="block">
-            <div className="flex justify-between text-xs text-slate-300">
-              <span>Ambient / Music Volume</span>
-              <span className="font-mono-tabular text-white">
-                {Math.round(settings.musicVolume * 100)}%
-              </span>
+        {activeTab === 'audio' && (
+          <>
+            {renderToggle('Mute Audio', settings.muted, () =>
+              onUpdateSettings({ ...settings, muted: !settings.muted })
+            )}
+            {renderSlider(
+              'Master Volume',
+              settings.volume,
+              0,
+              1,
+              0.05,
+              `${Math.round(settings.volume * 100)}%`,
+              (volume) => onUpdateSettings({ ...settings, volume, muted: false })
+            )}
+            {renderSlider(
+              'SFX Volume',
+              settings.sfxVolume,
+              0,
+              1,
+              0.05,
+              `${Math.round(settings.sfxVolume * 100)}%`,
+              (sfxVolume) => onUpdateSettings({ ...settings, sfxVolume })
+            )}
+            {renderSlider(
+              'Ambient / Music Volume',
+              settings.musicVolume,
+              0,
+              1,
+              0.05,
+              `${Math.round(settings.musicVolume * 100)}%`,
+              (musicVolume) => onUpdateSettings({ ...settings, musicVolume })
+            )}
+            <div className="flex items-center gap-2 text-[11px] text-slate-400">
+              {settings.muted ? (
+                <VolumeX className="h-3.5 w-3.5 text-red-400" />
+              ) : (
+                <Volume2 className="h-3.5 w-3.5 text-amber-400" />
+              )}
+              {settings.muted ? 'All game audio is muted.' : 'Audio changes apply immediately.'}
             </div>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={settings.musicVolume}
-              onChange={(e) =>
-                onUpdateSettings({
-                  ...settings,
-                  musicVolume: parseFloat(e.target.value),
-                })
-              }
-              className="mt-1.5 w-full cursor-pointer accent-amber-400"
-            />
-          </label>
-        </div>
-      </div>
+          </>
+        )}
 
-      {!inMatch && (
-        <div className="grid grid-cols-1 gap-4 border-t border-white/10 pt-4 sm:grid-cols-2">
-          <div>
-            <div className="text-xs text-slate-300">TDM Score Limit</div>
-            <div className="mt-2 flex gap-1.5">
-              {[15, 30, 50].map((limit) => (
-                <button
-                  key={limit}
-                  type="button"
-                  onClick={() => onUpdateSettings({ ...settings, killLimit: limit })}
-                  className={`flex-1 cursor-pointer border py-1.5 font-mono-tabular text-xs font-semibold transition-colors ${
-                    settings.killLimit === limit
-                      ? 'border-amber-400 bg-amber-400/15 text-amber-300'
-                      : 'border-white/10 bg-white/5 text-slate-300 hover:border-white/25'
-                  }`}
-                >
-                  {limit}
-                </button>
-              ))}
+        {activeTab === 'match' && !inMatch && (
+          <>
+            <label className="block">
+              <span className={LABEL_CLASS}>Operator Callsign</span>
+              <input
+                type="text"
+                maxLength={20}
+                value={settings.callsign}
+                onChange={(event) =>
+                  onUpdateSettings({ ...settings, callsign: event.target.value })
+                }
+                onBlur={(event) => {
+                  const callsign = event.target.value.trim() || 'Operator-101';
+                  if (callsign !== settings.callsign) {
+                    onUpdateSettings({ ...settings, callsign });
+                  }
+                }}
+                className={`mt-1.5 w-full border border-white/15 bg-black/50 px-3 py-2 text-xs text-white outline-none focus:border-amber-400 ${FOCUS_CLASS}`}
+                placeholder="Operator-101"
+              />
+            </label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <div className={LABEL_CLASS}>TDM Score Limit</div>
+                <div className="mt-1.5 flex gap-2">
+                  {[15, 30, 50].map((limit) => (
+                    <button
+                      key={limit}
+                      type="button"
+                      aria-pressed={settings.killLimit === limit}
+                      onClick={() => onUpdateSettings({ ...settings, killLimit: limit })}
+                      className={`flex-1 border py-2 font-mono-tabular text-xs font-semibold ${FOCUS_CLASS} ${
+                        settings.killLimit === limit
+                          ? 'border-amber-400 bg-amber-400/15 text-amber-300'
+                          : 'border-white/10 bg-white/5 text-slate-300 hover:border-white/25'
+                      }`}
+                    >
+                      {limit}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className={LABEL_CLASS}>Squad Size</div>
+                <div className="mt-1.5 flex gap-2">
+                  {[3, 4, 5].map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      aria-pressed={settings.botsPerTeam === size}
+                      onClick={() => onUpdateSettings({ ...settings, botsPerTeam: size })}
+                      className={`flex-1 border py-2 font-mono-tabular text-xs font-semibold ${FOCUS_CLASS} ${
+                        settings.botsPerTeam === size
+                          ? 'border-amber-400 bg-amber-400/15 text-amber-300'
+                          : 'border-white/10 bg-white/5 text-slate-300 hover:border-white/25'
+                      }`}
+                    >
+                      {size}v{size}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
-
-          <div>
-            <div className="text-xs text-slate-300">Squad Size</div>
-            <div className="mt-2 flex gap-1.5">
-              {[3, 4, 5].map((size) => (
-                <button
-                  key={size}
-                  type="button"
-                  onClick={() => onUpdateSettings({ ...settings, botsPerTeam: size })}
-                  className={`flex-1 cursor-pointer border py-1.5 font-mono-tabular text-xs font-semibold transition-colors ${
-                    settings.botsPerTeam === size
-                      ? 'border-amber-400 bg-amber-400/15 text-amber-300'
-                      : 'border-white/10 bg-white/5 text-slate-300 hover:border-white/25'
-                  }`}
-                >
-                  {size}v{size}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </section>
 
       {onResetSettings && (
         <div className="flex justify-end border-t border-white/10 pt-3">
           <button
             type="button"
             onClick={onResetSettings}
-            className="inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+            className={`inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-white/10 hover:text-white ${FOCUS_CLASS}`}
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Reset to Defaults

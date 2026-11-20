@@ -179,6 +179,39 @@ export class AudioEngine {
     }
   }
 
+  public playKillConfirmation(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    // Resonant elimination confirm chime (punchy mid-bass into high crystalline bell chime)
+    this.triggerTone(now, 260, 440, 0.08, 'triangle', 0.32);
+    this.triggerTone(now + 0.04, 780, 1180, 0.12, 'sine', 0.36);
+    this.triggerTone(now + 0.08, 1480, 1920, 0.16, 'sine', 0.28);
+  }
+
+  public playWeaponEquip(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    this.triggerNoiseBurst(now, 0.04, 380, 1.2, 0.14);
+    this.triggerTone(now + 0.025, 480, 720, 0.035, 'triangle', 0.18);
+  }
+
+  public playLowAmmoWarning(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    this.triggerTone(now, 840, 620, 0.025, 'triangle', 0.15);
+  }
+
+  public playHeartbeatPulse(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    this.triggerTone(now, 68, 38, 0.12, 'sine', 0.38);
+    this.triggerTone(now + 0.14, 62, 34, 0.10, 'sine', 0.32);
+  }
+
   public playFootstep(sprinting: boolean, crouching = false): void {
     if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
     const now = this.ctx.currentTime;

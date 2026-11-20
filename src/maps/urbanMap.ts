@@ -12,12 +12,12 @@ export const URBAN_MAP_DEF: MapDefinition = {
   skyZenithHex: '#253447',
   skyHorizonHex: '#6e8196',
   fogHex: '#506275',
-  fogDensity: 0.0085,
+  fogDensity: 0.0056,
   sunDirection: new Vector3(-0.45, -0.82, -0.35),
   sunPosition: new Vector3(26, 40, 20),
   sunColorHex: '#edf2fa',
-  sunIntensity: 1.55,
-  ambientIntensity: 0.72,
+  sunIntensity: 1.72,
+  ambientIntensity: 0.56,
   ambientGroundHex: '#282d35',
   accentHex: '#3b82f6',
   blueSpawns: [
@@ -94,8 +94,8 @@ export function buildUrbanMap(ctx: MapBuildContext): void {
   streetMat.albedoColor = Color3.White();
   streetMat.albedoTexture = streetTex;
   streetMat.bumpTexture = streetBump;
-  streetMat.metallic = 0.04;
-  streetMat.roughness = 0.82;
+  streetMat.metallic = 0.06;
+  streetMat.roughness = 0.76;
 
   const concreteWall = ctx.createGridTextureMaterial('urbanConcrete', '#505762', '#353a42', 3, 2, true, {
     metallic: 0.04,

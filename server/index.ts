@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { Server } from '@colyseus/core';
+import { matchMaker, Server } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import cors from 'cors';
 import express from 'express';
@@ -7,15 +7,77 @@ import { getPublicRoomSummary, MatchRoom } from './rooms/MatchRoom.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
+const DEFAULT_DEV_CLIENT_ORIGINS = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:4173',
+  'http://127.0.0.1:4173',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+
+function getClientOrigins(): Set<string> {
+  const configuredOrigins = (process.env.CLIENT_ORIGIN ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const origins = new Set(
+    IS_PROD ? configuredOrigins : [...DEFAULT_DEV_CLIENT_ORIGINS, ...configuredOrigins]
+  );
+
+  if (IS_PROD && origins.size === 0) {
+    throw new Error('CLIENT_ORIGIN must contain at least one production client origin.');
+  }
+
+  for (const origin of origins) {
+    let parsedOrigin: URL;
+    try {
+      parsedOrigin = new URL(origin);
+    } catch {
+      throw new Error(`CLIENT_ORIGIN contains an invalid URL origin: "${origin}".`);
+    }
+    if (
+      parsedOrigin.origin !== origin ||
+      (parsedOrigin.protocol !== 'http:' && parsedOrigin.protocol !== 'https:')
+    ) {
+      throw new Error(`CLIENT_ORIGIN must contain origins without paths: "${origin}".`);
+    }
+  }
+
+  return origins;
+}
 
 export async function startServer(): Promise<void> {
+  const clientOrigins = getClientOrigins();
+  matchMaker.controller.getCorsHeaders = (headers) => {
+    const origin = headers.get('origin');
+    return {
+      'Access-Control-Allow-Origin':
+        origin && clientOrigins.has(origin) ? origin : '',
+    };
+  };
+
   const gameServer = new Server({
     transport: new WebSocketTransport({
       pingInterval: 10000,
       pingMaxRetries: 3,
     }),
     express: async (app) => {
-      app.use(cors());
+      app.use((req, res, next) => {
+        const origin = req.headers.origin;
+        if (origin && !clientOrigins.has(origin)) {
+          res.removeHeader('Access-Control-Allow-Origin');
+          res.removeHeader('Access-Control-Allow-Credentials');
+        }
+        next();
+      });
+      app.use(
+        cors({
+          origin(origin, callback) {
+            callback(null, Boolean(origin && clientOrigins.has(origin)));
+          },
+        })
+      );
       app.use(express.json());
 
       app.get('/api/health', (_req, res) => {

@@ -12,12 +12,12 @@ export const INDUSTRIAL_MAP_DEF: MapDefinition = {
   skyZenithHex: '#121821',
   skyHorizonHex: '#354354',
   fogHex: '#222a34',
-  fogDensity: 0.011,
+  fogDensity: 0.007,
   sunDirection: new Vector3(-0.35, -0.88, 0.32),
   sunPosition: new Vector3(18, 38, -16),
   sunColorHex: '#d5e5f7',
-  sunIntensity: 1.45,
-  ambientIntensity: 0.68,
+  sunIntensity: 1.58,
+  ambientIntensity: 0.5,
   ambientGroundHex: '#282320',
   accentHex: '#06b6d4',
   blueSpawns: [
@@ -87,8 +87,8 @@ export function buildIndustrialMap(ctx: MapBuildContext): void {
   floorMat.albedoColor = Color3.White();
   floorMat.albedoTexture = floorTex;
   floorMat.bumpTexture = floorBump;
-  floorMat.metallic = 0.14;
-  floorMat.roughness = 0.62;
+  floorMat.metallic = 0.18;
+  floorMat.roughness = 0.58;
 
   const wallMat = ctx.createCorrugatedMaterial('indWallMat', '#3f4752', '#2b323b');
   const steelMat = ctx.createFlatMaterial('indSteelMat', '#4c5a6b', 0.78, 0.36);
@@ -120,6 +120,13 @@ export function buildIndustrialMap(ctx: MapBuildContext): void {
         collisions: false,
         castShadow: false,
       });
+      ctx.addAreaPointLight(
+        `bay_pt_${zPos}_${lx}`,
+        new Vector3(lx, 6.6, zPos),
+        Color3.FromHexString('#ffb45a'),
+        0.55,
+        11
+      );
     }
   }
 

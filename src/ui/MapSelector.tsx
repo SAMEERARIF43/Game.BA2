@@ -66,69 +66,101 @@ export const MapSelector: React.FC<MapSelectorProps> = ({
   onBack,
 }) => {
   return (
-    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-[#090d13]/75 p-6 backdrop-blur-sm md:p-10">
-      <div className="w-full max-w-5xl border border-white/15 bg-[#0e131b]/92 p-7 shadow-2xl">
+    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/75 p-3 backdrop-blur-sm sm:p-6 md:p-10">
+      <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto border border-slate-400/20 bg-[#0e131b]/95 p-4 shadow-2xl shadow-black/40 sm:p-7">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
           <div>
             <h1 className="font-display text-2xl font-bold text-white">Select Operation Map</h1>
             <p className="mt-1 text-xs text-slate-400">
-              Preview any theater in real time or deploy directly via /map/id
+              Select a theater, review its engagement profile, then deploy.
             </p>
           </div>
           <button
             type="button"
             onClick={onBack}
-            className="inline-flex cursor-pointer items-center gap-2 border border-white/15 bg-white/5 px-4 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 whitespace-nowrap"
+            className="inline-flex cursor-pointer items-center gap-2 border border-white/15 bg-white/5 px-4 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 whitespace-nowrap"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             Back to Menu
           </button>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
           {MAP_LIST.map((map) => {
             const isSelected = map.id === selectedMapId;
             return (
-              <div
+              <article
                 key={map.id}
-                onClick={() => onPreviewMap(map.id)}
-                className={`flex cursor-pointer flex-col justify-between border p-4 transition-colors ${
+                className={`flex flex-col justify-between border bg-slate-950/45 p-3 transition-colors sm:p-4 ${
                   isSelected
-                    ? 'border-amber-400 bg-amber-400/[0.08]'
-                    : 'border-white/10 bg-white/[0.03] hover:border-white/25'
+                    ? 'border-white/30 shadow-lg shadow-black/20'
+                    : 'border-white/10 hover:border-white/20'
                 }`}
+                style={{ borderColor: isSelected ? map.accentHex : undefined }}
               >
-                <div>
-                  <MapSchematic id={map.id} accentHex={map.accentHex} />
+                <button
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => onPreviewMap(map.id)}
+                  className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b]"
+                >
+                  <div className="relative">
+                    <MapSchematic id={map.id} accentHex={map.accentHex} />
+                    <span
+                      className="absolute left-2 top-2 border bg-[#080b10]/90 px-2 py-1 font-mono-tabular text-[9px] font-bold tracking-widest"
+                      style={{ borderColor: `${map.accentHex}80`, color: map.accentHex }}
+                    >
+                      {map.id.toUpperCase()} SECTOR
+                    </span>
+                    {isSelected && (
+                      <span className="absolute right-2 top-2 bg-amber-400 px-2 py-1 font-mono-tabular text-[9px] font-bold tracking-wider text-slate-950">
+                        SELECTED
+                      </span>
+                    )}
+                  </div>
 
                   <div className="mt-3.5 flex items-baseline justify-between gap-2">
                     <h2 className="font-display text-lg font-bold text-white">{map.name}</h2>
-                    <span className="font-mono-tabular text-[11px] text-slate-400">
-                      /map/{map.id}
+                    <span className="shrink-0 font-mono-tabular text-[10px] text-slate-500">
+                      {map.id.toUpperCase()}
                     </span>
                   </div>
 
-                  <p className="mt-1.5 text-xs leading-relaxed text-slate-300">{map.tagline}</p>
-                </div>
+                  <p className="mt-1.5 min-h-10 text-xs leading-relaxed text-slate-300">
+                    {map.tagline}
+                  </p>
 
-                <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3">
-                  <span className="text-xs text-slate-400">
-                    {map.environmentLabel} · {map.engagementRange}
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    <span
+                      className="border px-2 py-1 font-mono-tabular text-[9px] font-medium"
+                      style={{
+                        borderColor: `${map.accentHex}55`,
+                        color: map.accentHex,
+                        backgroundColor: `${map.accentHex}12`,
+                      }}
+                    >
+                      {map.environmentLabel}
+                    </span>
+                    <span className="border border-white/10 bg-white/[0.04] px-2 py-1 font-mono-tabular text-[9px] text-slate-300">
+                      {map.engagementRange}
+                    </span>
+                  </div>
+                </button>
+
+                <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-3">
+                  <span className="text-[10px] text-slate-500">
+                    {isSelected ? 'Previewing this operation' : 'Click to preview'}
                   </span>
-
                   <button
                     type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeployMap(map.id);
-                    }}
-                    className="inline-flex cursor-pointer items-center gap-1.5 bg-amber-500 px-3.5 py-1.5 font-display text-xs font-bold text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap"
+                    onClick={() => onDeployMap(map.id)}
+                    className="inline-flex cursor-pointer items-center gap-1.5 bg-amber-500 px-3.5 py-1.5 font-display text-xs font-bold text-slate-950 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b] whitespace-nowrap"
                   >
                     <Crosshair className="h-3.5 w-3.5" />
                     Deploy
                   </button>
                 </div>
-              </div>
+                </article>
             );
           })}
         </div>

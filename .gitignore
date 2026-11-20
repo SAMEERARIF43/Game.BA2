@@ -3,6 +3,15 @@ build/
 dist/
 coverage/
 .DS_Store
+Thumbs.db
+desktop.ini
 *.log
+*.tmp
+*.temp
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
 .env*
 !.env.example

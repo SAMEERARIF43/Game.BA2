@@ -47,6 +47,7 @@ const INITIAL_HUD: HudState = {
   stance: 'stand',
   isGrounded: true,
   isAds: false,
+  adsBlend: 0,
   speed: 0,
   headingDeg: 0,
   activeWeapon: WEAPONS.m4a1,
@@ -85,6 +86,8 @@ const INITIAL_HUD: HudState = {
   rangeDistanceMeters: null,
   targetingEnemy: false,
   showScoreboard: false,
+  showOnboarding: false,
+  lowHealthPulse: false,
   match: {
     phase: 'menu',
     mapId: 'urban',
@@ -98,6 +101,7 @@ const INITIAL_HUD: HudState = {
     killFeed: [],
   },
   scopeMagnification: 4,
+  fps: 0,
 };
 
 export default function App() {
@@ -378,6 +382,15 @@ export default function App() {
     route.view === 'custom' &&
     lobbySnapshot !== null &&
     (lobbySnapshot.phase === 'playing' || lobbySnapshot.phase === 'ended');
+  const localParticipant = hud.match.participants.find((participant) => participant.isPlayer);
+  const playerAccuracyPct =
+    hud.shotsFired > 0 ? Math.round((hud.shotsHit / hud.shotsFired) * 100) : 0;
+  const postMatchStats = {
+    kills: localParticipant?.kills ?? hud.eliminations,
+    deaths: localParticipant?.deaths ?? 0,
+    accuracyPct: playerAccuracyPct,
+    headshots: hud.headshots,
+  };
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#0b0e13]">
@@ -403,8 +416,10 @@ export default function App() {
       {!contextLost && route.view === 'menu' && (
         <MainMenu
           selectedMapId={selectedMapId}
+          startingWeaponId={hud.activeWeapon.id}
           settings={settings}
           xp={hud.xp}
+          onSelectStartingWeapon={handleSelectWeapon}
           onPlayOfflineTdm={handlePlayOfflineTdm}
           onOpenCustomMatch={handleOpenCustomMatch}
           onOpenMapSelect={handleOpenMapSelect}
@@ -456,7 +471,7 @@ export default function App() {
 
       {!contextLost && isMultiplayerInMatch && lobbySnapshot && (
         <>
-          <GameHUD hud={hud} />
+          <GameHUD hud={hud} showFps={settings.showFps} />
 
           {hud.match.phase === 'paused' && (
             <PauseMenu
@@ -477,6 +492,7 @@ export default function App() {
           {hud.match.phase === 'ended' && (
             <EndMatchScreen
               match={hud.match}
+              playerStats={postMatchStats}
               xp={hud.xp}
               sessionXpEarned={hud.sessionXpEarned}
               isMultiplayer
@@ -493,7 +509,7 @@ export default function App() {
 
       {!contextLost && route.view === 'play' && (
         <>
-          <GameHUD hud={hud} />
+          <GameHUD hud={hud} showFps={settings.showFps} />
 
           {hud.match.phase === 'paused' && (
             <PauseMenu
@@ -511,6 +527,7 @@ export default function App() {
           {hud.match.phase === 'ended' && (
             <EndMatchScreen
               match={hud.match}
+              playerStats={postMatchStats}
               xp={hud.xp}
               sessionXpEarned={hud.sessionXpEarned}
               onPlayAgain={handleRestartMatch}

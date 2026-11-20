@@ -27,6 +27,10 @@ export class MatchManager {
     this.phase = phase;
   }
 
+  public clearKillFeed(): void {
+    this.killFeed = [];
+  }
+
   public getPhase(): MatchPhase {
     return this.phase;
   }
@@ -59,8 +63,8 @@ export class MatchManager {
       respawnTimer: 0,
     });
 
-    // Register Blue ally bots (botsPerTeam - 1 so total team size is balanced)
-    const blueBotCount = Math.max(1, botsPerTeam - 1);
+    // botsPerTeam is per-team size; the local human fills one Blue slot.
+    const blueBotCount = Math.max(0, botsPerTeam - 1);
     const blueCallsigns = ['Vanguard-1', 'Ghost-2', 'Echo-3', 'Specter-4', 'Nomad-5'];
     for (let i = 0; i < blueBotCount; i++) {
       const id = `bot_blue_${i + 1}`;
@@ -98,10 +102,10 @@ export class MatchManager {
 
     this.timeRemainingSec = Math.max(0, this.timeRemainingSec - dt);
 
-    // Prune kill feed entries older than 8 seconds
+    // Keep kill feed entries for the same interval used by the HUD.
     const now = performance.now();
     if (this.killFeed.length > 0) {
-      this.killFeed = this.killFeed.filter((k) => now - k.timestamp < 8000);
+      this.killFeed = this.killFeed.filter((k) => now - k.timestamp < 4500);
     }
 
     if (this.timeRemainingSec <= 0) {

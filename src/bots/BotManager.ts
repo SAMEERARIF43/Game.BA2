@@ -1,4 +1,5 @@
 import {
+  AbstractMesh,
   Color3,
   Material,
   Mesh,
@@ -68,11 +69,30 @@ interface BotAgent {
   aimPitch: number;
   walkPhase: number;
   prevPos: Vector3;
+  movementScratch: Vector3;
+  directionScratch: Vector3;
+  moveDirectionScratch: Vector3;
+  forwardScratch: Vector3;
+  rightScratch: Vector3;
+  leftScratch: Vector3;
+  probeOriginScratch: Vector3;
+  eyeOriginScratch: Vector3;
+  scanTargetScratch: Vector3;
+  losDirectionScratch: Vector3;
+  shotOriginScratch: Vector3;
+  shotDirectionScratch: Vector3;
+  shotTargetScratch: Vector3;
+  obstacleRay: Ray;
+  groundRay: Ray;
+  losRay: Ray;
+  shotRay: Ray;
   deathRollDir: number;
   currentWaypoint: Vector3;
   strafeDir: number;
   strafeSwitchTimer: number;
   losScanTimer: number;
+  lostSightTimer: number;
+  stuckTimer: number;
   targetEnemyId: string | null;
   targetEnemyPos: Vector3 | null;
   reactionTimer: number;
@@ -106,6 +126,9 @@ export class BotManager {
   private sharedMaterials: Material[] = [];
   private blueTracerMat!: StandardMaterial;
   private redTracerMat!: StandardMaterial;
+  private readonly spawnGroundRay = new Ray(Vector3.Zero(), new Vector3(0, -1, 0), 3);
+  private readonly collisionPickPredicate = (mesh: AbstractMesh): boolean =>
+    mesh.checkCollisions && mesh.isEnabled() && !mesh.metadata?.isBot;
 
   constructor(scene: Scene, match: MatchManager, callbacks: BotManagerCallbacks) {
     this.scene = scene;
@@ -416,23 +439,37 @@ export class BotManager {
     }
 
     if (bot.targetEnemyId && bot.targetEnemyPos) {
-      const toEnemy = bot.targetEnemyPos.subtract(bot.root.position);
-      const dist = Math.hypot(toEnemy.x, toEnemy.z);
-      const desiredYaw = Math.atan2(toEnemy.x, toEnemy.z);
+      if (bot.lostSightTimer > 0) {
+        bot.lostSightTimer -= dt;
+        if (bot.lostSightTimer <= 0) {
+          bot.targetEnemyId = null;
+          bot.targetEnemyPos = null;
+          bot.currentWaypoint = this.pickRandomWaypoint(bot.root.position);
+          return;
+        }
+      }
+
+      const toEnemyX = bot.targetEnemyPos.x - bot.root.position.x;
+      const toEnemyZ = bot.targetEnemyPos.z - bot.root.position.z;
+      const dist = Math.hypot(toEnemyX, toEnemyZ);
+      const desiredYaw = Math.atan2(toEnemyX, toEnemyZ);
       bot.yaw = this.lerpAngle(bot.yaw, desiredYaw, 1 - Math.exp(-10 * dt));
       bot.root.rotation.y = bot.yaw;
 
-      const right = new Vector3(Math.cos(bot.yaw), 0, -Math.sin(bot.yaw));
-      const forward = new Vector3(Math.sin(bot.yaw), 0, Math.cos(bot.yaw));
-
-      let moveVec = right.scale(bot.strafeDir * BOT_STRAFE_SPEED);
+      bot.rightScratch.set(Math.cos(bot.yaw), 0, -Math.sin(bot.yaw));
+      bot.forwardScratch.set(Math.sin(bot.yaw), 0, Math.cos(bot.yaw));
+      let moveX = bot.rightScratch.x * bot.strafeDir * BOT_STRAFE_SPEED;
+      let moveZ = bot.rightScratch.z * bot.strafeDir * BOT_STRAFE_SPEED;
       if (bot.hp < 40 || dist < 6.5) {
-        moveVec = moveVec.add(forward.scale(-2.6));
+        moveX -= bot.forwardScratch.x * 2.6;
+        moveZ -= bot.forwardScratch.z * 2.6;
       } else if (dist > 22) {
-        moveVec = moveVec.add(forward.scale(2.8));
+        moveX += bot.forwardScratch.x * 2.8;
+        moveZ += bot.forwardScratch.z * 2.8;
       }
 
-      this.moveBotWithAvoidance(bot, moveVec, dt);
+      bot.movementScratch.set(moveX, 0, moveZ);
+      this.moveBotWithAvoidance(bot, bot.movementScratch, dt);
 
       if (bot.reactionTimer > 0) {
         bot.reactionTimer -= dt;
@@ -455,23 +492,41 @@ export class BotManager {
       return;
     }
 
-    const toWp = bot.currentWaypoint.subtract(bot.root.position);
-    const flatDist = Math.hypot(toWp.x, toWp.z);
+    const toWaypointX = bot.currentWaypoint.x - bot.root.position.x;
+    const toWaypointZ = bot.currentWaypoint.z - bot.root.position.z;
+    const flatDist = Math.hypot(toWaypointX, toWaypointZ);
     if (flatDist < 1.35) {
       bot.currentWaypoint = this.pickRandomWaypoint(bot.root.position);
       return;
     }
 
-    const dirX = toWp.x / flatDist;
-    const dirZ = toWp.z / flatDist;
+    const dirX = toWaypointX / flatDist;
+    const dirZ = toWaypointZ / flatDist;
     const desiredYaw = Math.atan2(dirX, dirZ);
     bot.yaw = this.lerpAngle(bot.yaw, desiredYaw, 1 - Math.exp(-7 * dt));
     bot.root.rotation.y = bot.yaw;
 
-    const moveVec = new Vector3(dirX * BOT_MOVE_SPEED, 0, dirZ * BOT_MOVE_SPEED);
-    const moved = this.moveBotWithAvoidance(bot, moveVec, dt);
+    bot.movementScratch.set(dirX * BOT_MOVE_SPEED, 0, dirZ * BOT_MOVE_SPEED);
+    const moved = this.moveBotWithAvoidance(bot, bot.movementScratch, dt);
     if (!moved) {
       bot.currentWaypoint = this.pickRandomWaypoint(bot.root.position);
+      bot.stuckTimer = 0;
+    }
+
+    // Stuck detection: if bot barely moved, pick a new waypoint
+    const movedDist = Math.hypot(
+      bot.root.position.x - bot.prevPos.x,
+      bot.root.position.y - bot.prevPos.y,
+      bot.root.position.z - bot.prevPos.z
+    );
+    if (movedDist < 0.02 * dt) {
+      bot.stuckTimer += dt;
+      if (bot.stuckTimer > 1.2) {
+        bot.currentWaypoint = this.pickRandomWaypoint(bot.root.position);
+        bot.stuckTimer = 0;
+      }
+    } else {
+      bot.stuckTimer = 0;
     }
   }
 
@@ -479,26 +534,26 @@ export class BotManager {
     const speed = Math.hypot(desiredVel.x, desiredVel.z);
     if (speed < 0.05) return true;
 
-    const dir = new Vector3(desiredVel.x / speed, 0, desiredVel.z / speed);
-    const probeOrigin = new Vector3(bot.root.position.x, bot.root.position.y + 0.85, bot.root.position.z);
+    bot.directionScratch.set(desiredVel.x / speed, 0, desiredVel.z / speed);
+    bot.probeOriginScratch.set(bot.root.position.x, bot.root.position.y + 0.85, bot.root.position.z);
 
-    let moveDir = dir.clone();
-    if (this.isObstacleAhead(probeOrigin, moveDir, 1.25)) {
-      const leftDir = new Vector3(-dir.z, 0, dir.x);
-      const rightDir = new Vector3(dir.z, 0, -dir.x);
-      if (!this.isObstacleAhead(probeOrigin, leftDir, 1.35)) {
-        moveDir = leftDir;
-      } else if (!this.isObstacleAhead(probeOrigin, rightDir, 1.35)) {
-        moveDir = rightDir;
+    bot.moveDirectionScratch.copyFrom(bot.directionScratch);
+    if (this.isObstacleAhead(bot, bot.moveDirectionScratch, 1.25)) {
+      bot.leftScratch.set(-bot.directionScratch.z, 0, bot.directionScratch.x);
+      bot.rightScratch.set(bot.directionScratch.z, 0, -bot.directionScratch.x);
+      if (!this.isObstacleAhead(bot, bot.leftScratch, 1.35)) {
+        bot.moveDirectionScratch.copyFrom(bot.leftScratch);
+      } else if (!this.isObstacleAhead(bot, bot.rightScratch, 1.35)) {
+        bot.moveDirectionScratch.copyFrom(bot.rightScratch);
       } else {
         return false;
       }
     }
 
-    const nextX = Math.max(-27.2, Math.min(27.2, bot.root.position.x + moveDir.x * speed * dt));
-    const nextZ = Math.max(-27.2, Math.min(27.2, bot.root.position.z + moveDir.z * speed * dt));
+    const nextX = Math.max(-27.2, Math.min(27.2, bot.root.position.x + bot.moveDirectionScratch.x * speed * dt));
+    const nextZ = Math.max(-27.2, Math.min(27.2, bot.root.position.z + bot.moveDirectionScratch.z * speed * dt));
 
-    const groundY = this.sampleGroundY(nextX, bot.root.position.y + 1.35, nextZ);
+    const groundY = this.sampleGroundY(bot, nextX, bot.root.position.y + 1.35, nextZ);
     if (groundY !== null && groundY - bot.root.position.y <= 0.9) {
       bot.root.position.y += (groundY - bot.root.position.y) * Math.min(1, dt * 14);
     }
@@ -507,97 +562,147 @@ export class BotManager {
     return true;
   }
 
-  private isObstacleAhead(origin: Vector3, dir: Vector3, dist: number): boolean {
-    const ray = new Ray(origin, dir, dist);
+  private isObstacleAhead(bot: BotAgent, dir: Vector3, dist: number): boolean {
+    bot.obstacleRay.origin.copyFrom(bot.probeOriginScratch);
+    bot.obstacleRay.direction.copyFrom(dir);
+    bot.obstacleRay.length = dist;
     const hit = this.scene.pickWithRay(
-      ray,
-      (mesh) => mesh.checkCollisions && mesh.isEnabled() && !mesh.metadata?.isBot
+      bot.obstacleRay,
+      this.collisionPickPredicate
     );
     return Boolean(hit?.hit);
   }
 
-  private sampleGroundY(x: number, fromY: number, z: number): number | null {
-    const ray = new Ray(new Vector3(x, fromY, z), new Vector3(0, -1, 0), 3.0);
+  private sampleGroundY(bot: BotAgent | null, x: number, fromY: number, z: number): number | null {
+    const ray = bot?.groundRay ?? this.spawnGroundRay;
+    ray.origin.set(x, fromY, z);
     const hit = this.scene.pickWithRay(
       ray,
-      (mesh) => mesh.checkCollisions && mesh.isEnabled() && !mesh.metadata?.isBot
+      this.collisionPickPredicate
     );
     return hit?.hit && hit.pickedPoint ? hit.pickedPoint.y : null;
   }
 
   private scanForEnemy(bot: BotAgent): void {
-    const eyeOrigin = new Vector3(bot.root.position.x, bot.root.position.y + 1.55, bot.root.position.z);
+    const eyeOrigin = bot.eyeOriginScratch.set(
+      bot.root.position.x,
+      bot.root.position.y + 1.55,
+      bot.root.position.z
+    );
     let closestId: string | null = null;
-    let closestPos: Vector3 | null = null;
     let closestDist = BOT_DETECT_RANGE;
 
     for (const other of this.bots) {
       if (!other.isAlive || other.team === bot.team) continue;
-      const targetCenter = new Vector3(
+      const targetCenter = bot.scanTargetScratch.set(
         other.root.position.x,
         other.root.position.y + 1.25,
         other.root.position.z
       );
-      const dist = Vector3.Distance(eyeOrigin, targetCenter);
-      if (dist < closestDist && this.hasLineOfSight(eyeOrigin, targetCenter, dist)) {
+      const dist = Math.hypot(
+        targetCenter.x - eyeOrigin.x,
+        targetCenter.y - eyeOrigin.y,
+        targetCenter.z - eyeOrigin.z
+      );
+      if (dist < closestDist && this.hasLineOfSight(bot, eyeOrigin, targetCenter, dist)) {
         closestDist = dist;
         closestId = other.id;
-        closestPos = targetCenter;
+        if (!bot.targetEnemyPos) bot.targetEnemyPos = new Vector3();
+        bot.targetEnemyPos.copyFrom(targetCenter);
       }
     }
 
     if (bot.team === 'red') {
       const player = this.callbacks.getPlayerTarget();
       if (player.isAlive) {
-        const playerChest = player.eyePosition.add(new Vector3(0, -0.25, 0));
-        const dist = Vector3.Distance(eyeOrigin, playerChest);
-        if (dist < closestDist && this.hasLineOfSight(eyeOrigin, playerChest, dist)) {
+        const playerChest = bot.scanTargetScratch.set(
+          player.eyePosition.x,
+          player.eyePosition.y - 0.25,
+          player.eyePosition.z
+        );
+        const dist = Math.hypot(
+          playerChest.x - eyeOrigin.x,
+          playerChest.y - eyeOrigin.y,
+          playerChest.z - eyeOrigin.z
+        );
+        if (dist < closestDist && this.hasLineOfSight(bot, eyeOrigin, playerChest, dist)) {
           closestId = player.id;
-          closestPos = playerChest;
+          if (!bot.targetEnemyPos) bot.targetEnemyPos = new Vector3();
+          bot.targetEnemyPos.copyFrom(playerChest);
         }
       }
     }
 
-    if (closestId && closestId !== bot.targetEnemyId) {
-      bot.reactionTimer = 0.28;
-      bot.burstShotsLeft = 3 + Math.floor(Math.random() * 3);
-      bot.burstPauseTimer = 0;
+    if (closestId) {
+      // We have LOS on a target
+      if (closestId !== bot.targetEnemyId) {
+        // New target acquired — distance-scaled reaction delay
+        const reactionBase = 0.22 + Math.random() * 0.14; // 0.22-0.36s
+        const distReaction = Math.min(0.2, closestDist * 0.004); // slower reaction at range
+        bot.reactionTimer = reactionBase + distReaction;
+        bot.burstShotsLeft = 3 + Math.floor(Math.random() * 3);
+        bot.burstPauseTimer = 0;
+      }
+      bot.targetEnemyId = closestId;
+      bot.lostSightTimer = 0; // reset — we can see them
+    } else if (bot.targetEnemyId) {
+      // Had a target but lost LOS this scan — start countdown
+      if (bot.lostSightTimer <= 0) {
+        bot.lostSightTimer = 0.4 + Math.random() * 0.2;
+      }
+      // Don't clear target here; updateBotAI drains lostSightTimer and clears
     }
-
-    bot.targetEnemyId = closestId;
-    bot.targetEnemyPos = closestPos;
   }
 
-  private hasLineOfSight(from: Vector3, to: Vector3, dist: number): boolean {
-    const dir = to.subtract(from).normalize();
-    const ray = new Ray(from, dir, Math.max(0.1, dist - 0.35));
+  private hasLineOfSight(bot: BotAgent, from: Vector3, to: Vector3, dist: number): boolean {
+    bot.losDirectionScratch.set(to.x - from.x, to.y - from.y, to.z - from.z).normalize();
+    bot.losRay.origin.copyFrom(from);
+    bot.losRay.direction.copyFrom(bot.losDirectionScratch);
+    bot.losRay.length = Math.max(0.1, dist - 0.35);
     const hit = this.scene.pickWithRay(
-      ray,
-      (mesh) => mesh.checkCollisions && mesh.isEnabled() && !mesh.metadata?.isBot
+      bot.losRay,
+      this.collisionPickPredicate
     );
     return !hit?.hit;
   }
 
   private fireBotShot(bot: BotAgent, targetPos: Vector3): void {
-    const eyeOrigin = new Vector3(bot.root.position.x, bot.root.position.y + 1.48, bot.root.position.z);
-    const toTarget = targetPos.subtract(eyeOrigin).normalize();
+    const eyeOrigin = bot.shotOriginScratch.set(
+      bot.root.position.x,
+      bot.root.position.y + 1.48,
+      bot.root.position.z
+    );
+    const toTargetX = targetPos.x - eyeOrigin.x;
+    const toTargetY = targetPos.y - eyeOrigin.y;
+    const toTargetZ = targetPos.z - eyeOrigin.z;
+    const dist = Math.hypot(toTargetX, toTargetY, toTargetZ);
+    const invDist = dist > 0.01 ? 1 / dist : 1;
+    const direction = bot.shotDirectionScratch.set(
+      toTargetX * invDist,
+      toTargetY * invDist,
+      toTargetZ * invDist
+    );
 
-    const spread = 0.055;
-    const dir = new Vector3(
-      toTarget.x + (Math.random() - 0.5) * spread,
-      toTarget.y + (Math.random() - 0.5) * spread * 0.75,
-      toTarget.z + (Math.random() - 0.5) * spread
+    // Distance-dependent spread: tight at close range, wider at long range
+    const distFactor = Math.max(0, Math.min(1, (dist - 5) / 30)); // 0 at ≤5m, 1 at ≥35m
+    const spread = 0.035 + distFactor * 0.050; // 0.035 close → 0.085 far
+    direction.set(
+      direction.x + (Math.random() - 0.5) * spread,
+      direction.y + (Math.random() - 0.5) * spread * 0.75,
+      direction.z + (Math.random() - 0.5) * spread
     ).normalize();
 
     const player = this.callbacks.getPlayerTarget();
-    const ray = new Ray(eyeOrigin, dir, 90);
+    bot.shotRay.origin.copyFrom(eyeOrigin);
+    bot.shotRay.direction.copyFrom(direction);
+    bot.shotRay.length = 90;
 
     const prevPickable = player.collider.isPickable;
     player.collider.isPickable = player.isAlive && bot.team === 'red';
 
     let pick;
     try {
-      pick = this.scene.pickWithRay(ray, (mesh) => {
+      pick = this.scene.pickWithRay(bot.shotRay, (mesh) => {
         if (!mesh.isPickable || !mesh.isEnabled()) return false;
         const meta = mesh.metadata as { isBot?: boolean; botId?: string; team?: TeamId } | undefined;
         if (meta?.isBot) {
@@ -613,13 +718,21 @@ export class BotManager {
     bot.muzzleFlashTimer = 0.04;
 
     const muzzleWorld = bot.muzzlePoint.getAbsolutePosition();
-    const endPoint =
-      pick?.hit && pick.pickedPoint ? pick.pickedPoint.clone() : eyeOrigin.add(dir.scale(70));
+    const endPoint = bot.shotTargetScratch;
+    if (pick?.hit && pick.pickedPoint) {
+      endPoint.copyFrom(pick.pickedPoint);
+    } else {
+      endPoint.set(
+        eyeOrigin.x + direction.x * 70,
+        eyeOrigin.y + direction.y * 70,
+        eyeOrigin.z + direction.z * 70
+      );
+    }
     this.spawnBotTracer(muzzleWorld, endPoint, bot.team);
 
     if (!pick?.hit || !pick.pickedMesh) return;
 
-    const dist = Math.round(pick.distance * 10) / 10;
+    const hitDist = Math.round(pick.distance * 10) / 10;
 
     if (pick.pickedMesh === player.collider && bot.team === 'red' && player.isAlive) {
       const headshot = Math.random() < 0.14;
@@ -630,7 +743,7 @@ export class BotManager {
         bot.name,
         bot.weaponName,
         headshot,
-        dist,
+        hitDist,
         bot.root.position.clone(),
         bot.hp
       );
@@ -648,7 +761,7 @@ export class BotManager {
         1.75,
         bot.id,
         bot.weaponName,
-        dist
+        hitDist
       );
     }
   }
@@ -692,7 +805,7 @@ export class BotManager {
 
   private respawnBot(bot: BotAgent): void {
     const spawn = this.pickBestSpawn(bot.team);
-    const groundY = this.sampleGroundY(spawn.x, spawn.y + 1.0, spawn.z) ?? 0;
+    const groundY = this.sampleGroundY(null, spawn.x, spawn.y + 1.0, spawn.z) ?? 0;
     bot.root.position.set(spawn.x, groundY, spawn.z);
     bot.prevPos.copyFrom(bot.root.position);
     bot.pivot.rotation.set(0, 0, 0);
@@ -709,6 +822,8 @@ export class BotManager {
     bot.bodyMesh.isPickable = true;
     bot.targetEnemyId = null;
     bot.targetEnemyPos = null;
+    bot.lostSightTimer = 0;
+    bot.stuckTimer = 0;
     bot.currentWaypoint = this.pickRandomWaypoint(bot.root.position);
     this.restoreBotColors(bot);
     this.match.setParticipantAlive(bot.id, true, 0);
@@ -753,7 +868,7 @@ export class BotManager {
     yaw: number
   ): void {
     const root = new TransformNode(`bot_root_${id}`, this.scene);
-    const groundY = this.sampleGroundY(spawnPos.x, spawnPos.y + 1.0, spawnPos.z) ?? 0;
+    const groundY = this.sampleGroundY(null, spawnPos.x, spawnPos.y + 1.0, spawnPos.z) ?? 0;
     root.position.set(spawnPos.x, groundY, spawnPos.z);
     root.rotation.y = yaw;
 
@@ -966,11 +1081,30 @@ export class BotManager {
       aimPitch: 0,
       walkPhase: 0,
       prevPos: root.position.clone(),
+      movementScratch: new Vector3(),
+      directionScratch: new Vector3(),
+      moveDirectionScratch: new Vector3(),
+      forwardScratch: new Vector3(),
+      rightScratch: new Vector3(),
+      leftScratch: new Vector3(),
+      probeOriginScratch: new Vector3(),
+      eyeOriginScratch: new Vector3(),
+      scanTargetScratch: new Vector3(),
+      losDirectionScratch: new Vector3(),
+      shotOriginScratch: new Vector3(),
+      shotDirectionScratch: new Vector3(),
+      shotTargetScratch: new Vector3(),
+      obstacleRay: new Ray(Vector3.Zero(), new Vector3(0, 0, 1), 1.25),
+      groundRay: new Ray(Vector3.Zero(), new Vector3(0, -1, 0), 3),
+      losRay: new Ray(Vector3.Zero(), new Vector3(0, 0, 1), BOT_DETECT_RANGE),
+      shotRay: new Ray(Vector3.Zero(), new Vector3(0, 0, 1), 90),
       deathRollDir: 1,
       currentWaypoint: this.pickRandomWaypoint(root.position),
       strafeDir: Math.random() > 0.5 ? 1 : -1,
       strafeSwitchTimer: 1.0,
       losScanTimer: Math.random() * 0.14,
+      lostSightTimer: 0,
+      stuckTimer: 0,
       targetEnemyId: null,
       targetEnemyPos: null,
       reactionTimer: 0.3,

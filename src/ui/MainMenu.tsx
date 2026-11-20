@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BookOpen, Compass, Crosshair, Settings, Sliders, Users } from 'lucide-react';
 import { GameSettings, WEAPONS, WeaponId } from '../game/types';
 import { MAP_REGISTRY } from '../maps/MapManager';
@@ -8,8 +8,10 @@ import { SettingsPanel } from './SettingsPanel';
 
 interface MainMenuProps {
   selectedMapId: MapId;
+  startingWeaponId: WeaponId;
   settings: GameSettings;
   xp: number;
+  onSelectStartingWeapon: (id: WeaponId) => void;
   onPlayOfflineTdm: () => void;
   onOpenCustomMatch: () => void;
   onOpenMapSelect: () => void;
@@ -21,8 +23,10 @@ type MenuPanel = 'briefing' | 'settings' | 'howto';
 
 export const MainMenu: React.FC<MainMenuProps> = ({
   selectedMapId,
+  startingWeaponId,
   settings,
   xp,
+  onSelectStartingWeapon,
   onPlayOfflineTdm,
   onOpenCustomMatch,
   onOpenMapSelect,
@@ -31,12 +35,23 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 }) => {
   const [activePanel, setActivePanel] = useState<MenuPanel>('briefing');
 
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.code === 'Escape' && activePanel !== 'briefing') {
+        event.preventDefault();
+        setActivePanel('briefing');
+      }
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [activePanel]);
+
   const selectedMap = MAP_REGISTRY[selectedMapId];
   const rank = getRankSummary(xp);
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-gradient-to-r from-[#090d13]/90 via-[#090d13]/65 to-[#090d13]/45 p-6 md:p-12">
-      <div className="grid w-full max-w-5xl grid-cols-1 gap-8 lg:grid-cols-12">
+    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-gradient-to-r from-[#090d13]/90 via-[#090d13]/65 to-[#090d13]/45 p-3 sm:p-6 md:p-8">
+      <div className="grid w-full max-w-5xl grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-12">
         {/* Left Navigation Column */}
         <div className="flex flex-col justify-between border border-white/15 bg-[#0e131b]/90 p-7 backdrop-blur-md lg:col-span-5">
           <div>
@@ -70,27 +85,37 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               <button
                 type="button"
                 onClick={onPlayOfflineTdm}
-                className="flex w-full cursor-pointer items-center justify-between bg-amber-500 px-5 py-3.5 text-left font-display text-sm font-bold tracking-wide text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap"
+                className="flex w-full cursor-pointer items-center justify-between border border-amber-300/70 bg-amber-500 px-5 py-3.5 text-left font-display text-sm font-bold tracking-wide text-slate-950 shadow-lg shadow-amber-950/20 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b]"
               >
-                <span>PLAY OFFLINE TDM</span>
+                <span>
+                  <span className="block">SOLO · BOTS</span>
+                  <span className="mt-0.5 block font-sans text-[10px] font-medium tracking-normal text-slate-800">
+                    Launch Team Deathmatch
+                  </span>
+                </span>
                 <Crosshair className="h-4 w-4 shrink-0" />
               </button>
 
               <button
                 type="button"
                 onClick={onOpenCustomMatch}
-                className="flex w-full cursor-pointer items-center justify-between border border-blue-400/45 bg-blue-500/15 px-5 py-3 text-left font-display text-sm font-semibold text-blue-100 transition-colors hover:border-blue-400 hover:bg-blue-500/25 whitespace-nowrap"
+                className="flex w-full cursor-pointer items-center justify-between border border-blue-400/45 bg-blue-500/15 px-5 py-3 text-left font-display text-sm font-semibold text-blue-100 transition-colors hover:border-blue-400 hover:bg-blue-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b]"
               >
-                <span>CUSTOM MATCH</span>
+                <span>
+                  <span className="block">MULTIPLAYER</span>
+                  <span className="mt-0.5 block font-sans text-[10px] font-medium tracking-normal text-blue-100/70">
+                    Host or join a private match
+                  </span>
+                </span>
                 <Users className="h-4 w-4 shrink-0 text-blue-300" />
               </button>
 
               <button
                 type="button"
                 onClick={onOpenMapSelect}
-                className="flex w-full cursor-pointer items-center justify-between border border-white/15 bg-white/[0.05] px-5 py-3 text-left font-display text-sm font-semibold text-white transition-colors hover:border-amber-400/60 hover:bg-white/10 whitespace-nowrap"
+                className="flex w-full cursor-pointer items-center justify-between border border-white/15 bg-white/[0.05] px-5 py-3 text-left font-display text-sm font-semibold text-white transition-colors hover:border-amber-400/60 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b]"
               >
-                <span>MAP SELECT</span>
+                <span>SELECT THEATER</span>
                 <Compass className="h-4 w-4 shrink-0 text-amber-400" />
               </button>
 
@@ -100,7 +125,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   onClick={() =>
                     setActivePanel(activePanel === 'settings' ? 'briefing' : 'settings')
                   }
-                  className={`flex cursor-pointer items-center justify-center gap-2 border px-4 py-2.5 font-display text-xs font-semibold transition-colors whitespace-nowrap ${
+                  className={`flex cursor-pointer items-center justify-center gap-2 border px-4 py-2.5 font-display text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b] whitespace-nowrap ${
                     activePanel === 'settings'
                       ? 'border-amber-400 bg-amber-400/15 text-amber-300'
                       : 'border-white/15 bg-white/[0.04] text-slate-200 hover:bg-white/10'
@@ -115,7 +140,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   onClick={() =>
                     setActivePanel(activePanel === 'howto' ? 'briefing' : 'howto')
                   }
-                  className={`flex cursor-pointer items-center justify-center gap-2 border px-4 py-2.5 font-display text-xs font-semibold transition-colors whitespace-nowrap ${
+                  className={`flex cursor-pointer items-center justify-center gap-2 border px-4 py-2.5 font-display text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b] whitespace-nowrap ${
                     activePanel === 'howto'
                       ? 'border-amber-400 bg-amber-400/15 text-amber-300'
                       : 'border-white/15 bg-white/[0.04] text-slate-200 hover:bg-white/10'
@@ -172,25 +197,45 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 </div>
 
                 <div className="mt-6">
-                  <div className="text-xs font-medium text-slate-400">Standard Issue Arsenal</div>
-                  <div className="mt-2.5 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-                    {(['m4a1', 'mp5', 'm1911'] as WeaponId[]).map((id) => {
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-medium text-slate-300">Starting Weapon</div>
+                    <div className="font-mono-tabular text-[10px] text-slate-500">
+                      CHOOSE YOUR LOADOUT
+                    </div>
+                  </div>
+                  <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {(['m4a1', 'mp5', 'intervention'] as WeaponId[]).map((id) => {
                       const w = WEAPONS[id];
+                      const selected = startingWeaponId === id;
                       return (
-                        <div
+                        <button
                           key={id}
-                          className="border border-white/10 bg-black/35 p-3 text-xs"
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => onSelectStartingWeapon(id)}
+                          className={`min-w-0 border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b] ${
+                            selected
+                              ? 'border-amber-400/80 bg-amber-400/10 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.12)]'
+                              : 'border-white/10 bg-black/35 hover:border-white/25 hover:bg-white/[0.05]'
+                          }`}
                         >
-                          <div className="flex items-center justify-between">
-                            <span className="font-display font-semibold text-white">
-                              {w.name}
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate font-mono-tabular text-[10px] font-semibold text-amber-300">
+                              SLOT 0{w.slot}
                             </span>
-                            <span className="font-mono-tabular text-slate-400">[{w.slot}]</span>
+                            {selected && (
+                              <span className="font-mono-tabular text-[9px] font-bold tracking-wider text-amber-300">
+                                SELECTED
+                              </span>
+                            )}
                           </div>
-                          <div className="mt-1 text-slate-400">
-                            {w.damage} DMG · {w.rpm} RPM
+                          <div className="mt-2 font-display text-xs font-semibold leading-4 text-white">
+                            {w.name}
                           </div>
-                        </div>
+                          <div className="mt-1 text-[10px] text-slate-400">
+                            {w.category} · {w.rpm} RPM
+                          </div>
+                        </button>
                       );
                     })}
                   </div>
@@ -198,7 +243,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               </div>
 
               <div className="mt-6 flex items-center justify-between border-t border-white/10 pt-4 text-xs text-slate-400">
-                <span>Press Tab in-game for live TDM scoreboard</span>
+                <span>Current operation · {selectedMap.name}</span>
                 <button
                   type="button"
                   onClick={() => setActivePanel('settings')}
@@ -284,11 +329,15 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">Switch Weapons</span>
-                    <span className="font-mono-tabular text-white">1 · 2 · 3</span>
+                    <span className="font-mono-tabular text-white">1 · 2 · 3 · 4 / Wheel</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Sniper Optic Zoom</span>
+                    <span className="font-mono-tabular text-amber-300">B (4X/6X/8X)</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">Killstreaks</span>
-                    <span className="font-mono-tabular text-amber-300">4 · 5 · 6</span>
+                    <span className="font-mono-tabular text-amber-300">F1 · F2 · F3</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">Scoreboard</span>

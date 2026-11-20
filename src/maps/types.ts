@@ -1,4 +1,4 @@
-import { BaseTexture, Material, TransformNode, Vector3 } from '@babylonjs/core';
+import { BaseTexture, Light, Material, TransformNode, Vector3 } from '@babylonjs/core';
 
 export type MapId = 'urban' | 'desert' | 'industrial' | 'forest';
 
@@ -32,4 +32,5 @@ export interface BuiltMapResources {
   nodes: TransformNode[];
   materials: Material[];
   textures: BaseTexture[];
+  lights: Light[];
 }

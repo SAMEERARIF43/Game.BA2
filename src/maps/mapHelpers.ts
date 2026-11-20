@@ -3,10 +3,12 @@ import {
   Color3,
   DynamicTexture,
   Engine,
+  Light,
   Material,
   Mesh,
   MeshBuilder,
   PBRMaterial,
+  PointLight,
   RawCubeTexture,
   RawTexture,
   Scene,
@@ -64,6 +66,7 @@ export class MapBuildContext {
     nodes: [],
     materials: [],
     textures: [],
+    lights: [],
   };
 
   constructor(scene: Scene, shadowGenerator: ShadowGenerator | null) {
@@ -84,6 +87,27 @@ export class MapBuildContext {
   public trackTexture<T extends BaseTexture>(tex: T): T {
     this.resources.textures.push(tex);
     return tex;
+  }
+
+  public trackLight<T extends Light>(light: T): T {
+    this.resources.lights.push(light);
+    return light;
+  }
+
+  public addAreaPointLight(
+    name: string,
+    pos: Vector3,
+    color: Color3,
+    intensity: number,
+    range: number
+  ): PointLight {
+    const light = new PointLight(name, pos, this.scene);
+    light.diffuse = color;
+    light.specular = color.scale(0.35);
+    light.intensity = intensity;
+    light.range = range;
+    light.shadowEnabled = false;
+    return this.trackLight(light);
   }
 
   public createBox(
@@ -162,6 +186,23 @@ export class MapBuildContext {
     this.createBox('wall_s', new Vector3(0, height * 0.5, -halfExtent - 0.5), new Vector3(span, height, 1), mat);
     this.createBox('wall_e', new Vector3(halfExtent + 0.5, height * 0.5, 0), new Vector3(1, height, span - 2), mat);
     this.createBox('wall_w', new Vector3(-halfExtent - 0.5, height * 0.5, 0), new Vector3(1, height, span - 2), mat);
+
+    const trimOpts = { collisions: false as const, castShadow: false as const };
+    this.createBox('wall_n_kick', new Vector3(0, 0.2, halfExtent + 0.08), new Vector3(span, 0.4, 1.16), mat, trimOpts);
+    this.createBox('wall_s_kick', new Vector3(0, 0.2, -halfExtent - 0.08), new Vector3(span, 0.4, 1.16), mat, trimOpts);
+    this.createBox('wall_e_kick', new Vector3(halfExtent + 0.08, 0.2, 0), new Vector3(1.16, 0.4, span - 2), mat, trimOpts);
+    this.createBox('wall_w_kick', new Vector3(-halfExtent - 0.08, 0.2, 0), new Vector3(1.16, 0.4, span - 2), mat, trimOpts);
+    this.createBox('wall_n_cap', new Vector3(0, height - 0.14, halfExtent + 0.08), new Vector3(span, 0.28, 1.16), mat, trimOpts);
+    this.createBox('wall_s_cap', new Vector3(0, height - 0.14, -halfExtent - 0.08), new Vector3(span, 0.28, 1.16), mat, trimOpts);
+    this.createBox('wall_e_cap', new Vector3(halfExtent + 0.08, height - 0.14, 0), new Vector3(1.16, 0.28, span - 2), mat, trimOpts);
+    this.createBox('wall_w_cap', new Vector3(-halfExtent - 0.08, height - 0.14, 0), new Vector3(1.16, 0.28, span - 2), mat, trimOpts);
+
+    for (let t = -halfExtent + 6; t < halfExtent - 2; t += 6) {
+      this.createBox(`wall_n_rib_${t}`, new Vector3(t, height * 0.5, halfExtent + 0.06), new Vector3(0.16, height, 1.1), mat, trimOpts);
+      this.createBox(`wall_s_rib_${t}`, new Vector3(t, height * 0.5, -halfExtent - 0.06), new Vector3(0.16, height, 1.1), mat, trimOpts);
+      this.createBox(`wall_e_rib_${t}`, new Vector3(halfExtent + 0.06, height * 0.5, t), new Vector3(1.1, height, 0.16), mat, trimOpts);
+      this.createBox(`wall_w_rib_${t}`, new Vector3(-halfExtent - 0.06, height * 0.5, t), new Vector3(1.1, height, 0.16), mat, trimOpts);
+    }
   }
 
   public createSkyDomeAndEnvironment(def: MapDefinition): void {
@@ -300,7 +341,7 @@ export class MapBuildContext {
       )
     );
     this.scene.environmentTexture = envCube;
-    this.scene.environmentIntensity = 0.85;
+    this.scene.environmentIntensity = 1.02;
   }
 
   public createNormalTexture(
@@ -446,12 +487,56 @@ export class MapBuildContext {
       vScale
     );
 
+    const mrSize = 64;
+    const mrData = new Uint8Array(mrSize * mrSize * 4);
+    const baseRough = options?.roughness ?? 0.82;
+    const baseMetal = options?.metallic ?? 0.05;
+    for (let y = 0; y < mrSize; y++) {
+      const v = y / mrSize;
+      for (let x = 0; x < mrSize; x++) {
+        const u = x / mrSize;
+        const grain = fbmTileable(u, v, 8);
+        const grout =
+          u < 0.03 || u > 0.97 || v < 0.03 || v > 0.97 || Math.abs(u - 0.5) < 0.02 || Math.abs(v - 0.5) < 0.02
+            ? 1
+            : 0;
+        const rough = Math.max(0, Math.min(255, Math.round((baseRough * 0.75 + grain * 0.28 + grout * 0.12) * 255)));
+        const metal = Math.max(0, Math.min(255, Math.round((baseMetal + grain * 0.04) * 255)));
+        const idx = (y * mrSize + x) * 4;
+        mrData[idx] = 255;
+        mrData[idx + 1] = rough;
+        mrData[idx + 2] = metal;
+        mrData[idx + 3] = 255;
+      }
+    }
+    const mrTex = this.trackTexture(
+      new RawTexture(
+        mrData,
+        mrSize,
+        mrSize,
+        Engine.TEXTUREFORMAT_RGBA,
+        this.scene,
+        true,
+        false,
+        Texture.TRILINEAR_SAMPLINGMODE,
+        Engine.TEXTURETYPE_UNSIGNED_BYTE
+      )
+    );
+    mrTex.wrapU = Texture.WRAP_ADDRESSMODE;
+    mrTex.wrapV = Texture.WRAP_ADDRESSMODE;
+    mrTex.uScale = uScale;
+    mrTex.vScale = vScale;
+
     const mat = new PBRMaterial(name, this.scene);
     mat.albedoColor = Color3.White();
     mat.albedoTexture = tex;
     mat.bumpTexture = bump;
-    mat.metallic = options?.metallic ?? 0.05;
-    mat.roughness = options?.roughness ?? 0.82;
+    mat.metallicTexture = mrTex;
+    mat.useRoughnessFromMetallicTextureAlpha = false;
+    mat.useRoughnessFromMetallicTextureGreen = true;
+    mat.useMetallnessFromMetallicTextureBlue = true;
+    mat.metallic = 1.0;
+    mat.roughness = 1.0;
     return this.trackMaterial(mat);
   }
 
@@ -744,6 +829,14 @@ export class MapBuildContext {
       new Vector3(0.3, 0.05, 0.44),
       glowMat,
       { rot: new Vector3(0, armYawRad, 0), collisions: false, castShadow: false }
+    );
+
+    this.addAreaPointLight(
+      `${name}_pt`,
+      new Vector3(pos.x + sin * 1.75, 5.55, pos.z + cos * 1.75),
+      Color3.FromHexString('#ffc078'),
+      0.72,
+      13
     );
   }
 
