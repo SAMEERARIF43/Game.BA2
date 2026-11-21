@@ -54,7 +54,7 @@ export class NetworkManager {
   public async lookupRoom(code: string): Promise<RoomLookupSummary> {
     const normalized = code.trim().toUpperCase();
     const res = await fetch(`/api/rooms/${encodeURIComponent(normalized)}`);
-    const body = (await res.json()) as {
+    const body = (await res.json().catch(() => ({}))) as {
       found?: boolean;
       error?: string;
       room?: RoomLookupSummary;

@@ -17,8 +17,11 @@ const DEFAULT_DEV_CLIENT_ORIGINS = [
 ];
 
 function getClientOrigins(): Set<string> {
-  const configuredOrigins = (process.env.CLIENT_ORIGIN ?? '')
-    .split(',')
+  const configuredOrigins = [
+    ...(process.env.CLIENT_ORIGIN ?? '').split(','),
+    process.env.APP_URL ?? '',
+    process.env.SHARED_APP_URL ?? '',
+  ]
     .map((origin) => origin.trim())
     .filter(Boolean);
   const origins = new Set(
@@ -26,7 +29,7 @@ function getClientOrigins(): Set<string> {
   );
 
   if (IS_PROD && origins.size === 0) {
-    throw new Error('CLIENT_ORIGIN must contain at least one production client origin.');
+    console.warn('[Strike Force] CLIENT_ORIGIN not set; allowing same-origin requests only.');
   }
 
   for (const origin of origins) {
@@ -47,13 +50,33 @@ function getClientOrigins(): Set<string> {
   return origins;
 }
 
+function isOriginAllowed(
+  origin: string | null | undefined,
+  hostHeader: string | null | undefined,
+  clientOrigins: Set<string>
+): boolean {
+  if (!origin) return false;
+  if (clientOrigins.has(origin)) return true;
+  if (!hostHeader) return false;
+
+  try {
+    const parsedOrigin = new URL(origin);
+    const requestHost = hostHeader.split(',')[0].trim();
+    return Boolean(requestHost && parsedOrigin.host === requestHost);
+  } catch {
+    return false;
+  }
+}
+
 export async function startServer(): Promise<void> {
   const clientOrigins = getClientOrigins();
   matchMaker.controller.getCorsHeaders = (headers) => {
     const origin = headers.get('origin');
+    const hostHeader = headers.get('x-forwarded-host') || headers.get('host');
     return {
-      'Access-Control-Allow-Origin':
-        origin && clientOrigins.has(origin) ? origin : '',
+      'Access-Control-Allow-Origin': isOriginAllowed(origin, hostHeader, clientOrigins)
+        ? (origin as string)
+        : '',
     };
   };
 
@@ -63,21 +86,30 @@ export async function startServer(): Promise<void> {
       pingMaxRetries: 3,
     }),
     express: async (app) => {
+      app.set('trust proxy', 1);
       app.use((req, res, next) => {
         const origin = req.headers.origin;
-        if (origin && !clientOrigins.has(origin)) {
+        const hostHeader =
+          (typeof req.headers['x-forwarded-host'] === 'string'
+            ? req.headers['x-forwarded-host']
+            : undefined) || req.headers.host;
+        if (origin && !isOriginAllowed(origin, hostHeader, clientOrigins)) {
           res.removeHeader('Access-Control-Allow-Origin');
           res.removeHeader('Access-Control-Allow-Credentials');
         }
         next();
       });
-      app.use(
+      app.use((req, res, next) => {
+        const hostHeader =
+          (typeof req.headers['x-forwarded-host'] === 'string'
+            ? req.headers['x-forwarded-host']
+            : undefined) || req.headers.host;
         cors({
           origin(origin, callback) {
-            callback(null, Boolean(origin && clientOrigins.has(origin)));
+            callback(null, isOriginAllowed(origin, hostHeader, clientOrigins));
           },
-        })
-      );
+        })(req, res, next);
+      });
       app.use(express.json());
 
       app.get('/api/health', (_req, res) => {
