@@ -26,6 +26,7 @@ import {
   NetworkDamagedEvent,
   NetworkHitConfirmEvent,
   NetworkKillFeedEvent,
+  NetworkPingEvent,
   RemoteFireEvent,
 } from '../multiplayer/types';
 import {
@@ -49,6 +50,7 @@ import {
   buildOperatorRig,
   createOperatorPalette,
 } from './OperatorMeshBuilder';
+import { PingSystem, resolvePingRaycast } from './PingSystem';
 import { PlayerController } from './PlayerController';
 import {
   CharacterId,
@@ -68,6 +70,7 @@ import {
   MatchSnapshot,
   RadarBlip,
   ScorePopup,
+  Stance,
   WeaponId,
 } from './types';
 import { DEFAULT_KEYBINDINGS, formatKeyCode } from '../settings/keybindings';
@@ -108,8 +111,17 @@ export interface EngineCallbacks {
     rotY: number,
     pitch: number,
     weaponId: WeaponId,
-    characterId: CharacterId
+    characterId: CharacterId,
+    stance: Stance
   ) => void;
+  onMultiplayerPing?: (payload: {
+    id: string;
+    kind: 'location' | 'enemy';
+    x: number;
+    y: number;
+    z: number;
+    targetId?: string;
+  }) => void;
   onGunPersistedChange?: (gunId: GunId) => void;
 }
 
@@ -150,6 +162,7 @@ export class EngineManager {
   private matchManager: MatchManager;
   private botManager: BotManager;
   private remoteRenderer: RemotePlayerRenderer;
+  private pingSystem: PingSystem;
   private player: PlayerController;
   private weapons: WeaponSystem;
   private callbacks: EngineCallbacks;
@@ -160,6 +173,8 @@ export class EngineManager {
   private mpSnapshot: LobbyRoomSnapshot | null = null;
   private mpKillFeed: KillFeedEntry[] = [];
   private lastMoveSendTime = 0;
+  private lastPingPlacementTime = 0;
+  private localPingSeq = 0;
 
   private elapsedTime = 0;
   private lastHudEmitTime = 0;
@@ -261,10 +276,12 @@ export class EngineManager {
 
     this.matchManager = new MatchManager();
     this.remoteRenderer = new RemotePlayerRenderer(this.scene);
+    this.pingSystem = new PingSystem(this.scene);
 
     this.player = new PlayerController(this.scene, this.canvas, this.audio, {
       onFirePress: () => this.weapons.onFirePress(),
       onFireRelease: () => this.weapons.onFireRelease(),
+      onSecondaryPress: () => this.weapons.onSecondaryFire(),
       onAdsChange: () => this.emitHudState(true),
       onReload: () => {
         this.weapons.startReload();
@@ -295,6 +312,9 @@ export class EngineManager {
       onCycleScopeMagnification: () => {
         this.weapons.cycleScopeMagnification();
         this.emitHudState(true);
+      },
+      onPing: () => {
+        this.placePing();
       },
       onPointerLockChange: (locked) => {
         if (this.sessionMode === 'offline') {
@@ -333,6 +353,12 @@ export class EngineManager {
     this.player.setBaseFov(initialSettings.fovDeg);
     this.player.setScreenShakeScale(initialSettings.screenShakeScale);
     this.player.setKeybindings(initialSettings.keybindings ?? DEFAULT_KEYBINDINGS);
+    this.player.setSlideSettings({
+      slideTrigger: initialSettings.slideTrigger,
+      postSlideStance: initialSettings.postSlideStance,
+      jumpCancelsSlide: initialSettings.jumpCancelsSlide,
+      slideCameraIntensity: initialSettings.slideCameraIntensity,
+    });
 
     this.botManager = new BotManager(this.scene, this.matchManager, {
       getPlayerTarget: () => ({
@@ -458,6 +484,9 @@ export class EngineManager {
           this.player.update(dt, activeCfg.adsFovRatio);
           this.weapons.update(dt);
           this.botManager.update(dt);
+          this.pingSystem.update(dt, this.player.camera, (targetId) =>
+            this.botManager.getBotTargetPosition(targetId)
+          );
         }
       }
 
@@ -479,6 +508,7 @@ export class EngineManager {
     this.player.setDeadState(false);
     this.resetCombatArcadeState(true);
     this.remoteRenderer.clear();
+    this.pingSystem.clear();
     this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
     this.weapons.resetForNewMatch();
     this.weapons.setMultiplayerContext(false, 'blue', false);
@@ -502,6 +532,8 @@ export class EngineManager {
     this.mpPaused = false;
     this.resetCombatArcadeState(true);
     this.remoteRenderer.clear();
+    this.pingSystem.clear();
+    this.pingSystem.setLocalTeam('blue');
     this.weapons.setMultiplayerContext(false, 'blue', false);
 
     const def =
@@ -550,6 +582,7 @@ export class EngineManager {
   public startMultiplayerMatch(snapshot: LobbyRoomSnapshot, requestLock: boolean): void {
     this.sessionMode = 'multiplayer';
     this.botManager.clearBots();
+    this.pingSystem.clear();
     this.resetCombatArcadeState(true);
     this.mpSnapshot = snapshot;
     this.mpPaused = !requestLock;
@@ -562,6 +595,7 @@ export class EngineManager {
 
     const local = snapshot.players.find((p) => p.id === snapshot.localPlayerId);
     const localTeam = local?.team ?? 'blue';
+    this.pingSystem.setLocalTeam(localTeam);
     this.weapons.setMultiplayerContext(true, localTeam, snapshot.friendlyFire);
     this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
     this.weapons.resetForNewMatch();
@@ -607,6 +641,7 @@ export class EngineManager {
       this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
       if (this.sessionMode === 'multiplayer') {
         this.remoteRenderer.clear();
+        this.pingSystem.clear();
         this.resetCombatArcadeState(true);
         this.weapons.resetForNewMatch();
         this.player.exitPointerLock();
@@ -629,12 +664,14 @@ export class EngineManager {
         this.playerHealth = local.health;
         this.playerIsAlive = local.isAlive;
         this.playerRespawnTimer = local.respawnTimer;
+        this.pingSystem.setLocalTeam(local.team);
         this.weapons.setMultiplayerContext(true, local.team, snapshot.friendlyFire);
       }
 
       this.remoteRenderer.syncPlayers(snapshot.players, snapshot.localPlayerId);
     } else if (snapshot.phase === 'ended') {
       this.mpPaused = false;
+      this.pingSystem.clear();
       this.player.setCanControl(false);
       this.player.exitPointerLock();
       this.weapons.cancelTransientActions();
@@ -649,6 +686,32 @@ export class EngineManager {
 
   public handleRemoteFire(event: RemoteFireEvent): void {
     this.remoteRenderer.spawnRemoteFire(event);
+  }
+
+  public handleNetworkPing(event: NetworkPingEvent): void {
+    if (this.sessionMode !== 'multiplayer' || this.mpSnapshot?.phase !== 'playing') return;
+    const local = this.mpSnapshot.players.find((p) => p.id === this.mpSnapshot?.localPlayerId);
+    const localTeam = local?.team ?? 'blue';
+    if (event.team !== localTeam) return;
+
+    this.pingSystem.setLocalTeam(localTeam);
+    this.pingSystem.upsertPing({
+      id: event.id,
+      senderId: event.senderId,
+      senderName: event.senderName,
+      team: event.team,
+      kind: event.kind,
+      x: event.x,
+      y: event.y,
+      z: event.z,
+      targetId: event.targetId,
+      durationSec: Math.max(1.5, event.durationMs / 1000),
+    });
+
+    if (event.senderId !== this.mpSnapshot.localPlayerId) {
+      this.audio.playPing(event.kind === 'enemy');
+    }
+    this.emitHudState(true);
   }
 
   public handleNetworkHitConfirm(event: NetworkHitConfirmEvent): void {
@@ -752,6 +815,12 @@ export class EngineManager {
     this.player.setBaseFov(settings.fovDeg);
     this.player.setScreenShakeScale(settings.screenShakeScale);
     this.player.setKeybindings(settings.keybindings ?? DEFAULT_KEYBINDINGS);
+    this.player.setSlideSettings({
+      slideTrigger: settings.slideTrigger,
+      postSlideStance: settings.postSlideStance,
+      jumpCancelsSlide: settings.jumpCancelsSlide,
+      slideCameraIntensity: settings.slideCameraIntensity,
+    });
     this.audio.setVolumes(settings.volume, settings.sfxVolume, settings.musicVolume, settings.muted);
     this.applyGraphicsQuality(settings.graphicsQuality);
     if (settings.knifeCharmId !== this.weapons.getKnifeCharmId()) {
@@ -1478,6 +1547,9 @@ export class EngineManager {
     this.player.update(dt, activeCfg.adsFovRatio);
     this.weapons.update(dt);
     this.remoteRenderer.update(dt);
+    this.pingSystem.update(dt, this.player.camera, (targetId) =>
+      this.remoteRenderer.getPlayerTargetPosition(targetId)
+    );
     this.updateArcadeEffects(dt);
 
     const now = performance.now();
@@ -1495,7 +1567,8 @@ export class EngineManager {
         this.player.camera.rotation.y,
         this.player.camera.rotation.x,
         activeCfg.id,
-        this.selectedCharacterId
+        this.selectedCharacterId,
+        this.player.getStance()
       );
     }
   }
@@ -1745,7 +1818,84 @@ export class EngineManager {
         team: actor.team,
       });
     }
+
+    for (const ping of this.pingSystem.getActivePings()) {
+      const dx = ping.x - pPos.x;
+      const dz = ping.z - pPos.z;
+      const localRight = (dx * cosY - dz * sinY) / RADAR_RANGE_METERS;
+      const localForward = (dx * sinY + dz * cosY) / RADAR_RANGE_METERS;
+      const mag = Math.hypot(localRight, localForward);
+      const clampedMag = mag > 0.94 ? 0.94 / mag : 1;
+
+      blips.push({
+        id: `ping_radar_${ping.id}`,
+        relX: localRight * clampedMag,
+        relZ: localForward * clampedMag,
+        team: ping.team,
+        pingKind: ping.kind,
+      });
+    }
+
     return blips;
+  }
+
+  private placePing(): void {
+    if (!this.playerIsAlive) return;
+    const playing =
+      this.sessionMode === 'offline'
+        ? this.matchManager.getPhase() === 'playing'
+        : this.mpSnapshot?.phase === 'playing' && !this.mpPaused;
+    if (!playing) return;
+
+    const now = performance.now();
+    if (now - this.lastPingPlacementTime < 300) return;
+    this.lastPingPlacementTime = now;
+
+    const localPlayer =
+      this.sessionMode === 'multiplayer'
+        ? this.mpSnapshot?.players.find((p) => p.id === this.mpSnapshot?.localPlayerId)
+        : null;
+    const localTeam: TeamId = localPlayer?.team ?? 'blue';
+    const senderId = localPlayer?.id ?? 'player';
+    const senderName = localPlayer?.name ?? (this.settings.callsign || 'Operator');
+
+    const origin = this.player.camera.globalPosition;
+    const dir = this.player.camera.getDirection(Vector3.Forward());
+    const hit = resolvePingRaycast(
+      this.scene,
+      origin,
+      dir,
+      localTeam,
+      this.player.collider
+    );
+
+    const pingId = `${senderId}_ping_${++this.localPingSeq}`;
+    this.pingSystem.setLocalTeam(localTeam);
+    this.pingSystem.upsertPing({
+      id: pingId,
+      senderId,
+      senderName,
+      team: localTeam,
+      kind: hit.kind,
+      x: hit.x,
+      y: hit.y,
+      z: hit.z,
+      targetId: hit.targetId,
+    });
+    this.audio.playPing(hit.kind === 'enemy');
+
+    if (this.sessionMode === 'multiplayer') {
+      this.callbacks.onMultiplayerPing?.({
+        id: pingId,
+        kind: hit.kind,
+        x: hit.x,
+        y: hit.y,
+        z: hit.z,
+        targetId: hit.targetId,
+      });
+    }
+
+    this.emitHudState(true);
   }
 
   private buildMultiplayerMatchSnapshot(): MatchSnapshot {
@@ -1885,6 +2035,14 @@ export class EngineManager {
       killstreakBanner: this.killstreakBanner,
       scorePopups: [...this.scorePopups],
       radarBlips: match.phase === 'playing' || match.phase === 'paused' ? this.buildRadarBlips() : [],
+      pings:
+        match.phase === 'playing' || match.phase === 'paused'
+          ? this.pingSystem.getHudMarkers(
+              this.player.camera,
+              this.engine.getRenderWidth(),
+              this.engine.getRenderHeight()
+            )
+          : [],
       xp: rank.xp,
       sessionXpEarned: this.sessionXpEarned,
       rankLevel: rank.level,
@@ -1946,6 +2104,7 @@ export class EngineManager {
     this.showcasePalette?.dispose();
     this.showcasePalette = null;
     this.weapons.dispose();
+    this.pingSystem.dispose();
     this.remoteRenderer.dispose();
     this.botManager.dispose();
     this.player.dispose();

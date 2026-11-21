@@ -239,6 +239,19 @@ export class BotManager {
     }));
   }
 
+  public getBotTargetPosition(
+    botId: string
+  ): { x: number; y: number; z: number; isAlive: boolean } | null {
+    const bot = this.bots.find((b) => b.id === botId);
+    if (!bot) return null;
+    return {
+      x: bot.root.position.x,
+      y: bot.root.position.y,
+      z: bot.root.position.z,
+      isAlive: bot.isAlive,
+    };
+  }
+
   public applyAirstrikeDamage(
     impactPos: Vector3,
     radius: number,

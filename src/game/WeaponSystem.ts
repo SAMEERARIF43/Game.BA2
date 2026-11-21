@@ -119,6 +119,8 @@ export class WeaponSystem {
 
   private weaponPivot: TransformNode;
   private models = new Map<WeaponId, WeaponModelRig>();
+  private knifeWristPivot: TransformNode | null = null;
+  private knifeHandMeshes: Mesh[] = [];
   private charmPivot: TransformNode | null = null;
   private charmRoots = new Map<KnifeCharmId, TransformNode>();
 
@@ -162,7 +164,12 @@ export class WeaponSystem {
   private reloadSpeedMultiplier = 1.0;
 
   private slashTimer = 0;
-  private readonly slashDuration = 0.32;
+  private slashDuration = 0.3;
+  private readonly slashPrimaryDuration = 0.3;
+  private readonly stabSecondaryDuration = 0.36;
+  private knifeAttackMode: 'slash' | 'stab' = 'slash';
+  private knifeEquipTimer = 0;
+  private readonly knifeEquipDuration = 0.34;
   private slashSide = 1;
   private quickMeleeReturnSlot: 1 | 2 | null = null;
 
@@ -631,8 +638,17 @@ export class WeaponSystem {
       this.selectWeapon('knife', true);
       this.equipDrop = 0.04;
     }
+    this.knifeAttackMode = 'stab';
     this.tryFire();
     this.semiTriggerConsumed = true;
+  }
+
+  public onSecondaryFire(): void {
+    if (!this.viewModelVisible) return;
+    if (this.activeId !== 'knife') return;
+    if (this.knifeCooldown > 0) return;
+    this.knifeAttackMode = 'stab';
+    this.tryFire();
   }
 
   public cancelTransientActions(): void {
@@ -640,6 +656,8 @@ export class WeaponSystem {
     this.reloadElapsed = 0;
     this.reloadMagClickPlayed = false;
     this.slashTimer = 0;
+    this.knifeEquipTimer = 0;
+    this.knifeAttackMode = 'slash';
     this.quickMeleeReturnSlot = null;
     this.semiTriggerConsumed = false;
     this.muzzleFlashTimer = 0;
@@ -683,13 +701,20 @@ export class WeaponSystem {
 
     const cfg = WEAPONS[id];
     this.player.setWeaponSpeedMultiplier(cfg.moveSpeedMultiplier ?? 1.0);
+    this.player.setAdsEnabled(id !== 'knife');
 
     if (this.activeId !== 'knife') {
       this.slashTimer = 0;
+      this.knifeEquipTimer = 0;
+      this.knifeAttackMode = 'slash';
+    } else if (!silent && !targetEnabled) {
+      this.knifeEquipTimer = this.knifeEquipDuration;
+      this.charmVelZ += 10;
+      this.charmVelX -= 8;
     }
 
     if (!silent && !targetEnabled) {
-      this.equipDrop = 0.14;
+      this.equipDrop = id === 'knife' ? 0.11 : 0.14;
       this.audio.playWeaponEquip();
     }
 
@@ -709,6 +734,12 @@ export class WeaponSystem {
   public onFirePress(): void {
     if (!this.viewModelVisible) return;
     const cfg = this.getActiveConfig();
+    if (cfg.id === 'knife') {
+      this.knifeAttackMode = 'slash';
+      this.tryFire();
+      this.semiTriggerConsumed = true;
+      return;
+    }
     if (cfg.fireMode === 'semi') {
       this.tryFire();
       this.semiTriggerConsumed = true;
@@ -756,7 +787,13 @@ export class WeaponSystem {
     this.knifeCooldown = 0;
     this.semiTriggerConsumed = false;
     this.slashTimer = 0;
+    this.knifeEquipTimer = 0;
+    this.knifeAttackMode = 'slash';
     this.quickMeleeReturnSlot = null;
+    if (this.knifeWristPivot) {
+      this.knifeWristPivot.rotation.setAll(0);
+      this.knifeWristPivot.position.setAll(0);
+    }
     this.muzzleFlashTimer = 0;
     this.muzzleFlashRoot.setEnabled(false);
     this.muzzleLight.intensity = 0;
@@ -792,6 +829,7 @@ export class WeaponSystem {
       this.weaponPivot.rotation.setAll(0);
     }
     this.player.setWeaponSpeedMultiplier(WEAPONS[this.activeId].moveSpeedMultiplier ?? 1.0);
+    this.player.setAdsEnabled(this.activeId !== 'knife');
   }
 
   public resetForNewMatch(): void {
@@ -839,6 +877,10 @@ export class WeaponSystem {
           }
         }
       }
+    }
+
+    if (this.knifeEquipTimer > 0) {
+      this.knifeEquipTimer = Math.max(0, this.knifeEquipTimer - clampedDt);
     }
 
     if (this.slashTimer > 0) {
@@ -933,15 +975,20 @@ export class WeaponSystem {
 
     if (cfg.isMelee || cfg.id === 'knife') {
       if (this.knifeCooldown > 0) return;
-      this.knifeCooldown = 60 / cfg.rpm;
+      const isStab = this.knifeAttackMode === 'stab';
+      this.knifeCooldown = (60 / cfg.rpm) * (isStab ? 1.15 : 1.0);
+      this.slashDuration = isStab ? this.stabSecondaryDuration : this.slashPrimaryDuration;
       this.slashTimer = this.slashDuration;
-      this.slashSide = -this.slashSide;
-      this.kickBackZ = Math.min(0.12, this.kickBackZ + feel.kickBack);
-      this.kickRotX = Math.min(0.2, this.kickRotX + feel.kickRotX);
-      this.player.addFovKick(feel.fovKickRad);
+      this.knifeEquipTimer = 0;
+      if (!isStab) {
+        this.slashSide = -this.slashSide;
+      }
+      this.kickBackZ = Math.min(0.12, this.kickBackZ + (isStab ? -0.05 : feel.kickBack));
+      this.kickRotX = Math.min(0.2, this.kickRotX + (isStab ? 0.04 : feel.kickRotX));
+      this.player.addFovKick(feel.fovKickRad * (isStab ? 1.35 : 1.0));
       this.audio.playKnifeSlash();
-      this.charmVelZ += (Math.random() > 0.5 ? 1 : -1) * 14;
-      this.charmVelX += 11;
+      this.charmVelZ += (isStab ? 1 : Math.random() > 0.5 ? 1 : -1) * (isStab ? 18 : 14);
+      this.charmVelX += isStab ? 16 : 11;
       this.performMeleeStrike(cfg);
       return;
     }
@@ -1655,13 +1702,14 @@ export class WeaponSystem {
       return;
     }
 
-    const p = 1 - this.slashTimer / this.slashDuration;
+    const p = 1 - this.slashTimer / Math.max(0.05, this.slashDuration);
     if (p < 0.08 || p > 0.92) {
       this.hideKnifeTrail();
       return;
     }
 
     const envelope = Math.sin(((p - 0.08) / 0.84) * Math.PI);
+    const isStab = this.knifeAttackMode === 'stab';
     for (let i = 0; i < this.knifeTrailMeshes.length; i++) {
       const seg = this.knifeTrailMeshes[i];
       if (i >= activeSegs) {
@@ -1669,13 +1717,19 @@ export class WeaponSystem {
         continue;
       }
       const trailP = Math.max(0.05, p - i * 0.045);
-      const arcAngle = (trailP - 0.5) * 1.85 * this.slashSide;
-      const x = Math.sin(arcAngle) * 0.24;
-      const y = -0.02 + Math.cos(arcAngle) * 0.055;
-      const z = 0.52 - Math.abs(arcAngle) * 0.05;
+      if (isStab) {
+        const thrustZ = 0.44 + Math.sin(trailP * Math.PI) * 0.24 - i * 0.03;
+        seg.position.set(0.06 - i * 0.008, -0.05, thrustZ);
+        seg.rotation.set(Math.PI * 0.42, 0.14, 0.25);
+      } else {
+        const arcAngle = (trailP - 0.5) * 1.95 * this.slashSide;
+        const x = Math.sin(arcAngle) * 0.23;
+        const y = -0.03 + Math.cos(arcAngle) * 0.055 - trailP * 0.04;
+        const z = 0.53 - Math.abs(arcAngle) * 0.045;
 
-      seg.position.set(x, y, z);
-      seg.rotation.set(0.18, 0, -arcAngle + this.slashSide * 0.65);
+        seg.position.set(x, y, z);
+        seg.rotation.set(0.18, 0, -arcAngle + this.slashSide * 0.72);
+      }
       const segFade = 1 - i / Math.max(1, activeSegs);
       seg.scaling.set(1.0, 0.85 + segFade * 0.45, 1.0);
       seg.visibility = Math.max(0, Math.min(1, envelope * segFade * 0.92));
@@ -1744,23 +1798,58 @@ export class WeaponSystem {
     this.kickRoll *= Math.exp(-20 * dt);
     this.equipDrop *= Math.exp(-12 * dt);
 
-    // Knife slash arc
+    // Knife slash / stab / equip draw twist
     let slashOffX = 0;
     let slashOffY = 0;
     let slashOffZ = 0;
     let slashRotX = 0;
     let slashRotY = 0;
     let slashRotZ = 0;
+    let wristFlipX = 0;
+    let wristFlipY = 0;
+    let wristFlipZ = 0;
+    let wristOffZ = 0;
     if (isKnife && this.slashTimer > 0) {
-      const p = 1 - this.slashTimer / this.slashDuration;
-      const swingCurve = Math.sin(p * Math.PI);
-      const windup = p < 0.25 ? p / 0.25 : 1 - (p - 0.25) / 0.75;
-      slashOffX = -0.19 * swingCurve * this.slashSide;
-      slashOffY = 0.05 * Math.sin(p * Math.PI * 2);
-      slashOffZ = 0.18 * swingCurve;
-      slashRotX = -0.68 * swingCurve;
-      slashRotY = 1.05 * swingCurve * this.slashSide;
-      slashRotZ = 0.55 * windup * this.slashSide;
+      const p = 1 - this.slashTimer / Math.max(0.05, this.slashDuration);
+      if (this.knifeAttackMode === 'stab') {
+        // Heavy forward thrust with brief wind-up chamber
+        const chamber = p < 0.22 ? Math.sin((p / 0.22) * Math.PI * 0.5) : 0;
+        const thrustPhase = p >= 0.22 ? Math.sin(((p - 0.22) / 0.78) * Math.PI) : 0;
+        slashOffX = -0.09 * thrustPhase + 0.025 * chamber;
+        slashOffY = 0.035 * thrustPhase - 0.02 * chamber;
+        slashOffZ = 0.24 * thrustPhase - 0.06 * chamber;
+        slashRotX = -0.18 * chamber + 0.22 * thrustPhase;
+        slashRotY = 0.22 * thrustPhase;
+        slashRotZ = -0.45 * thrustPhase;
+        wristFlipX = 0.24 * thrustPhase;
+        wristFlipZ = -0.35 * thrustPhase;
+      } else {
+        // Crisp wrist-pivoted diagonal slash across viewport
+        const swingCurve = Math.sin(p * Math.PI);
+        const windup = p < 0.24 ? Math.sin((p / 0.24) * Math.PI * 0.5) : 1 - (p - 0.24) / 0.76;
+        slashOffX = -0.21 * swingCurve * this.slashSide + 0.04 * windup * this.slashSide;
+        slashOffY = 0.04 * Math.sin(p * Math.PI * 2) - 0.03 * swingCurve;
+        slashOffZ = 0.16 * swingCurve;
+        slashRotX = -0.58 * swingCurve;
+        slashRotY = 1.08 * swingCurve * this.slashSide;
+        slashRotZ = 0.62 * windup * this.slashSide;
+        wristFlipZ = 0.42 * swingCurve * this.slashSide;
+        wristFlipX = -0.26 * swingCurve;
+      }
+    } else if (isKnife && this.knifeEquipTimer > 0) {
+      // Snappy draw twist/flip when equipping slot [2]
+      const ep = 1 - this.knifeEquipTimer / this.knifeEquipDuration;
+      const easeOut = 1 - Math.pow(1 - ep, 3);
+      const flipAngle = (1 - easeOut) * Math.PI * 1.45;
+      wristFlipZ = flipAngle * 0.65;
+      wristFlipY = (1 - easeOut) * -0.9;
+      wristFlipX = Math.sin(ep * Math.PI) * 0.36;
+      wristOffZ = -0.09 * (1 - easeOut);
+    }
+
+    if (this.knifeWristPivot) {
+      this.knifeWristPivot.rotation.set(wristFlipX, wristFlipY, wristFlipZ);
+      this.knifeWristPivot.position.set(0, 0, wristOffZ);
     }
 
     const baseTargetX = rig.hipPos.x + (rig.adsPos.x - rig.hipPos.x) * adsBlend;
@@ -1773,8 +1862,9 @@ export class WeaponSystem {
     const slidingHip = stance === 'slide' && adsBlend < 0.4 && !this.isReloading && this.slashTimer === 0;
     const slidingAds = stance === 'slide' && isAds && !this.isReloading;
 
-    const sprintRotY = sprinting ? -0.42 : 0;
-    const sprintRotX = sprinting ? 0.16 : 0;
+    const sprintRotY = sprinting ? (isKnife ? -0.22 : -0.42) : 0;
+    const sprintRotX = sprinting ? (isKnife ? 0.14 : 0.16) : 0;
+    const sprintKnifeOffY = sprinting && isKnife ? -0.025 : 0;
 
     const slideOffsetX = slidingHip ? -0.025 : 0;
     const slideOffsetY = slidingHip ? -0.025 : 0;
@@ -1783,10 +1873,17 @@ export class WeaponSystem {
 
     const targetX = baseTargetX + bobX + swayX + slideOffsetX + slashOffX;
     const targetY =
-      baseTargetY + bobY + reloadOffsetY - this.equipDrop - this.vmLandDip + slideOffsetY + slashOffY;
+      baseTargetY +
+      bobY +
+      reloadOffsetY -
+      this.equipDrop -
+      this.vmLandDip +
+      slideOffsetY +
+      sprintKnifeOffY +
+      slashOffY;
     const targetZ = baseTargetZ - this.kickBackZ + swayZ + slashOffZ;
 
-    const posLerp = 1 - Math.exp(-(this.slashTimer > 0 ? 28 : isAds ? 20 : 14) * dt);
+    const posLerp = 1 - Math.exp(-(this.slashTimer > 0 ? 30 : isAds ? 20 : 14) * dt);
     this.weaponPivot.position.x += (targetX - this.weaponPivot.position.x) * posLerp;
     this.weaponPivot.position.y += (targetY - this.weaponPivot.position.y) * posLerp;
     this.weaponPivot.position.z += (targetZ - this.weaponPivot.position.z) * posLerp;
@@ -1799,23 +1896,26 @@ export class WeaponSystem {
     const targetRotY = sprintRotY + slideRotY + adsRotY + slashRotY + this.kickYaw;
     const targetRotZ = reloadTiltZ + slideRotZ + this.swayRoll + adsRotZ + slashRotZ + this.kickRoll;
 
-    const rotLerp = 1 - Math.exp(-(this.slashTimer > 0 ? 28 : isAds ? 18 : 14) * dt);
+    const rotLerp = 1 - Math.exp(-(this.slashTimer > 0 ? 30 : isAds ? 18 : 14) * dt);
     this.weaponPivot.rotation.x += (targetRotX - this.weaponPivot.rotation.x) * rotLerp;
     this.weaponPivot.rotation.y += (targetRotY - this.weaponPivot.rotation.y) * rotLerp;
     this.weaponPivot.rotation.z += (targetRotZ - this.weaponPivot.rotation.z) * rotLerp;
 
-    // 3D Knife Charm pendulum motion physics
+    // 3D Knife Charm pendulum motion physics with gravity-aligned pommel compensation
     if (isKnife && this.charmPivot) {
-      const targetRestX = 0.18 + Math.max(-0.35, Math.min(0.45, fwdN * 0.25 + (isMoving ? Math.sin(this.bobTimer) * 0.1 : 0)));
-      const targetRestZ = Math.max(-0.55, Math.min(0.55, -strafeN * 0.38 + (this.swayRoll * 1.4)));
+      const targetRestX =
+        -0.78 +
+        Math.max(-0.35, Math.min(0.45, fwdN * 0.25 + (isMoving ? Math.sin(this.bobTimer) * 0.1 : 0)));
+      const targetRestZ =
+        -0.38 + Math.max(-0.55, Math.min(0.55, -strafeN * 0.38 + this.swayRoll * 1.4));
       const springK = 68;
       const damping = 7.5;
       const ax = (targetRestX - this.charmSwingX) * springK - this.charmVelX * damping;
       const az = (targetRestZ - this.charmSwingZ) * springK - this.charmVelZ * damping;
       this.charmVelX += ax * dt;
       this.charmVelZ += az * dt;
-      this.charmSwingX = Math.max(-0.85, Math.min(0.95, this.charmSwingX + this.charmVelX * dt));
-      this.charmSwingZ = Math.max(-0.85, Math.min(0.85, this.charmSwingZ + this.charmVelZ * dt));
+      this.charmSwingX = Math.max(-1.45, Math.min(0.45, this.charmSwingX + this.charmVelX * dt));
+      this.charmSwingZ = Math.max(-1.15, Math.min(0.65, this.charmSwingZ + this.charmVelZ * dt));
 
       this.charmPivot.rotation.x = this.charmSwingX;
       this.charmPivot.rotation.z = this.charmSwingZ;
@@ -2497,15 +2597,104 @@ export class WeaponSystem {
       });
     }
 
-    // 6. K-Bar Combat Knife (Fuller, Serrations, Brass Bolster) + 3D Weapon Charm Mount
+    // 6. K-Bar Combat Knife (Tactical Forearm + Gloved Grip, Canted Blade, Pommel Charm)
     {
+      const sleeveMat = this.createWeaponFinish('knifeSleeveMat', 'tacticalFabric', {
+        baseHex: '#252d36',
+        accentHex: '#171c22',
+        bumpLevel: 0.78,
+        environmentIntensity: 0.9,
+      });
+      const gloveMat = this.createWeaponFinish('knifeGloveMat', 'knurledPolymer', {
+        baseHex: '#1b1f26',
+        accentHex: '#101216',
+        bumpLevel: 0.82,
+        environmentIntensity: 0.95,
+      });
+
       const root = new TransformNode('vm_knife', this.scene);
       root.parent = this.weaponPivot;
 
-      // Tilt the knife vertically forward at an ergonomic combat grip angle
+      const wristPivot = new TransformNode('knife_wrist_pivot', this.scene);
+      wristPivot.parent = root;
+      this.knifeWristPivot = wristPivot;
+
+      // Natural CS/Valorant-inspired tactical posture: canted ~30° inward toward crosshair
       const gripHolder = new TransformNode('knife_grip_holder', this.scene);
-      gripHolder.parent = root;
-      gripHolder.rotation.set(0.46, -0.22, 0.18);
+      gripHolder.parent = wristPivot;
+      gripHolder.rotation.set(0.88, -0.46, 0.48);
+
+      // Sculpted tactical forearm sleeve, wrist cuff & watch extending to bottom-right viewport
+      const forearm = this.addCylinder(
+        gripHolder,
+        'kn_forearm_sleeve',
+        0.24,
+        0.078,
+        new Vector3(0.012, -0.23, -0.016),
+        0.16,
+        sleeveMat
+      );
+      forearm.rotation.z = -0.14;
+      const cuff = this.addCylinder(
+        gripHolder,
+        'kn_wrist_cuff',
+        0.036,
+        0.068,
+        new Vector3(0.006, -0.125, -0.008),
+        0.1,
+        gloveMat
+      );
+      const watch = this.addPart(
+        gripHolder,
+        'kn_wrist_watch',
+        { width: 0.032, height: 0.026, depth: 0.014 },
+        new Vector3(-0.022, -0.125, 0.026),
+        gunmetal
+      );
+      const watchDial = this.addPart(
+        gripHolder,
+        'kn_watch_dial',
+        { width: 0.02, height: 0.016, depth: 0.004 },
+        new Vector3(-0.022, -0.125, 0.034),
+        tritiumGreen
+      );
+
+      // Gloved palm, molded knuckle guard, curled fingers & thumb wrapping handle cleanly
+      const palm = this.addPart(
+        gripHolder,
+        'kn_glove_palm',
+        { width: 0.044, height: 0.088, depth: 0.046 },
+        new Vector3(0.012, -0.046, -0.004),
+        gloveMat
+      );
+      const knucklePlate = this.addPart(
+        gripHolder,
+        'kn_glove_knuckles',
+        { width: 0.026, height: 0.078, depth: 0.018 },
+        new Vector3(-0.008, -0.042, 0.014),
+        carbonFiber
+      );
+      this.knifeHandMeshes = [forearm, cuff, watch, watchDial, palm, knucklePlate];
+      for (let f = 0; f < 4; f++) {
+        const finger = this.addPart(
+          gripHolder,
+          `kn_glove_finger_${f}`,
+          { width: 0.036, height: 0.017, depth: 0.036 },
+          new Vector3(-0.004, -0.014 - f * 0.02, 0.006),
+          gloveMat,
+          new Vector3(0, 0, -0.18)
+        );
+        this.knifeHandMeshes.push(finger);
+      }
+      const thumb = this.addPart(
+        gripHolder,
+        'kn_glove_thumb',
+        { width: 0.024, height: 0.036, depth: 0.024 },
+        new Vector3(-0.01, -0.006, 0.019),
+        gloveMat,
+        new Vector3(0.35, 0.12, -0.35)
+      );
+      this.knifeHandMeshes.push(thumb);
 
       // Ribbed leather/polymer handle + brass/steel bolster
       this.addCylinder(gripHolder, 'kn_handle', 0.115, 0.026, new Vector3(0, -0.035, 0), 0, polymer);
@@ -2521,39 +2710,40 @@ export class WeaponSystem {
         );
       }
       this.addCylinder(gripHolder, 'kn_bolster', 0.014, 0.029, new Vector3(0, 0.02, 0), 0, this.brassMaterial);
-      // Steel pommel cap & charm lanyard loop
-      this.addCylinder(gripHolder, 'kn_pommel', 0.016, 0.032, new Vector3(0, -0.098, 0), 0, steelSilver);
-      this.addPart(gripHolder, 'kn_charm_lug', { width: 0.008, height: 0.012, depth: 0.012 }, new Vector3(0.016, -0.098, -0.004), bladeEdge);
+      // Steel pommel cap & charm lanyard ring at bottom of handle (away from fingers & blade)
+      this.addCylinder(gripHolder, 'kn_pommel', 0.018, 0.033, new Vector3(0, -0.098, 0), 0, steelSilver);
+      this.addPart(gripHolder, 'kn_charm_lug', { width: 0.008, height: 0.012, depth: 0.012 }, new Vector3(0.014, -0.106, -0.008), bladeEdge);
 
       // Steel crossguard
-      this.addPart(gripHolder, 'kn_guard', { width: 0.018, height: 0.01, depth: 0.056 }, new Vector3(0, 0.028, 0.004), gunmetal);
+      this.addPart(gripHolder, 'kn_guard', { width: 0.018, height: 0.011, depth: 0.06 }, new Vector3(0, 0.028, 0.004), gunmetal);
 
-      // Tactical Tanto / Clip-point blade: dark spine + fuller groove + serrated teeth + bright honed cutting bevel
-      this.addPart(gripHolder, 'kn_blade_spine', { width: 0.006, height: 0.165, depth: 0.024 }, new Vector3(0, 0.114, -0.002), gunmetal);
-      this.addPart(gripHolder, 'kn_blade_fuller', { width: 0.0075, height: 0.105, depth: 0.005 }, new Vector3(0, 0.105, -0.002), carbonFiber);
+      // Tactical Tanto / Clip-point blade: dark spine + fuller groove + serrated teeth + honed cutting bevel
+      this.addPart(gripHolder, 'kn_blade_spine', { width: 0.0065, height: 0.175, depth: 0.026 }, new Vector3(0, 0.118, -0.002), gunmetal);
+      this.addPart(gripHolder, 'kn_blade_fuller', { width: 0.0082, height: 0.115, depth: 0.0055 }, new Vector3(0, 0.11, -0.002), carbonFiber);
       for (let t = 0; t < 4; t++) {
         this.addPart(
           gripHolder,
           `kn_blade_serr_${t}`,
-          { width: 0.005, height: 0.007, depth: 0.006 },
-          new Vector3(0, 0.048 + t * 0.012, -0.015),
+          { width: 0.0052, height: 0.0075, depth: 0.0065 },
+          new Vector3(0, 0.05 + t * 0.012, -0.016),
           steelSilver
         );
       }
-      this.addPart(gripHolder, 'kn_blade_edge', { width: 0.003, height: 0.162, depth: 0.012 }, new Vector3(0, 0.112, 0.013), bladeEdge);
+      this.addPart(gripHolder, 'kn_blade_edge', { width: 0.0032, height: 0.172, depth: 0.013 }, new Vector3(0, 0.116, 0.014), bladeEdge);
       this.addPart(
         gripHolder,
         'kn_blade_tip',
-        { width: 0.004, height: 0.044, depth: 0.018 },
-        new Vector3(0, 0.205, 0.004),
+        { width: 0.0042, height: 0.048, depth: 0.019 },
+        new Vector3(0, 0.214, 0.004),
         bladeEdge,
         new Vector3(-0.32, 0, 0)
       );
 
-      // Charm pivot hanging freely from the knife pommel lug
+      // Charm pivot hanging cleanly below the pommel lanyard lug
       const charmPivot = new TransformNode('knife_charm_pivot', this.scene);
       charmPivot.parent = gripHolder;
-      charmPivot.position.set(0.022, -0.098, -0.006);
+      charmPivot.position.set(0.018, -0.11, -0.012);
+      charmPivot.rotation.set(-0.78, 0, -0.38);
       this.charmPivot = charmPivot;
       this.buildKnifeCharms(charmPivot, steelSilver, gunmetal);
 
@@ -2562,14 +2752,14 @@ export class WeaponSystem {
 
       const muzzlePoint = new TransformNode('kn_tip', this.scene);
       muzzlePoint.parent = gripHolder;
-      muzzlePoint.position.set(0, 0.22, 0);
+      muzzlePoint.position.set(0, 0.23, 0);
 
       this.models.set('knife', {
         root,
         muzzlePoint,
         ejectionPort,
-        hipPos: new Vector3(0.22, -0.17, 0.44),
-        adsPos: new Vector3(0.22, -0.17, 0.44),
+        hipPos: new Vector3(0.24, -0.19, 0.43),
+        adsPos: new Vector3(0.24, -0.19, 0.43),
         adsRot: Vector3.Zero(),
       });
     }
@@ -2755,6 +2945,20 @@ export class WeaponSystem {
     };
   }
 
+  public getKnifeViewmodelState() {
+    const knifeRoot = this.models.get('knife')?.root;
+    return {
+      hasForearmAndHand: this.knifeHandMeshes.length >= 10,
+      knifeMeshCount: knifeRoot ? knifeRoot.getChildMeshes(false).length : 0,
+      charmAnchoredToPommel: Boolean(
+        this.charmPivot && this.charmPivot.position.y < -0.09
+      ),
+      equipTimer: this.knifeEquipTimer,
+      slashTimer: this.slashTimer,
+      attackMode: this.knifeAttackMode,
+    };
+  }
+
   public clearTransientEffects(): void {
     this.tracerPool.clear();
     for (const c of this.casingPool) {
@@ -2792,6 +2996,8 @@ export class WeaponSystem {
     this.vfxPoolRoot.dispose();
     this.charmRoots.clear();
     this.charmPivot = null;
+    this.knifeWristPivot = null;
+    this.knifeHandMeshes = [];
     this.models.forEach((rig) => rig.root.dispose());
     this.models.clear();
     for (const m of this.muzzleFlashMeshes) m.dispose();

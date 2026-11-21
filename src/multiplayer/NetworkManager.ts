@@ -1,6 +1,6 @@
 import { Client, Room } from '@colyseus/sdk';
 import { normalizeCharacterId, normalizeWeaponId } from '../game/loadoutRules';
-import { CharacterId, GunId, WeaponId } from '../game/types';
+import { CharacterId, GunId, Stance, WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 import {
   CreatePrivateMatchOptions,
@@ -9,6 +9,7 @@ import {
   NetworkDamagedEvent,
   NetworkHitConfirmEvent,
   NetworkKillFeedEvent,
+  NetworkPingEvent,
   RemoteFireEvent,
   RoomLookupSummary,
 } from './types';
@@ -20,6 +21,7 @@ export interface NetworkManagerCallbacks {
   onPlayerDamaged: (event: NetworkDamagedEvent) => void;
   onPlayerRespawn: (pos: { x: number; y: number; z: number; rotY: number }) => void;
   onKillFeed: (event: NetworkKillFeedEvent) => void;
+  onTeamPing?: (event: NetworkPingEvent) => void;
   onSystemNotice: (message: string) => void;
   onDisconnected: (reason: string) => void;
 }
@@ -152,9 +154,10 @@ export class NetworkManager {
     rotY: number,
     pitch: number,
     weaponId: WeaponId,
-    characterId?: CharacterId
+    characterId?: CharacterId,
+    stance?: Stance
   ): void {
-    this.room?.send('player_move', { x, y, z, rotY, pitch, weaponId, characterId });
+    this.room?.send('player_move', { x, y, z, rotY, pitch, weaponId, characterId, stance });
   }
 
   public sendFire(payload: {
@@ -176,6 +179,17 @@ export class NetworkManager {
     }>;
   }): void {
     this.room?.send('player_fire', payload);
+  }
+
+  public sendPing(payload: {
+    id: string;
+    kind: 'location' | 'enemy';
+    x: number;
+    y: number;
+    z: number;
+    targetId?: string;
+  }): void {
+    this.room?.send('place_ping', payload);
   }
 
   public async leaveRoom(): Promise<void> {
@@ -216,6 +230,10 @@ export class NetworkManager {
 
     room.onMessage('kill_feed', (msg: NetworkKillFeedEvent) => {
       this.callbacks.onKillFeed(msg);
+    });
+
+    room.onMessage('team_ping', (msg: NetworkPingEvent) => {
+      this.callbacks.onTeamPing?.(msg);
     });
 
     room.onMessage('system_notice', (msg: { message?: string }) => {
@@ -280,6 +298,10 @@ export class NetworkManager {
         pitch: Number(p.pitch) || 0,
         characterId: normalizeCharacterId(p.characterId, 'assault'),
         weaponId: normalizeWeaponId(p.weaponId, 'ak47'),
+        stance:
+          p.stance === 'crouch' || p.stance === 'slide' || p.stance === 'sprint'
+            ? p.stance
+            : 'stand',
         health: Number(p.health) ?? 100,
         kills: Number(p.kills) || 0,
         deaths: Number(p.deaths) || 0,

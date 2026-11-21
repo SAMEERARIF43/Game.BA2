@@ -1,4 +1,4 @@
-import { CharacterId, GunId, WeaponId } from '../game/types';
+import { CharacterId, GunId, Stance, WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 
 export interface CreatePrivateMatchOptions {
@@ -41,6 +41,7 @@ export interface LobbyPlayerInfo {
   pitch: number;
   characterId: CharacterId;
   weaponId: WeaponId;
+  stance?: Stance;
   health: number;
   kills: number;
   deaths: number;
@@ -103,4 +104,17 @@ export interface NetworkHitConfirmEvent {
   zone: 'head' | 'body';
   killed: boolean;
   damage: number;
+}
+
+export interface NetworkPingEvent {
+  id: string;
+  senderId: string;
+  senderName: string;
+  team: TeamId;
+  kind: 'location' | 'enemy';
+  x: number;
+  y: number;
+  z: number;
+  targetId?: string;
+  durationMs: number;
 }

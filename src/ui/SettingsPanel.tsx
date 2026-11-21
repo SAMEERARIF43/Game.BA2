@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Keyboard, Maximize2, Minimize2, RotateCcw, Volume2, VolumeX } from 'lucide-react';
-import { GameSettings, GraphicsQuality } from '../game/types';
+import {
+  GameSettings,
+  GraphicsQuality,
+  PostSlideStance,
+  SlideTriggerMode,
+} from '../game/types';
 import {
   DEFAULT_KEYBINDINGS,
   formatKeyCode,
@@ -295,6 +300,103 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       >
         {activeTab === 'controls' && (
           <div className="space-y-4">
+            <section
+              aria-label="Slide Settings"
+              className="space-y-2.5 border border-white/12 bg-black/30 p-3"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-display text-[11px] font-bold tracking-wider text-amber-300 uppercase">
+                  Slide Settings
+                </div>
+                <span className="text-[10px] text-slate-400">
+                  Sprint + Crouch to initiate tactical slide
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div className="border border-white/10 bg-black/25 p-2.5">
+                  <div className={LABEL_CLASS}>Slide Trigger</div>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    {(
+                      [
+                        { id: 'tap', label: 'Tap Crouch' },
+                        { id: 'hold', label: 'Hold Crouch' },
+                      ] as { id: SlideTriggerMode; label: string }[]
+                    ).map((opt) => {
+                      const active = (settings.slideTrigger ?? 'tap') === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() =>
+                            onUpdateSettings({ ...settings, slideTrigger: opt.id })
+                          }
+                          className={`cursor-pointer border px-2 py-1.5 text-[11px] font-semibold transition-colors ${FOCUS_CLASS} ${
+                            active
+                              ? 'border-amber-400 bg-amber-400/15 text-amber-200'
+                              : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="border border-white/10 bg-black/25 p-2.5">
+                  <div className={LABEL_CLASS}>Post-Slide Stance</div>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    {(
+                      [
+                        { id: 'stand', label: 'Auto-Stand' },
+                        { id: 'crouch', label: 'Stay Crouched' },
+                      ] as { id: PostSlideStance; label: string }[]
+                    ).map((opt) => {
+                      const active = (settings.postSlideStance ?? 'stand') === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() =>
+                            onUpdateSettings({ ...settings, postSlideStance: opt.id })
+                          }
+                          className={`cursor-pointer border px-2 py-1.5 text-[11px] font-semibold transition-colors ${FOCUS_CLASS} ${
+                            active
+                              ? 'border-amber-400 bg-amber-400/15 text-amber-200'
+                              : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                {renderToggle('Jump Cancels Slide', settings.jumpCancelsSlide ?? true, () =>
+                  onUpdateSettings({
+                    ...settings,
+                    jumpCancelsSlide: !(settings.jumpCancelsSlide ?? true),
+                  })
+                )}
+                {renderSlider(
+                  'Slide Camera Tilt & FOV',
+                  settings.slideCameraIntensity ?? 1.0,
+                  0,
+                  1,
+                  0.05,
+                  `${Math.round((settings.slideCameraIntensity ?? 1.0) * 100)}%`,
+                  (slideCameraIntensity) =>
+                    onUpdateSettings({ ...settings, slideCameraIntensity })
+                )}
+              </div>
+            </section>
+
             <div className="flex flex-wrap items-center justify-between gap-2 border border-white/10 bg-black/30 px-3 py-2">
               <div className="flex items-center gap-2 text-xs text-slate-300">
                 <Keyboard className="h-3.5 w-3.5 text-amber-400" />

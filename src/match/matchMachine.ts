@@ -127,6 +127,7 @@ export const INITIAL_HUD: HudState = {
   killstreakBanner: null,
   scorePopups: [],
   radarBlips: [],
+  pings: [],
   xp: 0,
   sessionXpEarned: 0,
   rankLevel: 1,

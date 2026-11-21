@@ -136,6 +136,9 @@ export function useMatchMachine() {
       onKillFeed: (event) => {
         engineRef.current?.handleNetworkKillFeed(event);
       },
+      onTeamPing: (event) => {
+        engineRef.current?.handleNetworkPing(event);
+      },
       onSystemNotice: (message) => {
         if (!isActiveMultiplayerStatus(stateRef.current.status)) {
           return;
@@ -173,8 +176,11 @@ export function useMatchMachine() {
       onMultiplayerShot: (payload) => {
         networkRef.current?.sendFire(payload);
       },
-      onMultiplayerMove: (x, y, z, rotY, pitch, weaponId, characterId) => {
-        networkRef.current?.sendMove(x, y, z, rotY, pitch, weaponId, characterId);
+      onMultiplayerMove: (x, y, z, rotY, pitch, weaponId, characterId, stance) => {
+        networkRef.current?.sendMove(x, y, z, rotY, pitch, weaponId, characterId, stance);
+      },
+      onMultiplayerPing: (payload) => {
+        networkRef.current?.sendPing(payload);
       },
       onGunPersistedChange: (gunId) => {
         networkRef.current?.selectLoadout(gunId);

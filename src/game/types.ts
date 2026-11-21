@@ -150,6 +150,10 @@ export type HitZone = 'head' | 'body';
 
 export type Stance = 'stand' | 'crouch' | 'sprint' | 'slide';
 
+export type SlideTriggerMode = 'tap' | 'hold';
+
+export type PostSlideStance = 'stand' | 'crouch';
+
 export type MatchPhase = 'menu' | 'playing' | 'paused' | 'ended';
 
 export interface WeaponConfig {
@@ -399,11 +403,32 @@ export interface ScorePopup {
   timestamp: number;
 }
 
+export type PingKind = 'location' | 'enemy';
+
+export interface PingHudMarker {
+  id: string;
+  senderId: string;
+  senderName: string;
+  team: TeamId;
+  kind: PingKind;
+  x: number;
+  y: number;
+  z: number;
+  distanceMeters: number;
+  remainingSec: number;
+  totalSec: number;
+  screenXPct: number;
+  screenYPct: number;
+  onScreen: boolean;
+  targetId?: string;
+}
+
 export interface RadarBlip {
   id: string;
   relX: number;
   relZ: number;
   team: TeamId;
+  pingKind?: PingKind;
 }
 
 export interface KillerBannerInfo {
@@ -457,6 +482,7 @@ export interface HudState {
   killstreakBanner: KillstreakBanner | null;
   scorePopups: ScorePopup[];
   radarBlips: RadarBlip[];
+  pings: PingHudMarker[];
   xp: number;
   sessionXpEarned: number;
   rankLevel: number;
@@ -490,5 +516,9 @@ export interface GameSettings {
   selectedCharacterId: CharacterId;
   selectedGunId: GunId;
   knifeCharmId: KnifeCharmId;
+  slideTrigger: SlideTriggerMode;
+  postSlideStance: PostSlideStance;
+  jumpCancelsSlide: boolean;
+  slideCameraIntensity: number;
   keybindings: KeybindingsConfig;
 }

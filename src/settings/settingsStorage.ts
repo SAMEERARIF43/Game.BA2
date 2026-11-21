@@ -3,13 +3,20 @@ import {
   normalizeGunId,
   normalizeKnifeCharmId,
 } from '../game/loadoutRules';
-import { GameSettings, GraphicsQuality } from '../game/types';
+import {
+  GameSettings,
+  GraphicsQuality,
+  PostSlideStance,
+  SlideTriggerMode,
+} from '../game/types';
 import { DEFAULT_KEYBINDINGS, validateKeybindings } from './keybindings';
 
 export const SETTINGS_STORAGE_KEY = 'strike_force_profile_v1';
 const LEGACY_CALLSIGN_KEY = 'sf_callsign';
 
 const VALID_QUALITY = new Set<GraphicsQuality>(['LOW', 'MEDIUM', 'HIGH']);
+const VALID_SLIDE_TRIGGER = new Set<SlideTriggerMode>(['tap', 'hold']);
+const VALID_POST_SLIDE = new Set<PostSlideStance>(['stand', 'crouch']);
 
 export const DEFAULT_SETTINGS: GameSettings = {
   callsign: 'Operator-101',
@@ -29,6 +36,10 @@ export const DEFAULT_SETTINGS: GameSettings = {
   selectedCharacterId: 'assault',
   selectedGunId: 'ak47',
   knifeCharmId: 'tactical_tag',
+  slideTrigger: 'tap',
+  postSlideStance: 'stand',
+  jumpCancelsSlide: true,
+  slideCameraIntensity: 1.0,
   keybindings: { ...DEFAULT_KEYBINDINGS },
 };
 
@@ -79,6 +90,22 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     ),
     selectedGunId: normalizeGunId(obj.selectedGunId, fallback.selectedGunId ?? 'ak47'),
     knifeCharmId: normalizeKnifeCharmId(obj.knifeCharmId, fallback.knifeCharmId ?? 'tactical_tag'),
+    slideTrigger: VALID_SLIDE_TRIGGER.has(obj.slideTrigger as SlideTriggerMode)
+      ? (obj.slideTrigger as SlideTriggerMode)
+      : (fallback.slideTrigger ?? 'tap'),
+    postSlideStance: VALID_POST_SLIDE.has(obj.postSlideStance as PostSlideStance)
+      ? (obj.postSlideStance as PostSlideStance)
+      : (fallback.postSlideStance ?? 'stand'),
+    jumpCancelsSlide:
+      typeof obj.jumpCancelsSlide === 'boolean'
+        ? obj.jumpCancelsSlide
+        : (fallback.jumpCancelsSlide ?? true),
+    slideCameraIntensity: clampNumber(
+      obj.slideCameraIntensity,
+      0,
+      1,
+      fallback.slideCameraIntensity ?? 1.0
+    ),
     keybindings: validateKeybindings(obj.keybindings, fallback.keybindings ?? DEFAULT_KEYBINDINGS),
   };
 }

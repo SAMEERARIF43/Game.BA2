@@ -13,11 +13,12 @@ import {
   validateKeybindings,
 } from '../settings/keybindings';
 import { AudioEngine } from './AudioEngine';
-import { Stance } from './types';
+import { PostSlideStance, SlideTriggerMode, Stance } from './types';
 
 export interface PlayerInputCallbacks {
   onFirePress: () => void;
   onFireRelease: () => void;
+  onSecondaryPress?: () => void;
   onAdsChange: (isAds: boolean) => void;
   onReload: () => void;
   onSelectSlot: (slot: 1 | 2) => void;
@@ -29,9 +30,12 @@ export interface PlayerInputCallbacks {
   onPointerLockChange: (locked: boolean) => void;
   onFocusLost?: () => void;
   onCycleScopeMagnification?: () => void;
+  onPing?: () => void;
 }
 
 const PLAYER_HALF_HEIGHT = 0.9;
+const PLAYER_CROUCH_HALF_HEIGHT = 0.56;
+const PLAYER_CROUCH_ELLIPSOID_OFFSET_Y = -(PLAYER_HALF_HEIGHT - PLAYER_CROUCH_HALF_HEIGHT);
 const PLAYER_RADIUS = 0.42;
 const STAND_EYE_OFFSET = 0.72;
 const CROUCH_EYE_OFFSET = 0.14;
@@ -45,8 +49,9 @@ const SLIDE_MIN_SPEED = SPRINT_SPEED * 0.62;
 const SLIDE_BURST_SPEED = SPRINT_SPEED * 1.6;
 const SLIDE_END_SPEED = CROUCH_SPEED * 1.15;
 const SLIDE_DURATION_SEC = 0.75;
-const SLIDE_COOLDOWN_SEC = 0.8;
+const SLIDE_COOLDOWN_SEC = 0.6;
 const SLIDE_ROLL_RAD = (5 * Math.PI) / 180;
+const SLIDE_FOV_BOOST_RAD = (5.2 * Math.PI) / 180;
 const JUMP_BUFFER_SEC = 0.12;
 const COYOTE_TIME_SEC = 0.12;
 const ADS_SPEED_MULTIPLIER = 0.65;
@@ -106,7 +111,14 @@ export class PlayerController {
   private slideTimer = 0;
   private slideCooldown = 0;
   private slideJumpCarryTimer = 0;
+  private slideRollDirection = 1;
   private slideDir = new Vector3(0, 0, 1);
+  private slideTrigger: SlideTriggerMode = 'tap';
+  private postSlideStance: PostSlideStance = 'stand';
+  private jumpCancelsSlide = true;
+  private slideCameraIntensity = 1.0;
+  private prevSlideGroundY: number | null = null;
+  private adsEnabled = true;
   private isAds = false;
   private currentEyeOffset = STAND_EYE_OFFSET;
   private currentRoll = 0;
@@ -204,6 +216,8 @@ export class PlayerController {
       this.landDip = 0;
       this.recoilPitch = 0;
       this.recoilYaw = 0;
+      this.prevSlideGroundY = null;
+      this.syncColliderStanceHeight();
       this.callbacks.onFireRelease();
       this.callbacks.onAdsChange(false);
       this.callbacks.onScoreboardChange(false);
@@ -246,6 +260,8 @@ export class PlayerController {
       this.currentRoll = 0;
       this.recoilPitch = 0;
       this.recoilYaw = 0;
+      this.prevSlideGroundY = null;
+      this.syncColliderStanceHeight();
       this.callbacks.onFireRelease();
       this.callbacks.onAdsChange(false);
       this.callbacks.onScoreboardChange(false);
@@ -284,6 +300,8 @@ export class PlayerController {
     this.flinchYaw = 0;
     this.currentEyeOffset = STAND_EYE_OFFSET;
     this.currentRoll = 0;
+    this.prevSlideGroundY = null;
+    this.syncColliderStanceHeight();
     this.callbacks.onFireRelease();
     this.callbacks.onAdsChange(false);
     this.callbacks.onScoreboardChange(false);
@@ -653,6 +671,49 @@ export class PlayerController {
     this.boundCodes = new Set(Object.values(this.keybindings));
   }
 
+  public setAdsEnabled(enabled: boolean): void {
+    this.adsEnabled = enabled;
+    if (!enabled && this.isAds) {
+      this.isAds = false;
+      this.callbacks.onAdsChange(false);
+    }
+  }
+
+  public setSlideSettings(cfg: {
+    slideTrigger?: SlideTriggerMode;
+    postSlideStance?: PostSlideStance;
+    jumpCancelsSlide?: boolean;
+    slideCameraIntensity?: number;
+  }): void {
+    if (cfg.slideTrigger === 'tap' || cfg.slideTrigger === 'hold') {
+      this.slideTrigger = cfg.slideTrigger;
+    }
+    if (cfg.postSlideStance === 'stand' || cfg.postSlideStance === 'crouch') {
+      this.postSlideStance = cfg.postSlideStance;
+    }
+    if (typeof cfg.jumpCancelsSlide === 'boolean') {
+      this.jumpCancelsSlide = cfg.jumpCancelsSlide;
+    }
+    if (typeof cfg.slideCameraIntensity === 'number' && Number.isFinite(cfg.slideCameraIntensity)) {
+      this.slideCameraIntensity = Math.max(0, Math.min(1, cfg.slideCameraIntensity));
+    }
+  }
+
+  public getSlideDebugState() {
+    return {
+      isSliding: this.isSliding,
+      isCrouching: this.isCrouching,
+      slideTimer: this.slideTimer,
+      slideCooldown: this.slideCooldown,
+      colliderHalfHeight: this.collider.ellipsoid.y,
+      colliderEllipsoidOffsetY: this.collider.ellipsoidOffset.y,
+      slideTrigger: this.slideTrigger,
+      postSlideStance: this.postSlideStance,
+      jumpCancelsSlide: this.jumpCancelsSlide,
+      slideCameraIntensity: this.slideCameraIntensity,
+    };
+  }
+
   public addRecoil(pitchKick: number, yawKick: number): void {
     this.recoilPitch += pitchKick;
     this.recoilYaw += yawKick;
@@ -693,11 +754,11 @@ export class PlayerController {
   }
 
   public getIsAds(): boolean {
-    return this.isAds && !this.isDead;
+    return this.adsEnabled && this.isAds && !this.isDead;
   }
 
   public getAdsBlend(): number {
-    if (this.orbitPreviewActive || this.isDead) return 0;
+    if (!this.adsEnabled || this.orbitPreviewActive || this.isDead) return 0;
     const denom = this.baseFovRad * (1 - this.lastAdsFovRatio);
     if (denom < 1e-5) return this.isAds ? 1 : 0;
     return Math.max(0, Math.min(1, (this.baseFovRad - this.currentFovRad) / denom));
@@ -782,24 +843,42 @@ export class PlayerController {
     if (this.isSliding) {
       if (!activeInput) {
         this.endSlide(false);
+      } else if (this.slideTrigger === 'hold' && !this.isCrouchHeld()) {
+        this.endSlide(false);
       } else {
         this.slideTimer -= clampedDt;
+        if (this.isGrounded && this.prevSlideGroundY !== null) {
+          const slopeDeltaY = this.collider.position.y - this.prevSlideGroundY;
+          if (slopeDeltaY < -0.002) {
+            // Downhill extends momentum slightly
+            this.slideTimer = Math.min(
+              SLIDE_DURATION_SEC,
+              this.slideTimer + Math.min(0.025, -slopeDeltaY * 1.6)
+            );
+          } else if (slopeDeltaY > 0.002) {
+            // Uphill applies stronger friction decay
+            this.slideTimer = Math.max(0, this.slideTimer - Math.min(0.035, slopeDeltaY * 2.4));
+          }
+        }
+        this.prevSlideGroundY = this.collider.position.y;
 
-        // Allow jump-cancel mid-slide while preserving forward momentum
-        const wantsJump = activeInput && this.jumpBufferTimer > 0;
+        // Allow optional jump-cancel mid-slide while preserving forward momentum
+        const wantsJump = this.jumpCancelsSlide && activeInput && this.jumpBufferTimer > 0;
         const canJump = this.isGrounded || this.coyoteTimer > 0;
         if (wantsJump && canJump) {
           this.velocity.y = JUMP_VELOCITY;
           this.isGrounded = false;
           this.coyoteTimer = 0;
           this.jumpBufferTimer = 0;
-          this.slideJumpCarryTimer = 0.18;
+          this.slideJumpCarryTimer = 0.22;
           this.audio.playJump();
           this.endSlide(false);
         } else if (this.slideTimer <= 0) {
-          this.endSlide(this.keys.has(this.keybindings.crouchHold));
+          this.endSlide(this.postSlideStance === 'crouch' || this.isCrouchHeld());
         }
       }
+    } else {
+      this.prevSlideGroundY = null;
     }
 
     let sprinting = false;
@@ -829,14 +908,14 @@ export class PlayerController {
         this.isCrouching = true;
       }
 
-      sprinting = this.isSprinting() && !this.isCrouching && !this.isAds && forwardInput > 0;
+      sprinting = this.isSprinting() && !this.isCrouching && !this.getIsAds() && forwardInput > 0;
       let targetSpeed = WALK_SPEED;
       if (this.isCrouching) {
         targetSpeed = CROUCH_SPEED;
       } else if (sprinting) {
         targetSpeed = SPRINT_SPEED;
       }
-      if (this.isAds) {
+      if (this.getIsAds()) {
         targetSpeed *= ADS_SPEED_MULTIPLIER;
       }
       targetSpeed *= this.moveSpeedMultiplier * this.weaponSpeedMultiplier;
@@ -864,11 +943,15 @@ export class PlayerController {
       }
     }
 
+    this.syncColliderStanceHeight();
+
     this.velocity.y += GRAVITY * clampedDt;
 
+    this.collider.computeWorldMatrix(true);
     this.horizontalStep.set(this.velocity.x * clampedDt, 0, this.velocity.z * clampedDt);
     this.collider.moveWithCollisions(this.horizontalStep);
 
+    this.collider.computeWorldMatrix(true);
     const prevY = this.collider.position.y;
     const preImpactVy = this.velocity.y;
     this.verticalStep.set(0, this.velocity.y * clampedDt, 0);
@@ -906,11 +989,13 @@ export class PlayerController {
     this.currentEyeOffset += (targetEye - this.currentEyeOffset) * (1 - Math.exp(-eyeLerpRate * clampedDt));
     this.landDip *= Math.exp(-12 * clampedDt);
 
-    const slideRollDirection = strafeInput === 0 ? 1 : Math.sign(strafeInput);
+    if (strafeInput !== 0 && this.isSliding) {
+      this.slideRollDirection = Math.sign(strafeInput);
+    }
     const targetRoll = this.isDead
       ? 0.28
       : this.isSliding
-        ? SLIDE_ROLL_RAD * slideRollDirection
+        ? SLIDE_ROLL_RAD * this.slideCameraIntensity * this.slideRollDirection
         : 0;
     this.currentRoll += (targetRoll - this.currentRoll) * (1 - Math.exp(-14 * clampedDt));
 
@@ -970,10 +1055,17 @@ export class PlayerController {
     }
 
     this.lastAdsFovRatio = targetAdsFovRatio;
-    const desiredFov =
-      this.isAds && !this.isDead ? this.baseFovRad * targetAdsFovRatio : this.baseFovRad;
+    const effectiveAds = this.getIsAds();
+    let desiredFov = effectiveAds
+      ? this.baseFovRad * targetAdsFovRatio
+      : this.baseFovRad;
+    if (!effectiveAds && this.isSliding && !this.isDead && this.slideCameraIntensity > 0) {
+      const progress = 1 - Math.max(0, this.slideTimer) / SLIDE_DURATION_SEC;
+      const slideBoost = SLIDE_FOV_BOOST_RAD * this.slideCameraIntensity * (1 - progress * 0.45);
+      desiredFov += slideBoost;
+    }
     const zoomDepth = 1 - Math.max(0.08, Math.min(1, targetAdsFovRatio));
-    const fovRate = this.isAds ? 9.5 + zoomDepth * 4.5 : 13.5;
+    const fovRate = effectiveAds ? 9.5 + zoomDepth * 4.5 : 13.5;
     this.currentFovRad += (desiredFov - this.currentFovRad) * (1 - Math.exp(-fovRate * clampedDt));
     this.fovKick *= Math.exp(-18 * clampedDt);
     if (this.fovKick < 0.0001) {
@@ -984,6 +1076,21 @@ export class PlayerController {
     this.syncCameraTransform();
   }
 
+  private isCrouchHeld(): boolean {
+    return (
+      this.keys.has(this.keybindings.crouchHold) ||
+      this.keys.has(this.keybindings.crouchToggle)
+    );
+  }
+
+  private syncColliderStanceHeight(): void {
+    const lowProfile = !this.isDead && (this.isSliding || this.isCrouching);
+    const targetHalfY = lowProfile ? PLAYER_CROUCH_HALF_HEIGHT : PLAYER_HALF_HEIGHT;
+    const targetOffsetY = lowProfile ? PLAYER_CROUCH_ELLIPSOID_OFFSET_Y : 0;
+    this.collider.ellipsoid.y = targetHalfY;
+    this.collider.ellipsoidOffset.y = targetOffsetY;
+  }
+
   private tryStartSlide(): boolean {
     if (
       this.isDead ||
@@ -991,7 +1098,7 @@ export class PlayerController {
       this.isSliding ||
       this.slideCooldown > 0 ||
       this.isCrouching ||
-      this.isAds ||
+      this.getIsAds() ||
       !this.isSprinting() ||
       this.getHorizontalSpeed() < SLIDE_MIN_SPEED
     ) {
@@ -1009,24 +1116,35 @@ export class PlayerController {
     }
 
     this.slideDir.copyFrom(this.forwardDir);
+    this.slideRollDirection = this.keys.has(this.keybindings.moveLeft) ? -1 : 1;
     this.velocity.x = this.forwardDir.x * SLIDE_BURST_SPEED;
     this.velocity.z = this.forwardDir.z * SLIDE_BURST_SPEED;
 
     this.isSliding = true;
     this.slideTimer = SLIDE_DURATION_SEC;
+    this.prevSlideGroundY = this.collider.position.y;
     this.crouchToggled = false;
     this.isCrouching = false;
+    this.syncColliderStanceHeight();
     this.audio.playSlide();
     return true;
   }
 
-  private endSlide(keepCrouchIfHeld: boolean): void {
+  private endSlide(keepCrouch: boolean): void {
     this.isSliding = false;
     this.slideTimer = 0;
+    this.prevSlideGroundY = null;
     this.slideCooldown = SLIDE_COOLDOWN_SEC;
-    if (keepCrouchIfHeld || !this.canStandUp()) {
+    if (keepCrouch || !this.canStandUp()) {
       this.isCrouching = true;
+      if (keepCrouch && !this.keys.has(this.keybindings.crouchHold)) {
+        this.crouchToggled = true;
+      }
+    } else {
+      this.isCrouching = false;
+      this.crouchToggled = false;
     }
+    this.syncColliderStanceHeight();
   }
 
   private isSprintHeld(): boolean {
@@ -1175,6 +1293,8 @@ export class PlayerController {
       this.callbacks.onActivateKillstreak?.(6);
     } else if (e.code === kb.cycleOptic && !e.repeat) {
       this.callbacks.onCycleScopeMagnification?.();
+    } else if (e.code === kb.ping && !e.repeat) {
+      this.callbacks.onPing?.();
     }
   };
 
@@ -1214,9 +1334,15 @@ export class PlayerController {
     if (e.button === 0) {
       this.isFireHeld = true;
       this.callbacks.onFirePress();
+    } else if (e.button === 1) {
+      e.preventDefault();
+      this.callbacks.onPing?.();
     } else if (e.button === 2) {
-      this.isAds = true;
-      this.callbacks.onAdsChange(true);
+      if (this.adsEnabled) {
+        this.isAds = true;
+        this.callbacks.onAdsChange(true);
+      }
+      this.callbacks.onSecondaryPress?.();
     }
   };
 
@@ -1225,8 +1351,10 @@ export class PlayerController {
       this.isFireHeld = false;
       this.callbacks.onFireRelease();
     } else if (e.button === 2) {
-      this.isAds = false;
-      this.callbacks.onAdsChange(false);
+      if (this.isAds) {
+        this.isAds = false;
+        this.callbacks.onAdsChange(false);
+      }
     }
   };
 

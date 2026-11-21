@@ -80,6 +80,7 @@ function clamp(val: number, min: number, max: number): number {
 
 const VALID_CHARACTER_IDS = new Set(['assault', 'vanguard', 'breacher', 'marksman']);
 const VALID_GUN_IDS = new Set(['shotgun', 'ak47', 'smg', 'sniper', 'pistol']);
+const VALID_STANCES = new Set(['stand', 'crouch', 'sprint', 'slide']);
 
 function normalizeCharacterId(raw: unknown): string {
   return typeof raw === 'string' && VALID_CHARACTER_IDS.has(raw) ? raw : 'assault';
@@ -110,10 +111,12 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
   private roomPassword = '';
   private spawnProtectionUntil = new Map<string, number>();
   private lastShotAt = new Map<string, number>();
+  private lastPingAt = new Map<string, number>();
   private equippedGunByPlayer = new Map<string, string>();
   private queuedGunByPlayer = new Map<string, string>();
   private botBrains = new Map<string, BotBrain>();
   private killFeedSeq = 0;
+  private pingSeq = 0;
 
   public onCreate(options: CreateRoomOptions = {}): void {
     const code = generateUniqueRoomCode();
@@ -197,6 +200,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       this.equippedGunByPlayer.delete(client.sessionId);
     }
     this.queuedGunByPlayer.delete(client.sessionId);
+    player.stance = 'stand';
     player.health = 100;
     player.kills = 0;
     player.deaths = 0;
@@ -226,6 +230,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     }
     this.spawnProtectionUntil.delete(client.sessionId);
     this.lastShotAt.delete(client.sessionId);
+    this.lastPingAt.delete(client.sessionId);
     this.equippedGunByPlayer.delete(client.sessionId);
     this.queuedGunByPlayer.delete(client.sessionId);
 
@@ -257,6 +262,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     this.botBrains.clear();
     this.spawnProtectionUntil.clear();
     this.lastShotAt.clear();
+    this.lastPingAt.clear();
     this.equippedGunByPlayer.clear();
     this.queuedGunByPlayer.clear();
   }
@@ -401,6 +407,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
           pitch: number;
           weaponId: string;
           characterId?: string;
+          stance?: string;
         }
       ) => {
         if (this.state.phase !== 'playing') return;
@@ -438,6 +445,9 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         }
         if (typeof payload.characterId === 'string' && VALID_CHARACTER_IDS.has(payload.characterId)) {
           p.characterId = payload.characterId;
+        }
+        if (typeof payload.stance === 'string' && VALID_STANCES.has(payload.stance)) {
+          p.stance = payload.stance;
         }
       }
     );
@@ -537,6 +547,89 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         }
       }
     );
+
+    this.onMessage(
+      'place_ping',
+      (
+        client,
+        payload: {
+          id?: string;
+          kind?: string;
+          x?: number;
+          y?: number;
+          z?: number;
+          targetId?: string;
+        }
+      ) => {
+        if (this.state.phase !== 'playing') return;
+        const sender = this.state.players.get(client.sessionId);
+        if (!sender || !sender.isAlive) return;
+
+        const now = Date.now();
+        const prevPing = this.lastPingAt.get(sender.id) ?? 0;
+        if (now - prevPing < 300) {
+          return;
+        }
+
+        const rawX = Number(payload?.x);
+        const rawY = Number(payload?.y);
+        const rawZ = Number(payload?.z);
+        if (!Number.isFinite(rawX) || !Number.isFinite(rawY) || !Number.isFinite(rawZ)) {
+          return;
+        }
+        this.lastPingAt.set(sender.id, now);
+
+        const clampedX = clamp(rawX, -45, 45);
+        const clampedY = clamp(rawY, -2, 30);
+        const clampedZ = clamp(rawZ, -45, 45);
+
+        let kind: 'location' | 'enemy' = 'location';
+        let resolvedTargetId: string | undefined;
+        let outX = clampedX;
+        let outY = clampedY;
+        let outZ = clampedZ;
+
+        if (payload?.kind === 'enemy' && typeof payload?.targetId === 'string') {
+          const target = this.state.players.get(payload.targetId);
+          if (target && target.isAlive && target.team !== sender.team) {
+            kind = 'enemy';
+            resolvedTargetId = target.id;
+            outX = target.x;
+            outY = target.y;
+            outZ = target.z;
+          }
+        }
+
+        const rawId = typeof payload?.id === 'string' ? payload.id.trim() : '';
+        const safeClientId = /^[A-Za-z0-9_-]{1,64}$/.test(rawId)
+          ? rawId.startsWith(`${sender.id}_`)
+            ? rawId
+            : `${sender.id}_${rawId}`
+          : `${sender.id}_ping_${++this.pingSeq}`;
+
+        const durationMs = kind === 'enemy' ? 6000 : 8000;
+        const pingEvent = {
+          id: safeClientId,
+          senderId: sender.id,
+          senderName: sender.name,
+          team: sender.team === 'red' ? 'red' : 'blue',
+          kind,
+          x: outX,
+          y: outY,
+          z: outZ,
+          targetId: resolvedTargetId,
+          durationMs,
+        };
+
+        // Broadcast strictly to teammates on the sender's team
+        for (const c of this.clients) {
+          const recipient = this.state.players.get(c.sessionId);
+          if (recipient && recipient.team === sender.team) {
+            c.send('team_ping', pingEvent);
+          }
+        }
+      }
+    );
   }
 
   private startMatch(): void {
@@ -548,6 +641,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
 
     this.spawnProtectionUntil.clear();
     this.lastShotAt.clear();
+    this.lastPingAt.clear();
 
     const now = Date.now();
     this.state.players.forEach((p) => {
@@ -556,6 +650,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       p.health = 100;
       p.isAlive = true;
       p.respawnTimer = 0;
+      p.stance = 'stand';
 
       if (!p.isBot) {
         const queued = this.queuedGunByPlayer.get(p.id);
@@ -593,6 +688,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       p.health = 100;
       p.isAlive = true;
       p.respawnTimer = 0;
+      p.stance = 'stand';
       if (!p.isBot) {
         const queued = this.queuedGunByPlayer.get(p.id);
         if (queued && VALID_GUN_IDS.has(queued)) {
@@ -764,6 +860,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     p.health = 100;
     p.isAlive = true;
     p.respawnTimer = 0;
+    p.stance = 'stand';
     this.spawnProtectionUntil.set(p.id, now + 1500);
 
     if (!p.isBot) {
@@ -907,6 +1004,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       const botWeapons = ['ak47', 'smg', 'shotgun', 'sniper'];
       bot.weaponId = botWeapons[i % botWeapons.length];
       bot.characterId = getBotCharacterForWeapon(bot.weaponId);
+      bot.stance = 'stand';
       bot.health = 100;
       bot.kills = 0;
       bot.deaths = 0;

@@ -16,6 +16,7 @@ export const PlayerSchema = schema({
   pitch: t.number(),
   characterId: t.string(),
   weaponId: t.string(),
+  stance: t.string(),
   health: t.number(),
   kills: t.number(),
   deaths: t.number(),

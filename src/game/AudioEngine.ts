@@ -413,6 +413,21 @@ export class AudioEngine {
     this.triggerTone(now + 0.08, 440, 880, 0.28, 'sine', 0.22);
   }
 
+  public playPing(isEnemy: boolean): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    if (isEnemy) {
+      // Sharp two-tone hostile spot alert
+      this.triggerTone(now, 1480, 1760, 0.055, 'triangle', 0.26);
+      this.triggerTone(now + 0.065, 1760, 1320, 0.08, 'sine', 0.24);
+    } else {
+      // Clean tactical waypoint blip
+      this.triggerTone(now, 1040, 1380, 0.065, 'sine', 0.2);
+      this.triggerTone(now + 0.05, 1380, 1560, 0.05, 'triangle', 0.12);
+    }
+  }
+
   private startAmbientLoop(): void {
     if (!this.ctx || !this.musicGain || !this.ambientNoiseBuffer || this.ambientStarted) return;
     this.ambientStarted = true;

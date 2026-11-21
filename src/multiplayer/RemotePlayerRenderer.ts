@@ -22,7 +22,7 @@ import {
   getVfxQualityBudget,
   getWeaponFeelProfile,
 } from '../game/combatVfx';
-import { CharacterId, GraphicsQuality, WeaponId } from '../game/types';
+import { CharacterId, GraphicsQuality, Stance, WeaponId } from '../game/types';
 import { TeamId } from '../maps/types';
 import { LobbyPlayerInfo, RemoteFireEvent } from './types';
 
@@ -52,6 +52,7 @@ interface RemoteAvatar {
   prevPos: Vector3;
   isAlive: boolean;
   weaponId: WeaponId;
+  targetStance: Stance;
   bodyMat: PBRMaterial;
   headMat: PBRMaterial;
 }
@@ -123,6 +124,7 @@ export class RemotePlayerRenderer {
       avatar.targetRotY = p.rotY;
       avatar.targetPitch = Math.max(-0.65, Math.min(0.65, p.pitch));
       avatar.isAlive = p.isAlive;
+      avatar.targetStance = p.stance ?? 'stand';
       avatar.headMesh.isPickable = p.isAlive;
       avatar.bodyMesh.isPickable = p.isAlive;
       avatar.nameplateMesh.isVisible = p.isAlive;
@@ -153,6 +155,19 @@ export class RemotePlayerRenderer {
       });
     }
     return list;
+  }
+
+  public getPlayerTargetPosition(
+    playerId: string
+  ): { x: number; y: number; z: number; isAlive: boolean } | null {
+    const avatar = this.avatars.get(playerId);
+    if (!avatar) return null;
+    return {
+      x: avatar.root.position.x,
+      y: avatar.root.position.y,
+      z: avatar.root.position.z,
+      isAlive: avatar.isAlive,
+    };
   }
 
   public spawnRemoteFire(evt: RemoteFireEvent): void {
@@ -206,15 +221,31 @@ export class RemotePlayerRenderer {
         avatar.legLPivot.rotation.x += (-0.35 - avatar.legLPivot.rotation.x) * Math.min(1, clampedDt * 10);
         avatar.legRPivot.rotation.x += (0.25 - avatar.legRPivot.rotation.x) * Math.min(1, clampedDt * 10);
       } else {
-        avatar.pivot.rotation.x = Math.max(0, avatar.pivot.rotation.x - clampedDt * 12);
+        const stance = avatar.targetStance;
+        const targetPivotY = stance === 'slide' ? -0.42 : stance === 'crouch' ? -0.24 : 0;
+        const targetPivotRotX = stance === 'slide' ? -0.44 : stance === 'crouch' ? 0.08 : 0;
+        const postureLerp = 1 - Math.exp(-14 * clampedDt);
+        avatar.pivot.rotation.x += (targetPivotRotX - avatar.pivot.rotation.x) * postureLerp;
         avatar.pivot.rotation.z *= Math.exp(-12 * clampedDt);
-        avatar.pivot.position.y += (0 - avatar.pivot.position.y) * Math.min(1, clampedDt * 14);
+        avatar.pivot.position.y += (targetPivotY - avatar.pivot.position.y) * postureLerp;
         avatar.upperBodyPivot.rotation.x += (avatar.targetPitch - avatar.upperBodyPivot.rotation.x) * rotBlend;
 
         const moveSpeed =
           Math.hypot(avatar.root.position.x - avatar.prevPos.x, avatar.root.position.z - avatar.prevPos.z) /
           Math.max(0.001, clampedDt);
-        if (moveSpeed > 0.35) {
+
+        if (stance === 'slide') {
+          const slideLerp = 1 - Math.exp(-16 * clampedDt);
+          avatar.legLPivot.rotation.x += (-1.05 - avatar.legLPivot.rotation.x) * slideLerp;
+          avatar.legRPivot.rotation.x += (0.72 - avatar.legRPivot.rotation.x) * slideLerp;
+          avatar.upperBodyPivot.position.y += (0.76 - avatar.upperBodyPivot.position.y) * slideLerp;
+        } else if (stance === 'crouch') {
+          const crouchLerp = 1 - Math.exp(-12 * clampedDt);
+          const crouchWalk = moveSpeed > 0.25 ? Math.sin((avatar.walkPhase += clampedDt * 8)) * 0.24 : 0;
+          avatar.legLPivot.rotation.x += (-0.52 + crouchWalk - avatar.legLPivot.rotation.x) * crouchLerp;
+          avatar.legRPivot.rotation.x += (0.42 - crouchWalk - avatar.legRPivot.rotation.x) * crouchLerp;
+          avatar.upperBodyPivot.position.y += (0.78 - avatar.upperBodyPivot.position.y) * crouchLerp;
+        } else if (moveSpeed > 0.35) {
           avatar.walkPhase += clampedDt * Math.min(14, moveSpeed * 2.15);
           const swing = Math.sin(avatar.walkPhase) * Math.min(0.62, moveSpeed * 0.12);
           avatar.legLPivot.rotation.x = swing;
@@ -335,6 +366,7 @@ export class RemotePlayerRenderer {
       prevPos: new Vector3(p.x, p.y, p.z),
       isAlive: p.isAlive,
       weaponId: p.weaponId,
+      targetStance: p.stance ?? 'stand',
       bodyMat: rig.bodyMat,
       headMat: rig.headMat,
     };

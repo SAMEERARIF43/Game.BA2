@@ -15,6 +15,7 @@ export type KeybindAction =
   | 'streakUav'
   | 'streakBarrage'
   | 'streakOverdrive'
+  | 'ping'
   | 'scoreboard';
 
 export type KeybindCategory = 'movement' | 'weapons' | 'abilities';
@@ -45,6 +46,7 @@ export const DEFAULT_KEYBINDINGS: KeybindingsConfig = {
   streakUav: 'F1',
   streakBarrage: 'F2',
   streakOverdrive: 'F3',
+  ping: 'KeyZ',
   scoreboard: 'Tab',
 };
 
@@ -70,6 +72,7 @@ export const KEYBIND_DEFINITIONS: readonly KeybindDefinition[] = [
   { action: 'streakUav', category: 'abilities', label: 'UAV Sweep (3 Kills)', description: 'Reveal enemy radar pings' },
   { action: 'streakBarrage', category: 'abilities', label: 'Precision Barrage (5 Kills)', description: 'Call artillery strike on aim point' },
   { action: 'streakOverdrive', category: 'abilities', label: 'Tactical Overdrive (7 Kills)', description: 'Boost speed, reload & armor regen' },
+  { action: 'ping', category: 'abilities', label: 'Tactical Ping', description: 'Mark a location or enemy for teammates (also Middle Mouse)' },
   { action: 'scoreboard', category: 'abilities', label: 'Scoreboard', description: 'Hold to inspect match stats' },
 ];
 

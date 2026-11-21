@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { Crosshair, MapPin, X } from 'lucide-react';
 import { GUN_IDS, GunId, HudState, KNIFE_CHARMS, WEAPONS } from '../game/types';
 import {
   DEFAULT_KEYBINDINGS,
@@ -242,6 +242,48 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             boxShadow: 'inset 0 0 140px 48px rgba(239, 68, 68, 0.42)',
           }}
         />
+      )}
+
+      {/* Projected Teammate Tactical Ping Markers (synchronized with 3D world icons) */}
+      {hud.match.phase === 'playing' && !hud.showScoreboard && hud.pings.length > 0 && (
+        <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
+          {hud.pings.map((ping) => {
+            const isEnemy = ping.kind === 'enemy';
+            const fade = Math.min(1, Math.max(0.25, ping.remainingSec / 1.1));
+            return (
+              <div
+                key={ping.id}
+                className="absolute -translate-x-1/2 -translate-y-1/2"
+                style={{
+                  left: `${ping.screenXPct}%`,
+                  top: `${ping.screenYPct}%`,
+                  opacity: fade,
+                }}
+              >
+                <div className="flex flex-col items-center gap-0.5">
+                  <div
+                    className={`flex items-center gap-1 border px-1.5 py-0.5 font-mono-tabular text-[10px] font-bold shadow-md shadow-black/40 backdrop-blur-sm ${
+                      isEnemy
+                        ? 'border-red-400/75 bg-red-950/85 text-red-200'
+                        : 'border-sky-400/75 bg-slate-950/85 text-sky-200'
+                    } ${!ping.onScreen ? 'ring-1 ring-white/30' : ''}`}
+                  >
+                    {isEnemy ? (
+                      <Crosshair className="h-3 w-3 shrink-0 text-red-400" />
+                    ) : (
+                      <MapPin className="h-3 w-3 shrink-0 text-sky-400" />
+                    )}
+                    <span>{isEnemy ? 'HOSTILE' : 'PING'}</span>
+                    <span className="text-white/90">{ping.distanceMeters}m</span>
+                  </div>
+                  <span className="max-w-24 truncate bg-black/55 px-1 font-mono-tabular text-[9px] text-slate-300">
+                    {ping.senderName}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {/* Directional Damage Indicator Arcs */}
@@ -682,6 +724,18 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               {hud.radarBlips.map((b) => {
                 const px = b.relX * 52;
                 const py = -b.relZ * 52;
+                if (b.pingKind) {
+                  const isEnemyPing = b.pingKind === 'enemy';
+                  return (
+                    <polygon
+                      key={b.id}
+                      points={`${px},${py - 4.5} ${px + 4.5},${py} ${px},${py + 4.5} ${px - 4.5},${py}`}
+                      fill={isEnemyPing ? '#f87171' : '#38bdf8'}
+                      stroke="#090d13"
+                      strokeWidth="1"
+                    />
+                  );
+                }
                 const isFriend = b.team === localTeam;
                 return (
                   <circle
@@ -908,13 +962,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-5">
               {[
                 {
                   key: `${formatKeyCode(keybindings.slotGun)} / ${formatKeyCode(keybindings.slotKnife)}`,
                   label: 'Gun & Knife',
                 },
                 { key: formatKeyCode(keybindings.quickMelee), label: 'Quick Knife' },
+                {
+                  key: `${formatKeyCode(keybindings.ping)} / MMB`,
+                  label: 'Team Ping',
+                },
                 {
                   key: `${formatKeyCode(keybindings.sprint)}+${formatKeyCode(keybindings.crouchToggle)}`,
                   label: 'Slide',
