@@ -1,4 +1,5 @@
 import { Client, Room } from '@colyseus/sdk';
+import { normalizeWeaponId } from '../game/loadoutRules';
 import { WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 import {
@@ -153,6 +154,13 @@ export class NetworkManager {
     weaponId: WeaponId;
     targetId?: string;
     zone?: 'head' | 'body';
+    pellets?: Array<{
+      endX: number;
+      endY: number;
+      endZ: number;
+      targetId?: string;
+      zone?: 'head' | 'body';
+    }>;
   }): void {
     this.room?.send('player_fire', payload);
   }
@@ -257,7 +265,7 @@ export class NetworkManager {
         z: Number(p.z) || 0,
         rotY: Number(p.rotY) || 0,
         pitch: Number(p.pitch) || 0,
-        weaponId: (p.weaponId === 'mp5' || p.weaponId === 'm1911' ? p.weaponId : 'm4a1') as WeaponId,
+        weaponId: normalizeWeaponId(p.weaponId, 'ak47'),
         health: Number(p.health) ?? 100,
         kills: Number(p.kills) || 0,
         deaths: Number(p.deaths) || 0,

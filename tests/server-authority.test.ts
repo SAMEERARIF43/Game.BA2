@@ -7,7 +7,7 @@ import {
   type AuthoritativePlayerState,
 } from '../server/hitValidation.ts';
 import { SERVER_WEAPONS } from '../server/mapSpawns.ts';
-import { WEAPONS, type WeaponId } from '../src/game/types.ts';
+import { WEAPON_IDS, WEAPONS, type WeaponId } from '../src/game/types.ts';
 
 test('Production Logic: Coordinate Validation', async (t) => {
   await t.test('Validates normal numbers as true', () => {
@@ -68,7 +68,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         claimedZone: 'head', // Malicious or mistaken client claims headshot
         endX: target.x,
@@ -83,8 +83,8 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
     assert.strictEqual(result.verifiedZone, 'body', 'Server must classify hit as body');
     assert.strictEqual(
       result.damage,
-      28,
-      'Damage must be base weapon damage (28), NOT headshot multiplier (56)'
+      34,
+      'Damage must be base weapon damage (34), NOT headshot multiplier (68)'
     );
   });
 
@@ -97,7 +97,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         claimedZone: 'body', // Client claims body (or omitted)
         endX: target.x,
@@ -112,21 +112,23 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
     assert.strictEqual(result.verifiedZone, 'head', 'Server must authoritatively upgrade to head');
     assert.strictEqual(
       result.damage,
-      56, // 28 * 2.0
-      'Damage must apply full headshot multiplier (56), ignoring client body claim'
+      68, // 34 * 2.0
+      'Damage must apply full headshot multiplier (68), ignoring client body claim'
     );
   });
 
   await t.test('SCENARIO 3: Valid server-confirmed headshot -> Correct multiplier for all weapons', () => {
-    const weaponsToTest: { id: WeaponId; baseDmg: number; multiplier: number; expectedDmg: number }[] = [
-      { id: 'm4a1', baseDmg: 28, multiplier: 2.0, expectedDmg: 56 },
-      { id: 'mp5', baseDmg: 24, multiplier: 1.85, expectedDmg: 44 }, // Math.round(24 * 1.85) = 44
-      { id: 'intervention', baseDmg: 110, multiplier: 2.5, expectedDmg: 275 },
-      { id: 'm1911', baseDmg: 36, multiplier: 2.2, expectedDmg: 79 }, // Math.round(36 * 2.2) = 79
+    const weaponsToTest: { id: WeaponId; baseDmg: number; multiplier: number; expectedDmg: number; targetZ: number }[] = [
+      { id: 'shotgun', baseDmg: 16, multiplier: 1.5, expectedDmg: 24, targetZ: 20 },
+      { id: 'ak47', baseDmg: 34, multiplier: 2.0, expectedDmg: 68, targetZ: 20 },
+      { id: 'smg', baseDmg: 21, multiplier: 1.85, expectedDmg: 39, targetZ: 20 }, // Math.round(21 * 1.85) = 39
+      { id: 'sniper', baseDmg: 115, multiplier: 2.5, expectedDmg: 288, targetZ: 20 }, // Math.round(115 * 2.5) = 288
+      { id: 'pistol', baseDmg: 38, multiplier: 2.2, expectedDmg: 84, targetZ: 20 }, // Math.round(38 * 2.2) = 84
+      { id: 'knife', baseDmg: 75, multiplier: 1.6, expectedDmg: 120, targetZ: 2 },
     ];
 
     for (const w of weaponsToTest) {
-      const target = { ...baseTarget };
+      const target = { ...baseTarget, z: w.targetZ };
       const headHitY = target.y + 1.70;
 
       const result = validateAuthoritativeHit(
@@ -143,7 +145,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
         defaultContext
       );
 
-      assert.strictEqual(result.accepted, true);
+      assert.strictEqual(result.accepted, true, `Weapon ${w.id} headshot should be accepted`);
       assert.strictEqual(result.isHeadshot, true);
       assert.strictEqual(result.verifiedZone, 'head');
       assert.strictEqual(
@@ -160,7 +162,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         claimedZone: 'head',
         // endX, endY, endZ missing
@@ -180,7 +182,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: NaN,
         endY: 1.70,
@@ -195,7 +197,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: 0,
         endY: Infinity,
@@ -210,7 +212,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: 0,
         endY: 1.70,
@@ -223,7 +225,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
   });
 
   await t.test('SCENARIO 6: Out-of-range hit -> Rejected', () => {
-    // MP5 range is 90m (max allowed 96m)
+    // SMG range is 125m (max allowed 131m)
     const farTarget: AuthoritativePlayerState = {
       ...baseTarget,
       z: 150, // 150m away
@@ -233,7 +235,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       farTarget,
       {
-        weaponId: 'mp5',
+        weaponId: 'smg',
         targetId: farTarget.id,
         endX: farTarget.x,
         endY: farTarget.y + 1.16,
@@ -253,7 +255,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       null,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: 'ghost_id',
         endX: 0,
         endY: 1.2,
@@ -273,7 +275,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       deadTarget,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: deadTarget.id,
         endX: deadTarget.x,
         endY: deadTarget.y + 1.2,
@@ -289,7 +291,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       baseShooter,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: baseShooter.id,
         endX: baseShooter.x,
         endY: baseShooter.y + 1.2,
@@ -311,7 +313,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       allyTarget,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: allyTarget.id,
         endX: allyTarget.x,
         endY: allyTarget.y + 1.16,
@@ -327,7 +329,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       allyTarget,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: allyTarget.id,
         endX: allyTarget.x,
         endY: allyTarget.y + 1.16,
@@ -336,7 +338,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       { ...defaultContext, friendlyFire: true }
     );
     assert.strictEqual(allowed.accepted, true);
-    assert.strictEqual(allowed.damage, 28);
+    assert.strictEqual(allowed.damage, 34);
   });
 
   await t.test('SCENARIO 9: Spawn-protected target -> Rejected', () => {
@@ -351,7 +353,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'intervention',
+        weaponId: 'sniper',
         targetId: target.id,
         claimedZone: 'head',
         endX: target.x,
@@ -368,19 +370,19 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
 
   await t.test('SCENARIO 10: Fire-rate violation -> Rejected', () => {
     const target = { ...baseTarget };
-    // Intervention fire interval is 833ms (min interval * 0.72 = 599.76ms)
+    // Sniper minFireIntervalMs is 850ms (min interval * 0.72 = 612ms)
     const rofContext = {
       ...defaultContext,
       checkRateOfFire: true,
       lastShotTime: 10000,
-      currentTime: 10250, // 250ms later < 600ms threshold
+      currentTime: 10250, // 250ms later < 612ms threshold
     };
 
     const result = validateAuthoritativeHit(
       baseShooter,
       target,
       {
-        weaponId: 'intervention',
+        weaponId: 'sniper',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.16,
@@ -395,13 +397,13 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
     // Paced shot after interval passes
     const validPacedContext = {
       ...rofContext,
-      currentTime: 10700, // 700ms later > 600ms threshold
+      currentTime: 10700, // 700ms later > 612ms threshold
     };
     const validResult = validateAuthoritativeHit(
       baseShooter,
       target,
       {
-        weaponId: 'intervention',
+        weaponId: 'sniper',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.16,
@@ -410,11 +412,11 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       validPacedContext
     );
     assert.strictEqual(validResult.accepted, true);
-    assert.strictEqual(validResult.damage, 110);
+    assert.strictEqual(validResult.damage, 115);
   });
 
-  await t.test('SCENARIO 11: Intervention, M4A1, MP5, and M1911 damage remain synchronized', () => {
-    const weaponIds: WeaponId[] = ['m4a1', 'mp5', 'intervention', 'm1911'];
+  await t.test('SCENARIO 11: All 5 guns and knife damage remain synchronized', () => {
+    const weaponIds: readonly WeaponId[] = WEAPON_IDS;
     for (const wid of weaponIds) {
       assert.strictEqual(
         SERVER_WEAPONS[wid].damage,
@@ -456,7 +458,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       targetPitchDown,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: targetPitchDown.id,
         endX: targetPitchDown.x,
         endY: expectedPitchedHeadY,
@@ -466,7 +468,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
     );
     assert.strictEqual(hitPitchedHead.accepted, true);
     assert.strictEqual(hitPitchedHead.isHeadshot, true, 'Pitched head hit must be verified as headshot');
-    assert.strictEqual(hitPitchedHead.damage, 56);
+    assert.strictEqual(hitPitchedHead.damage, 68);
 
     // Hit at the OLD standing head position (y = 1.70, z = 20.0) where the player's head used to be
     // Distance from pitched head center is hypot(0, 1.70 - 1.59, 20.0 - 19.5685) = hypot(0.11, 0.43) = 0.44m > 0.38m
@@ -474,7 +476,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       targetPitchDown,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: targetPitchDown.id,
         claimedZone: 'head', // Client claims headshot on phantom upright head position
         endX: targetPitchDown.x,
@@ -498,7 +500,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x + 1.60,
         endY: target.y + 1.20,
@@ -514,7 +516,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 2.50,
@@ -530,7 +532,7 @@ test('Server Authority: Hit-Zone Security & Anti-Cheat Scenarios', async (t) => 
       baseShooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x,
         endY: target.y - 0.50,
@@ -609,25 +611,25 @@ test('VULN-3: Server muzzle derivation — client muzzle coordinates are ignored
   const target  = mkTarget({ x: 8, y: 0, z: 15 });
 
   await t.test('Fabricated muzzle at weapon range boundary cannot extend shot range beyond weapon.range+6', () => {
-    // Client claims muzzle at z = 90 (near weapon.range = 90m) to reach a target at z = 180m
-    // The target is 180m from shooter — far beyond mp5 range (96m with +6 margin).
+    // Client claims muzzle at z = 125 (near weapon.range = 125m) to reach a target at z = 180m
+    // The target is 180m from shooter — far beyond smg range (131m with +6 margin).
     const farTarget = mkTarget({ x: 8, z: 180 });
     const result = validateAuthoritativeHit(
       shooter,
       farTarget,
       {
-        weaponId: 'mp5',
+        weaponId: 'smg',
         targetId: farTarget.id,
         muzzleX: 0,
         muzzleY: 0,
-        muzzleZ: 90,  // fabricated muzzle — server must ignore this
+        muzzleZ: 125,  // fabricated muzzle — server must ignore this
         endX: farTarget.x,
         endY: farTarget.y + 1.25,
         endZ: farTarget.z,
       },
       mkCtx({ shooterRotY: 0, shooterPitch: 0 })
     );
-    // Server measures from shooter (0,0,0) → target (0,0,180) = 180m > 96m: rejected
+    // Server measures from shooter (8,0,0) -> target (8,0,180) = 180m > 131m: rejected
     assert.strictEqual(result.accepted, false, 'Fabricated muzzle must not allow out-of-range shots');
     assert.ok(
       result.reason === 'OUT_OF_WEAPON_RANGE' || result.reason === 'MUZZLE_TO_HIT_RANGE_EXCEEDED',
@@ -640,7 +642,7 @@ test('VULN-3: Server muzzle derivation — client muzzle coordinates are ignored
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         muzzleX: 8.1, // plausible near shooter x=8
         muzzleY: 1.3,
@@ -650,7 +652,7 @@ test('VULN-3: Server muzzle derivation — client muzzle coordinates are ignored
       mkCtx({ shooterRotY: 0, shooterPitch: 0 })
     );
     assert.strictEqual(result.accepted, true, 'Valid in-range shot must be accepted');
-    assert.strictEqual(result.damage, 28);
+    assert.strictEqual(result.damage, 34);
   });
 
   await t.test('HITBOX constants expose correct server muzzle Y offsets', () => {
@@ -671,7 +673,7 @@ test('VULN-2: Firing-direction validation', async (t) => {
   await t.test('Shot in forward direction (0°) accepted', () => {
     const result = validateAuthoritativeHit(
       shooter, target,
-      { weaponId: 'm4a1', targetId: target.id, ...bodyHit(target) },
+      { weaponId: 'ak47', targetId: target.id, ...bodyHit(target) },
       ctx
     );
     assert.strictEqual(result.accepted, true);
@@ -682,7 +684,7 @@ test('VULN-2: Firing-direction validation', async (t) => {
     const sideTarget = mkTarget({ x: 8.1, y: 0, z: -5 });
     const result = validateAuthoritativeHit(
       shooter, sideTarget,
-      { weaponId: 'm4a1', targetId: sideTarget.id, ...bodyHit(sideTarget) },
+      { weaponId: 'ak47', targetId: sideTarget.id, ...bodyHit(sideTarget) },
       ctx
     );
     assert.strictEqual(result.accepted, true, '29° within 30° tolerance must be accepted');
@@ -693,7 +695,7 @@ test('VULN-2: Firing-direction validation', async (t) => {
     const sideTarget = mkTarget({ x: 9.3, y: 0, z: -5 });
     const result = validateAuthoritativeHit(
       shooter, sideTarget,
-      { weaponId: 'm4a1', targetId: sideTarget.id, ...bodyHit(sideTarget) },
+      { weaponId: 'ak47', targetId: sideTarget.id, ...bodyHit(sideTarget) },
       ctx
     );
     assert.strictEqual(result.accepted, false, '31° beyond 30° tolerance must be rejected');
@@ -705,7 +707,7 @@ test('VULN-2: Firing-direction validation', async (t) => {
     const behindTarget = mkTarget({ x: 0, y: 0, z: -35 });
     const result = validateAuthoritativeHit(
       shooter, behindTarget,
-      { weaponId: 'm4a1', targetId: behindTarget.id, ...bodyHit(behindTarget) },
+      { weaponId: 'ak47', targetId: behindTarget.id, ...bodyHit(behindTarget) },
       ctx
     );
     assert.strictEqual(result.accepted, false, 'Backward shot must be rejected');
@@ -716,7 +718,7 @@ test('VULN-2: Firing-direction validation', async (t) => {
     const nanCtx = mkCtx({ mapId: 'desert', shooterRotY: NaN, shooterPitch: Infinity });
     const result = validateAuthoritativeHit(
       shooter, target,
-      { weaponId: 'm4a1', targetId: target.id, ...bodyHit(target) },
+      { weaponId: 'ak47', targetId: target.id, ...bodyHit(target) },
       nanCtx
     );
     assert.strictEqual(result.accepted, true, 'NaN orientation must default to 0, allowing valid forward shot');
@@ -726,7 +728,7 @@ test('VULN-2: Firing-direction validation', async (t) => {
     const behindTarget = mkTarget({ x: 0, y: 0, z: -35 });
     const result = validateAuthoritativeHit(
       shooter, behindTarget,
-      { weaponId: 'm4a1', targetId: behindTarget.id, ...bodyHit(behindTarget) },
+      { weaponId: 'ak47', targetId: behindTarget.id, ...bodyHit(behindTarget) },
       mkCtx({ mapId: 'desert', isBotShooter: true })
     );
     assert.notEqual(result.reason, 'FIRING_DIRECTION_INVALID', 'Bot shooter must skip direction check');
@@ -793,7 +795,7 @@ test('VULN-1: Server-side occlusion checks (hasLineOfSight)', async (t) => {
     const target  = mkTarget({ x: -20, y: 0, z: 2.8 });
     const result = validateAuthoritativeHit(
       shooter, target,
-      { weaponId: 'm4a1', targetId: target.id, ...bodyHit(target) },
+      { weaponId: 'ak47', targetId: target.id, ...bodyHit(target) },
       mkCtx({ mapId: 'urban', shooterRotY: -Math.PI / 2, shooterPitch: 0 })
     );
     assert.strictEqual(result.accepted, false, 'Shot through urban building wall must be rejected by LOS check');
@@ -814,7 +816,7 @@ test('VULN-4: Bot combat — server-supplied coordinates bypass client checks', 
     const result = validateAuthoritativeHit(
       bot, target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -825,14 +827,14 @@ test('VULN-4: Bot combat — server-supplied coordinates bypass client checks', 
     );
     assert.strictEqual(result.accepted, true, 'Bot body shot must be accepted');
     assert.strictEqual(result.verifiedZone, 'body');
-    assert.strictEqual(result.damage, 28);
+    assert.strictEqual(result.damage, 34);
   });
 
   await t.test('Bot head shot accepted with server-computed head coordinates', () => {
     const result = validateAuthoritativeHit(
       bot, target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.70,
@@ -842,14 +844,14 @@ test('VULN-4: Bot combat — server-supplied coordinates bypass client checks', 
     );
     assert.strictEqual(result.accepted, true, 'Bot head shot must be accepted');
     assert.strictEqual(result.isHeadshot, true);
-    assert.strictEqual(result.damage, 56); // 28 * 2.0
+    assert.strictEqual(result.damage, 68); // 34 * 2.0
   });
 
   await t.test('Bot respects weapon fire rate even with isBotShooter=true', () => {
     const result = validateAuthoritativeHit(
       bot, target,
       {
-        weaponId: 'intervention',
+        weaponId: 'sniper',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -865,7 +867,7 @@ test('VULN-4: Bot combat — server-supplied coordinates bypass client checks', 
     const result = validateAuthoritativeHit(
       bot, target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -883,7 +885,7 @@ test('VULN-4: Bot combat — server-supplied coordinates bypass client checks', 
     const result = validateAuthoritativeHit(
       bot, farTarget,
       {
-        weaponId: 'm1911',
+        weaponId: 'pistol',
         targetId: farTarget.id,
         endX: farTarget.x,
         endY: farTarget.y + 1.25,
@@ -901,7 +903,7 @@ test('VULN-4: Bot combat — server-supplied coordinates bypass client checks', 
     const result = validateAuthoritativeHit(
       bot, target,
       {
-        weaponId: 'mp5',
+        weaponId: 'smg',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -910,7 +912,7 @@ test('VULN-4: Bot combat — server-supplied coordinates bypass client checks', 
       botCtx
     );
     assert.strictEqual(result.accepted, true);
-    assert.strictEqual(result.damage, SERVER_WEAPONS['mp5'].damage);
+    assert.strictEqual(result.damage, SERVER_WEAPONS['smg'].damage);
   });
 });
 
@@ -925,7 +927,7 @@ test('VULN-5: Rotation hardening — extreme yaw and pitch inputs sanitised', as
     // 1000π = 500 full rotations → equivalent to 0 (forward = +Z)
     const result = validateAuthoritativeHit(
       shooter, target,
-      { weaponId: 'm4a1', targetId: target.id, ...bodyHit(target) },
+      { weaponId: 'ak47', targetId: target.id, ...bodyHit(target) },
       mkCtx({ mapId: 'urban', shooterRotY: 1000 * Math.PI, shooterPitch: 0 })
     );
     // 1000π mod 2π = 0 → forward → target at z=15 is ahead → accepted
@@ -936,7 +938,7 @@ test('VULN-5: Rotation hardening — extreme yaw and pitch inputs sanitised', as
     // Shooter with extreme downward pitch tries to hit target at z=15 body centre
     const result = validateAuthoritativeHit(
       shooter, target,
-      { weaponId: 'm4a1', targetId: target.id, ...bodyHit(target) },
+      { weaponId: 'ak47', targetId: target.id, ...bodyHit(target) },
       mkCtx({ mapId: 'urban', shooterRotY: 0, shooterPitch: 2.5 })  // will be clamped to 1.48
     );
     // Clamped pitch=1.48 (sharp downward) may cause direction check to fail for z=15 target.
@@ -954,7 +956,7 @@ test('VULN-5: Rotation hardening — extreme yaw and pitch inputs sanitised', as
     const result = validateAuthoritativeHit(
       shooter, pitchedTarget,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: pitchedTarget.id,
         endX: pitchedTarget.x,
         endY: expectedHeadY,
@@ -970,7 +972,7 @@ test('VULN-5: Rotation hardening — extreme yaw and pitch inputs sanitised', as
     const behindTarget = mkTarget({ x: 8, z: -15 });
     const result = validateAuthoritativeHit(
       shooter, behindTarget,
-      { weaponId: 'm4a1', targetId: behindTarget.id, ...bodyHit(behindTarget) },
+      { weaponId: 'ak47', targetId: behindTarget.id, ...bodyHit(behindTarget) },
       mkCtx({ mapId: 'urban', shooterRotY: NaN, shooterPitch: 0 })
     );
     // NaN rotY → defaults to 0 (forward=+Z). Target at z=-15 is 180° behind → rejected.
@@ -981,7 +983,7 @@ test('VULN-5: Rotation hardening — extreme yaw and pitch inputs sanitised', as
   await t.test('Infinity pitch in context defaults to 0', () => {
     const result = validateAuthoritativeHit(
       shooter, target,
-      { weaponId: 'm4a1', targetId: target.id, ...bodyHit(target) },
+      { weaponId: 'ak47', targetId: target.id, ...bodyHit(target) },
       mkCtx({ mapId: 'urban', shooterRotY: 0, shooterPitch: Infinity })
     );
     // Infinity pitch → defaults to 0. Target is ahead at z=15 → accepted.

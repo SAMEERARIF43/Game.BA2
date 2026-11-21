@@ -158,7 +158,7 @@ export function validateAuthoritativeHit(
   payload: HitValidationPayload,
   context: HitValidationContext
 ): HitValidationResult {
-  const weapon = SERVER_WEAPONS[payload.weaponId] ?? SERVER_WEAPONS.m4a1;
+  const weapon = SERVER_WEAPONS[payload.weaponId] ?? SERVER_WEAPONS.ak47;
   const isBotShooter = context.isBotShooter === true;
 
   // 1. Validate coordinates: reject undefined, NaN, Infinity, non-numbers

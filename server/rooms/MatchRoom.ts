@@ -161,7 +161,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     player.ready = isFirstHuman;
     player.isAlive = true;
     player.respawnTimer = 0;
-    player.weaponId = 'm4a1';
+    player.weaponId = 'ak47';
     player.health = 100;
     player.kills = 0;
     player.deaths = 0;
@@ -364,13 +364,20 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
           weaponId: string;
           targetId?: string;
           zone?: 'head' | 'body';
+          pellets?: Array<{
+            endX: number;
+            endY: number;
+            endZ: number;
+            targetId?: string;
+            zone?: 'head' | 'body';
+          }>;
         }
       ) => {
         if (this.state.phase !== 'playing') return;
         const shooter = this.state.players.get(client.sessionId);
         if (!shooter || !shooter.isAlive) return;
 
-        const weapon = SERVER_WEAPONS[payload.weaponId] ?? SERVER_WEAPONS.m4a1;
+        const weapon = SERVER_WEAPONS[payload.weaponId] ?? SERVER_WEAPONS.ak47;
         const now = Date.now();
         const prevShot = this.lastShotAt.get(shooter.id) ?? 0;
         if (now - prevShot < weapon.minFireIntervalMs * 0.72) {
@@ -395,7 +402,27 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         );
 
         // Server-side hit validation & damage calculation
-        if (payload.targetId) {
+        if (Array.isArray(payload.pellets) && payload.pellets.length > 0 && (weapon.pellets ?? 1) > 1) {
+          const maxPellets = Math.min(payload.pellets.length, weapon.pellets ?? 8);
+          for (let i = 0; i < maxPellets; i++) {
+            const pellet = payload.pellets[i];
+            if (!pellet?.targetId) continue;
+            const target = this.state.players.get(pellet.targetId);
+            if (!target || !target.isAlive) continue;
+            this.applyAuthoritativeHit(
+              shooter,
+              pellet.targetId,
+              weapon.id,
+              pellet.zone,
+              pellet.endX,
+              pellet.endY,
+              pellet.endZ,
+              payload.muzzleX,
+              payload.muzzleY,
+              payload.muzzleZ
+            );
+          }
+        } else if (payload.targetId) {
           this.applyAuthoritativeHit(
             shooter,
             payload.targetId,
@@ -755,7 +782,8 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       bot.ready = true;
       bot.isAlive = true;
       bot.respawnTimer = 0;
-      bot.weaponId = i % 3 === 0 ? 'mp5' : 'm4a1';
+      const botWeapons = ['ak47', 'smg', 'shotgun'];
+      bot.weaponId = botWeapons[i % botWeapons.length];
       bot.health = 100;
       bot.kills = 0;
       bot.deaths = 0;

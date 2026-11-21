@@ -32,17 +32,28 @@ import {
   loadProgression,
 } from '../settings/progressionStorage';
 import { AudioEngine } from './AudioEngine';
+import {
+  GUN_LOCKED_WHILE_ALIVE_MESSAGE,
+  applyGunSelection,
+  canSwitchGunImmediately,
+  normalizeGunId,
+  normalizeKnifeCharmId,
+} from './loadoutRules';
 import { PlayerController } from './PlayerController';
 import {
   DamageIndicator,
+  GUN_IDS,
   GameSettings,
   GraphicsQuality,
+  GunId,
   HudState,
   KillFeedEntry,
   KillerBannerInfo,
   KillstreakBanner,
   KillstreakId,
   KillstreakSlotState,
+  KnifeCharmId,
+  MatchPhase,
   MatchSnapshot,
   RadarBlip,
   ScorePopup,
@@ -63,6 +74,13 @@ export interface EngineCallbacks {
     weaponId: WeaponId;
     targetId?: string;
     zone?: 'head' | 'body';
+    pellets?: Array<{
+      endX: number;
+      endY: number;
+      endZ: number;
+      targetId?: string;
+      zone?: 'head' | 'body';
+    }>;
   }) => void;
   onMultiplayerMove?: (
     x: number,
@@ -218,6 +236,13 @@ export class EngineManager {
         this.weapons.selectSlot(slot);
         this.emitHudState(true);
       },
+      onQuickMelee: () => {
+        this.weapons.triggerQuickMelee();
+        this.emitHudState(true);
+      },
+      onDeadGunHotkey: (gunIndex) => {
+        this.handleDeadGunHotkey(gunIndex);
+      },
       onCycleSlot: (delta) => {
         this.weapons.cycleSlot(delta);
         this.emitHudState(true);
@@ -312,11 +337,20 @@ export class EngineManager {
           weaponId: shot.weaponId,
           targetId: shot.targetId,
           zone: shot.zone,
+          pellets: shot.pellets?.map((p) => ({
+            endX: p.endPoint.x,
+            endY: p.endPoint.y,
+            endZ: p.endPoint.z,
+            targetId: p.targetId,
+            zone: p.zone,
+          })),
         });
       },
       (info) => {
         this.handlePlayerKillCredit(info.headshot, info.distanceMeters, info.victimName);
-      }
+      },
+      normalizeGunId(initialSettings.selectedGunId),
+      normalizeKnifeCharmId(initialSettings.knifeCharmId)
     );
 
     this.setupPostProcessing();
@@ -397,6 +431,7 @@ export class EngineManager {
       this.matchManager.getRedBotParticipants()
     );
 
+    this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
     this.weapons.resetForNewMatch();
     this.resetPlayerForLife(def.blueSpawns[0] ?? new Vector3(0, 1, -20), 0);
 
@@ -432,6 +467,7 @@ export class EngineManager {
     const local = snapshot.players.find((p) => p.id === snapshot.localPlayerId);
     const localTeam = local?.team ?? 'blue';
     this.weapons.setMultiplayerContext(true, localTeam, snapshot.friendlyFire);
+    this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
     this.weapons.resetForNewMatch();
 
     const spawnX = local?.x ?? 0;
@@ -555,7 +591,7 @@ export class EngineManager {
 
   public handleNetworkRespawn(pos: { x: number; y: number; z: number; rotY: number }): void {
     this.resetPlayerForLife(new Vector3(pos.x, pos.y + 0.95, pos.z), pos.rotY);
-    this.weapons.resetForLife();
+    this.weapons.applyQueuedGunOnRespawn();
     this.weapons.setViewModelVisible(true);
     this.emitHudState(true);
   }
@@ -608,6 +644,9 @@ export class EngineManager {
     this.player.setScreenShakeScale(settings.screenShakeScale);
     this.audio.setVolumes(settings.volume, settings.sfxVolume, settings.musicVolume, settings.muted);
     this.applyGraphicsQuality(settings.graphicsQuality);
+    if (settings.knifeCharmId !== this.weapons.getKnifeCharmId()) {
+      this.weapons.setKnifeCharm(settings.knifeCharmId);
+    }
   }
 
   private handlePlayerKillCredit(
@@ -1069,9 +1108,58 @@ export class EngineManager {
     this.weapons.setGraphicsQuality(quality);
   }
 
-  public selectWeapon(id: WeaponId): void {
-    this.weapons.selectWeapon(id);
+  private getCurrentMatchPhase(): MatchPhase {
+    if (this.sessionMode === 'multiplayer' && this.mpSnapshot) {
+      if (this.mpSnapshot.phase === 'ended') return 'ended';
+      if (this.mpSnapshot.phase === 'playing') return this.mpPaused ? 'paused' : 'playing';
+      return 'menu';
+    }
+    return this.matchManager.getPhase();
+  }
+
+  public selectGun(id: GunId): { switchedImmediately: boolean } {
+    const phase = this.getCurrentMatchPhase();
+    const outcome = applyGunSelection(
+      {
+        equippedGunId: this.weapons.getEquippedGunId(),
+        queuedGunId: this.weapons.getQueuedGunId(),
+        activeSlot: this.weapons.getActiveSlot(),
+      },
+      normalizeGunId(id),
+      phase,
+      this.playerIsAlive
+    );
+
+    if (outcome.switchedImmediately) {
+      this.weapons.setEquippedGun(outcome.loadout.equippedGunId);
+    } else {
+      this.weapons.setQueuedGun(outcome.loadout.queuedGunId);
+    }
     this.emitHudState(true);
+    return { switchedImmediately: outcome.switchedImmediately };
+  }
+
+  public selectKnifeCharm(id: KnifeCharmId): void {
+    this.weapons.setKnifeCharm(normalizeKnifeCharmId(id));
+    this.emitHudState(true);
+  }
+
+  public selectWeapon(id: WeaponId): void {
+    if (id === 'knife') {
+      this.weapons.selectSlot(2);
+      this.emitHudState(true);
+      return;
+    }
+    this.selectGun(id);
+  }
+
+  private handleDeadGunHotkey(gunIndex: number): void {
+    const phase = this.getCurrentMatchPhase();
+    if (canSwitchGunImmediately(phase, this.playerIsAlive) && gunIndex >= 1 && gunIndex <= GUN_IDS.length) {
+      const nextGun = GUN_IDS[gunIndex - 1];
+      this.selectGun(nextGun);
+      this.audio.playReloadMagIn();
+    }
   }
 
   private tickMultiplayerFrame(dt: number): void {
@@ -1152,7 +1240,7 @@ export class EngineManager {
         const spawn = this.botManager.pickBestSpawn('blue');
         const toCenterYaw = Math.atan2(-spawn.x, -spawn.z);
         this.resetPlayerForLife(spawn, toCenterYaw);
-        this.weapons.resetForLife();
+        this.weapons.applyQueuedGunOnRespawn();
         this.weapons.setViewModelVisible(true);
         this.emitHudState(true);
       }
@@ -1442,6 +1530,8 @@ export class EngineManager {
       },
     ];
 
+    const isGunSwitchLocked = !canSwitchGunImmediately(match.phase, this.playerIsAlive);
+
     this.callbacks.onHudUpdate({
       isPointerLocked: this.player.getIsPointerLocked(),
       health: this.playerHealth,
@@ -1460,6 +1550,11 @@ export class EngineManager {
       speed: Math.round(this.player.getHorizontalSpeed() * 10) / 10,
       headingDeg: Math.round(this.player.getHeadingDeg()),
       activeWeapon: this.weapons.getActiveConfig(),
+      equippedGunId: this.weapons.getEquippedGunId(),
+      queuedGunId: this.weapons.getQueuedGunId(),
+      knifeCharmId: this.weapons.getKnifeCharmId(),
+      isGunSwitchLocked,
+      gunLockMessage: isGunSwitchLocked ? GUN_LOCKED_WHILE_ALIVE_MESSAGE : null,
       weaponSlots: this.weapons.getWeaponSlots(),
       isReloading: this.weapons.getIsReloading(),
       reloadProgress: this.weapons.getReloadProgress(),

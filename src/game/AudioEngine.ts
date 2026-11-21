@@ -93,29 +93,92 @@ export class AudioEngine {
   }
 
   public playGunshot(weaponId: WeaponId): void {
+    if (weaponId === 'knife') {
+      this.playKnifeSlash();
+      return;
+    }
+
     this.unlock();
     if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
 
     const now = this.ctx.currentTime;
     const p = this.getPitchVariance(0.035);
 
-    if (weaponId === 'm4a1') {
-      // Sharp supersonic crack + low chest punch
-      this.triggerNoiseBurst(now, 0.14, 1850 * p, 0.72, 0.85);
-      this.triggerTone(now, 160 * p, 42 * p, 0.11, 'triangle', 0.65);
-    } else if (weaponId === 'mp5') {
-      // Suppressed submachine gun thump + short air hiss
-      this.triggerNoiseBurst(now, 0.085, 950 * p, 1.4, 0.48);
-      this.triggerTone(now, 130 * p, 58 * p, 0.07, 'sine', 0.42);
-    } else if (weaponId === 'intervention') {
-      // High-caliber .50 BMG heavy sniper blast: explosive crack + sub-bass room shake
+    if (weaponId === 'shotgun') {
+      // Heavy 12-gauge blast + chambered pump-action rack at +220ms
+      this.triggerNoiseBurst(now, 0.22, 1180 * p, 0.52, 0.96);
+      this.triggerTone(now, 138 * p, 34 * p, 0.18, 'triangle', 0.82);
+      this.triggerTone(now, 240 * p, 58 * p, 0.09, 'sawtooth', 0.36);
+      this.triggerTone(now + 0.22, 520 * p, 780 * p, 0.04, 'triangle', 0.18);
+      this.triggerTone(now + 0.28, 760 * p, 480 * p, 0.045, 'square', 0.14);
+    } else if (weaponId === 'ak47') {
+      // Heavy 7.62mm supersonic crack + deep metallic bolt punch
+      this.triggerNoiseBurst(now, 0.16, 1620 * p, 0.68, 0.88);
+      this.triggerTone(now, 152 * p, 39 * p, 0.13, 'triangle', 0.72);
+      this.triggerTone(now, 285 * p, 95 * p, 0.06, 'sawtooth', 0.3);
+    } else if (weaponId === 'smg') {
+      // Fast tight 9mm vector submachine snap
+      this.triggerNoiseBurst(now, 0.075, 1320 * p, 1.35, 0.56);
+      this.triggerTone(now, 175 * p, 64 * p, 0.06, 'triangle', 0.44);
+    } else if (weaponId === 'sniper') {
+      // High-caliber .50 BMG sniper blast: explosive crack + sub-bass shockwave
       this.triggerNoiseBurst(now, 0.26, 2100 * p, 0.65, 0.92);
-      this.triggerTone(now, 115 * p, 28 * p, 0.30, 'triangle', 0.82);
+      this.triggerTone(now, 115 * p, 28 * p, 0.3, 'triangle', 0.82);
       this.triggerTone(now, 260 * p, 52 * p, 0.16, 'sawtooth', 0.42);
     } else {
-      // Punchy .45 ACP sidearm snap
-      this.triggerNoiseBurst(now, 0.16, 1500 * p, 0.9, 0.8);
-      this.triggerTone(now, 185 * p, 48 * p, 0.12, 'sawtooth', 0.45);
+      // Crisp tactical .45 ACP sidearm snap
+      this.triggerNoiseBurst(now, 0.13, 1780 * p, 0.95, 0.74);
+      this.triggerTone(now, 205 * p, 54 * p, 0.1, 'sawtooth', 0.42);
+    }
+  }
+
+  public playKnifeSlash(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+
+    const now = this.ctx.currentTime;
+    const p = this.getPitchVariance(0.05);
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(620 * p, now);
+    filter.frequency.exponentialRampToValueAtTime(2800 * p, now + 0.09);
+    filter.frequency.exponentialRampToValueAtTime(750 * p, now + 0.18);
+    filter.Q.setValueAtTime(1.8, now);
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.02, now);
+    gain.gain.linearRampToValueAtTime(0.38, now + 0.045);
+    gain.gain.exponentialRampToValueAtTime(0.002, now + 0.19);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.sfxGain);
+    src.start(now);
+    src.stop(now + 0.21);
+
+    this.triggerTone(now + 0.02, 1650 * p, 920 * p, 0.06, 'triangle', 0.08);
+  }
+
+  public playKnifeHit(hitTarget: boolean): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+
+    const now = this.ctx.currentTime;
+    const p = this.getPitchVariance(0.04);
+
+    if (hitTarget) {
+      // Visceral close-quarters blade impact + low chest thud
+      this.triggerNoiseBurst(now, 0.08, 1450 * p, 1.1, 0.48);
+      this.triggerTone(now, 190 * p, 48 * p, 0.09, 'triangle', 0.56);
+      this.triggerTone(now, 920 * p, 420 * p, 0.05, 'sawtooth', 0.2);
+    } else {
+      // Metallic spark scrape against cover/concrete
+      this.triggerNoiseBurst(now, 0.06, 2400 * p, 1.8, 0.3);
+      this.triggerTone(now, 2150 * p, 1180 * p, 0.08, 'triangle', 0.24);
     }
   }
 

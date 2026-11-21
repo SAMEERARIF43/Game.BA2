@@ -145,8 +145,8 @@ export class BotManager {
     this.mapDef = mapDef;
     this.ensureSharedTracerMaterials();
 
-    const blueWeaponNames = ['M4A1 Tactical', 'MP5-SD'];
-    const redWeaponNames = ['AK-74u', 'M4A1 Tactical'];
+    const blueWeaponNames = ['AK-47 Heavy Rifle', 'Vector-9 SMG', 'M870 Combat Shotgun'];
+    const redWeaponNames = ['AK-47 Heavy Rifle', 'Vector-9 SMG', 'M870 Combat Shotgun'];
 
     blueBots.forEach((p, idx) => {
       const spawn = mapDef.blueSpawns[idx % mapDef.blueSpawns.length] ?? new Vector3(-16, 1, -20);

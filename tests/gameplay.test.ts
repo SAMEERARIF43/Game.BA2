@@ -1,37 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WeaponId, WEAPONS } from '../src/game/types.ts';
+import { GUN_IDS, GunId, WEAPONS } from '../src/game/types.ts';
+import {
+  getActiveWeaponIdFromLoadout,
+  normalizeGunId,
+  toggleLoadoutSlot,
+} from '../src/game/loadoutRules.ts';
 import { MatchManager } from '../src/match/MatchManager.ts';
 
-test('Gameplay: Weapon Cycle Slot Order and Safety', async (t) => {
-  const order: WeaponId[] = ['m4a1', 'mp5', 'intervention', 'm1911'];
-
-  function getNextSlot(activeId: WeaponId, delta: 1 | -1): WeaponId {
-    const curIdx = order.indexOf(activeId);
-    if (curIdx === -1) {
-      return 'm4a1';
+test('Gameplay: 2-Slot Gun + Knife Switching & Loadout Safety', async (t) => {
+  await t.test('Player toggles cleanly between Slot 1 (Selected Gun) and Slot 2 (Knife)', () => {
+    let slot: 1 | 2 = 1;
+    for (const gunId of GUN_IDS) {
+      assert.strictEqual(
+        getActiveWeaponIdFromLoadout({ equippedGunId: gunId, queuedGunId: gunId, activeSlot: slot }),
+        gunId
+      );
+      slot = toggleLoadoutSlot(slot);
+      assert.strictEqual(slot, 2);
+      assert.strictEqual(
+        getActiveWeaponIdFromLoadout({ equippedGunId: gunId, queuedGunId: gunId, activeSlot: slot }),
+        'knife'
+      );
+      slot = toggleLoadoutSlot(slot);
+      assert.strictEqual(slot, 1);
     }
-    const nextIdx = (curIdx + delta + order.length) % order.length;
-    return order[nextIdx];
-  }
-
-  await t.test('Forward cycle wraps through all 4 weapons sequentially', () => {
-    assert.strictEqual(getNextSlot('m4a1', 1), 'mp5');
-    assert.strictEqual(getNextSlot('mp5', 1), 'intervention');
-    assert.strictEqual(getNextSlot('intervention', 1), 'm1911');
-    assert.strictEqual(getNextSlot('m1911', 1), 'm4a1'); // wrap-around
   });
 
-  await t.test('Reverse cycle wraps backwards correctly', () => {
-    assert.strictEqual(getNextSlot('m4a1', -1), 'm1911'); // reverse wrap-around
-    assert.strictEqual(getNextSlot('m1911', -1), 'intervention');
-    assert.strictEqual(getNextSlot('intervention', -1), 'mp5');
-    assert.strictEqual(getNextSlot('mp5', -1), 'm4a1');
-  });
-
-  await t.test('Unmapped slot safely defaults to m4a1', () => {
-    assert.strictEqual(getNextSlot('invalid_id' as WeaponId, 1), 'm4a1');
-    assert.strictEqual(getNextSlot('invalid_id' as WeaponId, -1), 'm4a1');
+  await t.test('Unmapped gun IDs safely normalize to ak47', () => {
+    assert.strictEqual(normalizeGunId('invalid_id' as GunId), 'ak47');
+    assert.strictEqual(normalizeGunId('knife'), 'ak47');
+    assert.strictEqual(normalizeGunId(undefined), 'ak47');
   });
 });
 
@@ -53,7 +52,7 @@ test('Gameplay: WeaponSystem Reload Ammo Integrity', async (t) => {
   }
 
   await t.test('Reload does not replenish empty reserve ammo (anti-cheat check)', () => {
-    const cfg = WEAPONS.m4a1;
+    const cfg = WEAPONS.ak47;
     const state: SlotState = { ammoInMag: 10, reserveAmmo: 0 };
 
     const reloadInitiated = simulateReload(cfg, state);
@@ -63,7 +62,7 @@ test('Gameplay: WeaponSystem Reload Ammo Integrity', async (t) => {
   });
 
   await t.test('Reload transfers correct amount when reserve is limited', () => {
-    const cfg = WEAPONS.m4a1; // magSize: 30
+    const cfg = WEAPONS.ak47; // magSize: 30
     const state: SlotState = { ammoInMag: 25, reserveAmmo: 3 };
 
     const reloadInitiated = simulateReload(cfg, state);
@@ -73,7 +72,7 @@ test('Gameplay: WeaponSystem Reload Ammo Integrity', async (t) => {
   });
 
   await t.test('Reload caps at magazine size when reserve is plentiful', () => {
-    const cfg = WEAPONS.m4a1; // magSize: 30
+    const cfg = WEAPONS.ak47; // magSize: 30
     const state: SlotState = { ammoInMag: 15, reserveAmmo: 120 };
 
     const reloadInitiated = simulateReload(cfg, state);
@@ -83,7 +82,7 @@ test('Gameplay: WeaponSystem Reload Ammo Integrity', async (t) => {
   });
 
   await t.test('Reload rejected when magazine is already full', () => {
-    const cfg = WEAPONS.m4a1;
+    const cfg = WEAPONS.ak47;
     const state: SlotState = { ammoInMag: 30, reserveAmmo: 120 };
 
     const reloadInitiated = simulateReload(cfg, state);
@@ -157,7 +156,7 @@ test('Gameplay: Match transition clears stale killfeed entries', () => {
   const match = new MatchManager();
   match.configureMatch('urban', 'Urban Strike', 30, 1);
   match.setPhase('playing');
-  match.recordKill('bot_red_1', 'player', 'M4A1', false, 18);
+  match.recordKill('bot_red_1', 'player', 'AK-47', false, 18);
 
   assert.equal(match.getSnapshot().killFeed.length, 1);
 

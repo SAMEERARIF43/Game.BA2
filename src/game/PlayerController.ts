@@ -15,7 +15,9 @@ export interface PlayerInputCallbacks {
   onFireRelease: () => void;
   onAdsChange: (isAds: boolean) => void;
   onReload: () => void;
-  onSelectSlot: (slot: 1 | 2 | 3 | 4) => void;
+  onSelectSlot: (slot: 1 | 2) => void;
+  onQuickMelee?: () => void;
+  onDeadGunHotkey?: (gunIndex: number) => void;
   onCycleSlot?: (delta: 1 | -1) => void;
   onActivateKillstreak?: (slot: 4 | 5 | 6) => void; // F1, F2, F3
   onScoreboardChange: (open: boolean) => void;
@@ -117,6 +119,7 @@ export class PlayerController {
   private flinchYaw = 0;
   private screenShakeScale = 1.0;
   private moveSpeedMultiplier = 1.0;
+  private weaponSpeedMultiplier = 1.0;
   private deathLookTarget: Vector3 | null = null;
   private isPointerLocked = false;
   private isFireHeld = false;
@@ -274,6 +277,10 @@ export class PlayerController {
 
   public setMoveSpeedMultiplier(mult: number): void {
     this.moveSpeedMultiplier = Math.max(0.5, Math.min(1.8, mult));
+  }
+
+  public setWeaponSpeedMultiplier(mult: number): void {
+    this.weaponSpeedMultiplier = Math.max(0.65, Math.min(1.4, mult));
   }
 
   public setDeathLookTarget(targetPos: Vector3 | null): void {
@@ -788,7 +795,7 @@ export class PlayerController {
       if (this.isAds) {
         targetSpeed *= ADS_SPEED_MULTIPLIER;
       }
-      targetSpeed *= this.moveSpeedMultiplier;
+      targetSpeed *= this.moveSpeedMultiplier * this.weaponSpeedMultiplier;
 
       const targetVelX = activeInput ? this.wishDir.x * targetSpeed : 0;
       const targetVelZ = activeInput ? this.wishDir.z * targetSpeed : 0;
@@ -1052,7 +1059,16 @@ export class PlayerController {
       return;
     }
 
-    if (this.isDead) return;
+    if (this.isDead) {
+      if (!e.repeat) {
+        if (e.code === 'Digit1') this.callbacks.onDeadGunHotkey?.(1);
+        else if (e.code === 'Digit2') this.callbacks.onDeadGunHotkey?.(2);
+        else if (e.code === 'Digit3') this.callbacks.onDeadGunHotkey?.(3);
+        else if (e.code === 'Digit4') this.callbacks.onDeadGunHotkey?.(4);
+        else if (e.code === 'Digit5') this.callbacks.onDeadGunHotkey?.(5);
+      }
+      return;
+    }
 
     if ((e.code === 'KeyC' || e.code === 'ControlLeft') && !e.repeat) {
       const slid = this.tryStartSlide();
@@ -1071,15 +1087,13 @@ export class PlayerController {
       this.callbacks.onSelectSlot(1);
     } else if (e.code === 'Digit2' && !e.repeat) {
       this.callbacks.onSelectSlot(2);
-    } else if (e.code === 'Digit3' && !e.repeat) {
-      this.callbacks.onSelectSlot(3);
-    } else if (e.code === 'Digit4' && !e.repeat) {
-      this.callbacks.onSelectSlot(4);
-    } else if ((e.code === 'F1' || e.code === 'Digit5') && !e.repeat) {
+    } else if ((e.code === 'KeyV' || e.code === 'KeyF') && !e.repeat) {
+      this.callbacks.onQuickMelee?.();
+    } else if (e.code === 'F1' && !e.repeat) {
       this.callbacks.onActivateKillstreak?.(4);
-    } else if ((e.code === 'F2' || e.code === 'Digit6') && !e.repeat) {
+    } else if (e.code === 'F2' && !e.repeat) {
       this.callbacks.onActivateKillstreak?.(5);
-    } else if ((e.code === 'F3' || e.code === 'Digit7') && !e.repeat) {
+    } else if (e.code === 'F3' && !e.repeat) {
       this.callbacks.onActivateKillstreak?.(6);
     } else if (e.code === 'KeyB' && !e.repeat) {
       this.callbacks.onCycleScopeMagnification?.();

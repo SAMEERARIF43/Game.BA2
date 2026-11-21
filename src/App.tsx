@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EngineManager } from './game/EngineManager';
-import { GameSettings, HudState, WEAPONS, WeaponId } from './game/types';
+import { GameSettings, GunId, HudState, KnifeCharmId, WEAPONS } from './game/types';
 import { MapId } from './maps/types';
 import { DEFAULT_KILL_LIMIT, MATCH_DURATION_SEC } from './match/MatchManager';
 import { NetworkManager } from './multiplayer/NetworkManager';
@@ -50,12 +50,15 @@ const INITIAL_HUD: HudState = {
   adsBlend: 0,
   speed: 0,
   headingDeg: 0,
-  activeWeapon: WEAPONS.m4a1,
+  activeWeapon: WEAPONS.ak47,
+  equippedGunId: 'ak47',
+  queuedGunId: 'ak47',
+  knifeCharmId: 'tactical_tag',
+  isGunSwitchLocked: false,
+  gunLockMessage: null,
   weaponSlots: [
-    { id: 'm4a1', ammoInMag: WEAPONS.m4a1.magSize, reserveAmmo: WEAPONS.m4a1.reserveMax },
-    { id: 'mp5', ammoInMag: WEAPONS.mp5.magSize, reserveAmmo: WEAPONS.mp5.reserveMax },
-    { id: 'intervention', ammoInMag: WEAPONS.intervention.magSize, reserveAmmo: WEAPONS.intervention.reserveMax },
-    { id: 'm1911', ammoInMag: WEAPONS.m1911.magSize, reserveAmmo: WEAPONS.m1911.reserveMax },
+    { id: 'ak47', ammoInMag: WEAPONS.ak47.magSize, reserveAmmo: WEAPONS.ak47.reserveMax },
+    { id: 'knife', ammoInMag: 0, reserveAmmo: 0 },
   ],
   isReloading: false,
   reloadProgress: 0,
@@ -118,8 +121,18 @@ export default function App() {
   const [settings, setSettings] = useState<GameSettings>(() => loadPersistedSettings());
   const [hud, setHud] = useState<HudState>(() => {
     const rank = getRankSummary(loadProgression().xp);
+    const persisted = loadPersistedSettings();
+    const gun = WEAPONS[persisted.selectedGunId];
     return {
       ...INITIAL_HUD,
+      activeWeapon: gun,
+      equippedGunId: persisted.selectedGunId,
+      queuedGunId: persisted.selectedGunId,
+      knifeCharmId: persisted.knifeCharmId,
+      weaponSlots: [
+        { id: persisted.selectedGunId, ammoInMag: gun.magSize, reserveAmmo: gun.reserveMax },
+        { id: 'knife', ammoInMag: 0, reserveAmmo: 0 },
+      ],
       xp: rank.xp,
       rankLevel: rank.level,
       rankTitle: rank.title,
@@ -244,6 +257,14 @@ export default function App() {
   useEffect(() => {
     const onGlobalKeyDown = (e: KeyboardEvent) => {
       if (e.code !== 'KeyF' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      // Do not intercept KeyF during active gameplay where F triggers quick-melee knife
+      const mpInMatch =
+        route.view === 'custom' &&
+        lobbySnapshot !== null &&
+        (lobbySnapshot.phase === 'playing' || lobbySnapshot.phase === 'ended');
+      if (document.pointerLockElement || route.view === 'play' || mpInMatch) {
+        return;
+      }
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
@@ -255,7 +276,7 @@ export default function App() {
 
     window.addEventListener('keydown', onGlobalKeyDown);
     return () => window.removeEventListener('keydown', onGlobalKeyDown);
-  }, []);
+  }, [lobbySnapshot, route.view]);
 
   const handleUpdateSettings = useCallback((next: GameSettings) => {
     const saved = savePersistedSettings(next);
@@ -318,8 +339,17 @@ export default function App() {
     engineRef.current?.restartMatch();
   }, []);
 
-  const handleSelectWeapon = useCallback((id: WeaponId) => {
-    engineRef.current?.selectWeapon(id);
+  const handleSelectGun = useCallback(
+    (id: GunId) => {
+      engineRef.current?.selectGun(id);
+      setSettings((prev) => savePersistedSettings({ ...prev, selectedGunId: id }));
+    },
+    []
+  );
+
+  const handleSelectKnifeCharm = useCallback((id: KnifeCharmId) => {
+    engineRef.current?.selectKnifeCharm(id);
+    setSettings((prev) => savePersistedSettings({ ...prev, knifeCharmId: id }));
   }, []);
 
   const handleLookupRoom = useCallback(
@@ -416,10 +446,12 @@ export default function App() {
       {!contextLost && route.view === 'menu' && (
         <MainMenu
           selectedMapId={selectedMapId}
-          startingWeaponId={hud.activeWeapon.id}
+          selectedGunId={hud.equippedGunId}
+          knifeCharmId={hud.knifeCharmId}
           settings={settings}
           xp={hud.xp}
-          onSelectStartingWeapon={handleSelectWeapon}
+          onSelectGun={handleSelectGun}
+          onSelectKnifeCharm={handleSelectKnifeCharm}
           onPlayOfflineTdm={handlePlayOfflineTdm}
           onOpenCustomMatch={handleOpenCustomMatch}
           onOpenMapSelect={handleOpenMapSelect}
@@ -471,7 +503,7 @@ export default function App() {
 
       {!contextLost && isMultiplayerInMatch && lobbySnapshot && (
         <>
-          <GameHUD hud={hud} showFps={settings.showFps} />
+          <GameHUD hud={hud} showFps={settings.showFps} onSelectGun={handleSelectGun} />
 
           {hud.match.phase === 'paused' && (
             <PauseMenu
@@ -483,7 +515,8 @@ export default function App() {
               onLeaveToMenu={() => {
                 void handleLeaveMultiplayer();
               }}
-              onSelectWeapon={handleSelectWeapon}
+              onSelectGun={handleSelectGun}
+              onSelectKnifeCharm={handleSelectKnifeCharm}
               onUpdateSettings={handleUpdateSettings}
               onResetSettings={handleResetSettings}
             />
@@ -509,7 +542,7 @@ export default function App() {
 
       {!contextLost && route.view === 'play' && (
         <>
-          <GameHUD hud={hud} showFps={settings.showFps} />
+          <GameHUD hud={hud} showFps={settings.showFps} onSelectGun={handleSelectGun} />
 
           {hud.match.phase === 'paused' && (
             <PauseMenu
@@ -518,7 +551,8 @@ export default function App() {
               onResume={handleResumeMatch}
               onRestartMatch={handleRestartMatch}
               onLeaveToMenu={handleBackToMenu}
-              onSelectWeapon={handleSelectWeapon}
+              onSelectGun={handleSelectGun}
+              onSelectKnifeCharm={handleSelectKnifeCharm}
               onUpdateSettings={handleUpdateSettings}
               onResetSettings={handleResetSettings}
             />

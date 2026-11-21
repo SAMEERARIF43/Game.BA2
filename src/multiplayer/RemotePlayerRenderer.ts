@@ -120,8 +120,21 @@ export class RemotePlayerRenderer {
 
       if (avatar.weaponId !== p.weaponId) {
         avatar.weaponId = p.weaponId;
-        const scaleZ = p.weaponId === 'm1911' ? 0.48 : p.weaponId === 'mp5' ? 0.84 : 1.0;
-        avatar.rifleAssembly.scaling.set(1, 1, scaleZ);
+        if (p.weaponId === 'knife') {
+          avatar.rifleAssembly.scaling.set(0.55, 0.55, 0.32);
+        } else {
+          const scaleZ =
+            p.weaponId === 'pistol'
+              ? 0.44
+              : p.weaponId === 'smg'
+                ? 0.78
+                : p.weaponId === 'shotgun'
+                  ? 0.96
+                  : p.weaponId === 'sniper'
+                    ? 1.24
+                    : 1.0;
+          avatar.rifleAssembly.scaling.set(1, 1, scaleZ);
+        }
       }
     }
 
@@ -148,6 +161,7 @@ export class RemotePlayerRenderer {
   }
 
   public spawnRemoteFire(evt: RemoteFireEvent): void {
+    if (evt.weaponId === 'knife') return;
     const avatar = this.avatars.get(evt.shooterId);
     let start = new Vector3(evt.muzzleX, evt.muzzleY, evt.muzzleZ);
     if (avatar && avatar.isAlive) {

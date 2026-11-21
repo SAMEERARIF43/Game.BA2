@@ -19,11 +19,19 @@ import {
 import { BotManager } from '../bots/BotManager';
 import { TeamId } from '../maps/types';
 import { AudioEngine } from './AudioEngine';
+import {
+  normalizeGunId,
+  normalizeKnifeCharmId,
+} from './loadoutRules';
 import { PlayerController } from './PlayerController';
 import {
+  GUN_IDS,
   GraphicsQuality,
+  GunId,
   HitMarkerState,
   HitZone,
+  KNIFE_CHARMS,
+  KnifeCharmId,
   WEAPONS,
   WeaponConfig,
   WeaponId,
@@ -52,6 +60,21 @@ interface WeaponModelRig {
   adsRot: Vector3;
 }
 
+export interface NetworkShotPellet {
+  endPoint: Vector3;
+  targetId?: string;
+  zone?: HitZone;
+}
+
+export interface NetworkShotPayload {
+  muzzle: Vector3;
+  endPoint: Vector3;
+  weaponId: WeaponId;
+  targetId?: string;
+  zone?: HitZone;
+  pellets?: NetworkShotPellet[];
+}
+
 export class WeaponSystem {
   private scene: Scene;
   private camera: UniversalCamera;
@@ -61,23 +84,33 @@ export class WeaponSystem {
 
   private weaponPivot: TransformNode;
   private models = new Map<WeaponId, WeaponModelRig>();
+  private charmPivot: TransformNode | null = null;
+  private charmRoots = new Map<KnifeCharmId, TransformNode>();
+
   private muzzleFlashMesh: Mesh;
   private muzzleLight: PointLight;
   private vmFillLight: PointLight;
   private vmRimLight: PointLight;
   private muzzleFlashTimer = 0;
+
   private readonly rangeRay = new Ray(Vector3.Zero(), new Vector3(0, 0, 1), 160);
   private readonly forwardAxis = new Vector3(0, 0, 1);
   private readonly moveAxes = { forward: 0, right: 0 };
   private readonly rangePickPredicate = (mesh: AbstractMesh): boolean =>
     mesh.isPickable && mesh.isEnabled() && mesh !== this.player.collider;
 
-  private activeId: WeaponId = 'm4a1';
-  private slots: Record<WeaponId, WeaponRuntimeState> = {
-    m4a1: { id: 'm4a1', ammoInMag: WEAPONS.m4a1.magSize, reserveAmmo: WEAPONS.m4a1.reserveMax },
-    mp5: { id: 'mp5', ammoInMag: WEAPONS.mp5.magSize, reserveAmmo: WEAPONS.mp5.reserveMax },
-    intervention: { id: 'intervention', ammoInMag: WEAPONS.intervention.magSize, reserveAmmo: WEAPONS.intervention.reserveMax },
-    m1911: { id: 'm1911', ammoInMag: WEAPONS.m1911.magSize, reserveAmmo: WEAPONS.m1911.reserveMax },
+  private equippedGunId: GunId = 'ak47';
+  private queuedGunId: GunId = 'ak47';
+  private activeSlot: 1 | 2 = 1;
+  private activeId: WeaponId = 'ak47';
+  private knifeCharmId: KnifeCharmId = 'tactical_tag';
+
+  private slots: Record<GunId, WeaponRuntimeState> = {
+    shotgun: { id: 'shotgun', ammoInMag: WEAPONS.shotgun.magSize, reserveAmmo: WEAPONS.shotgun.reserveMax },
+    ak47: { id: 'ak47', ammoInMag: WEAPONS.ak47.magSize, reserveAmmo: WEAPONS.ak47.reserveMax },
+    smg: { id: 'smg', ammoInMag: WEAPONS.smg.magSize, reserveAmmo: WEAPONS.smg.reserveMax },
+    sniper: { id: 'sniper', ammoInMag: WEAPONS.sniper.magSize, reserveAmmo: WEAPONS.sniper.reserveMax },
+    pistol: { id: 'pistol', ammoInMag: WEAPONS.pistol.magSize, reserveAmmo: WEAPONS.pistol.reserveMax },
   };
 
   private fireCooldown = 0;
@@ -87,6 +120,11 @@ export class WeaponSystem {
   private reloadMagClickPlayed = false;
   private reloadSpeedMultiplier = 1.0;
 
+  private slashTimer = 0;
+  private readonly slashDuration = 0.32;
+  private slashSide = 1;
+  private quickMeleeReturnSlot: 1 | 2 | null = null;
+
   private spreadBloom = 0;
   private kickBackZ = 0;
   private kickRotX = 0;
@@ -94,6 +132,10 @@ export class WeaponSystem {
   private swayRoll = 0;
   private swayPitch = 0;
   private equipDrop = 0;
+  private charmSwingX = 0;
+  private charmSwingZ = 0;
+  private charmVelX = 0;
+  private charmVelZ = 0;
   private viewModelVisible = false;
 
   private graphicsQuality: GraphicsQuality = 'HIGH';
@@ -124,13 +166,7 @@ export class WeaponSystem {
   private multiplayerMode = false;
   private localTeam: TeamId = 'blue';
   private friendlyFire = false;
-  private onNetworkShot?: (payload: {
-    muzzle: Vector3;
-    endPoint: Vector3;
-    weaponId: WeaponId;
-    targetId?: string;
-    zone?: HitZone;
-  }) => void;
+  private onNetworkShot?: (payload: NetworkShotPayload) => void;
   private onOfflineKill?: (info: {
     victimId: string;
     victimName: string;
@@ -144,19 +180,15 @@ export class WeaponSystem {
     player: PlayerController,
     bots: BotManager,
     audio: AudioEngine,
-    onNetworkShot?: (payload: {
-      muzzle: Vector3;
-      endPoint: Vector3;
-      weaponId: WeaponId;
-      targetId?: string;
-      zone?: HitZone;
-    }) => void,
+    onNetworkShot?: (payload: NetworkShotPayload) => void,
     onOfflineKill?: (info: {
       victimId: string;
       victimName: string;
       headshot: boolean;
       distanceMeters: number;
-    }) => void
+    }) => void,
+    initialGunId: GunId = 'ak47',
+    initialCharmId: KnifeCharmId = 'tactical_tag'
   ) {
     this.scene = scene;
     this.camera = camera;
@@ -165,6 +197,11 @@ export class WeaponSystem {
     this.audio = audio;
     this.onNetworkShot = onNetworkShot;
     this.onOfflineKill = onOfflineKill;
+
+    this.equippedGunId = normalizeGunId(initialGunId);
+    this.queuedGunId = this.equippedGunId;
+    this.activeId = this.equippedGunId;
+    this.knifeCharmId = normalizeKnifeCharmId(initialCharmId);
 
     this.weaponPivot = new TransformNode('weaponPivot', this.scene);
     this.weaponPivot.parent = this.camera;
@@ -234,8 +271,55 @@ export class WeaponSystem {
 
     this.buildAllWeaponModels();
     this.bindViewModelLights();
-    this.selectWeapon('m4a1');
+    this.applyCharmVisibility();
+    this.selectWeapon(this.equippedGunId, true);
     this.setViewModelVisible(false);
+  }
+
+  public getEquippedGunId(): GunId {
+    return this.equippedGunId;
+  }
+
+  public getQueuedGunId(): GunId {
+    return this.queuedGunId;
+  }
+
+  public getKnifeCharmId(): KnifeCharmId {
+    return this.knifeCharmId;
+  }
+
+  public getActiveSlot(): 1 | 2 {
+    return this.activeSlot;
+  }
+
+  public setEquippedGun(id: GunId): void {
+    const gunId = normalizeGunId(id);
+    this.equippedGunId = gunId;
+    this.queuedGunId = gunId;
+    this.quickMeleeReturnSlot = null;
+    if (this.activeSlot === 1) {
+      this.selectWeapon(gunId, !this.viewModelVisible);
+    }
+  }
+
+  public setQueuedGun(id: GunId): void {
+    this.queuedGunId = normalizeGunId(id);
+  }
+
+  public applyQueuedGunOnRespawn(): void {
+    const nextGun = normalizeGunId(this.queuedGunId);
+    this.equippedGunId = nextGun;
+    this.queuedGunId = nextGun;
+    this.activeSlot = 1;
+    this.quickMeleeReturnSlot = null;
+    this.slashTimer = 0;
+    this.resetForLife();
+    this.selectWeapon(nextGun, true);
+  }
+
+  public setKnifeCharm(id: KnifeCharmId): void {
+    this.knifeCharmId = normalizeKnifeCharmId(id);
+    this.applyCharmVisibility();
   }
 
   public setReloadSpeedMultiplier(mult: number): void {
@@ -294,7 +378,7 @@ export class WeaponSystem {
   }
 
   public cycleScopeMagnification(): void {
-    if (this.activeId !== 'intervention') return;
+    if (this.activeId !== 'sniper') return;
     this.scopeMagnification =
       this.scopeMagnification === 4 ? 6 : this.scopeMagnification === 6 ? 8 : 4;
     this.audio.playReloadMagIn();
@@ -306,7 +390,7 @@ export class WeaponSystem {
 
   public getActiveConfig(): WeaponConfig {
     const cfg = WEAPONS[this.activeId];
-    if (this.activeId === 'intervention') {
+    if (this.activeId === 'sniper') {
       const fovRatio =
         this.scopeMagnification === 4 ? 0.25 : this.scopeMagnification === 6 ? 0.165 : 0.125;
       return { ...cfg, adsFovRatio: fovRatio };
@@ -315,12 +399,11 @@ export class WeaponSystem {
   }
 
   public getWeaponSlots(): WeaponRuntimeState[] {
+    const gunSlot = this.slots[this.equippedGunId];
     return [
-      this.slots.m4a1,
-      this.slots.mp5,
-      this.slots.intervention,
-      this.slots.m1911,
-    ].map((s) => ({ ...s }));
+      { ...gunSlot },
+      { id: 'knife', ammoInMag: 0, reserveAmmo: 0 },
+    ];
   }
 
   public getIsReloading(): boolean {
@@ -329,10 +412,16 @@ export class WeaponSystem {
 
   public getReloadProgress(): number {
     if (!this.isReloading) return 0;
-    return Math.min(1, this.reloadElapsed / (this.getActiveConfig().reloadTimeSec / this.reloadSpeedMultiplier));
+    return Math.min(
+      1,
+      this.reloadElapsed / (this.getActiveConfig().reloadTimeSec / this.reloadSpeedMultiplier)
+    );
   }
 
   public getCrosshairSpreadPx(): number {
+    if (this.activeId === 'knife') {
+      return 6;
+    }
     const spreadRad = this.computeCurrentSpread();
     return Math.round(6 + spreadRad * 520);
   }
@@ -349,35 +438,47 @@ export class WeaponSystem {
     };
   }
 
-  public selectSlot(slot: 1 | 2 | 3 | 4): void {
-    const id: WeaponId =
-      slot === 1 ? 'm4a1' : slot === 2 ? 'mp5' : slot === 3 ? 'intervention' : 'm1911';
-    this.selectWeapon(id);
+  public selectSlot(slot: 1 | 2): void {
+    this.quickMeleeReturnSlot = null;
+    this.activeSlot = slot;
+    this.selectWeapon(slot === 2 ? 'knife' : this.equippedGunId);
   }
 
-  public cycleSlot(delta: 1 | -1): void {
-    const order: WeaponId[] = ['m4a1', 'mp5', 'intervention', 'm1911'];
-    const curIdx = order.indexOf(this.activeId);
-    if (curIdx === -1) {
-      this.selectWeapon('m4a1');
-      return;
-    }
-    const nextIdx = (curIdx + delta + order.length) % order.length;
-    const nextId = order[nextIdx];
-    if (WEAPONS[nextId]) {
-      this.selectWeapon(nextId);
-    }
+  public cycleSlot(_delta: 1 | -1): void {
+    this.selectSlot(this.activeSlot === 1 ? 2 : 1);
   }
 
-  public selectWeapon(id: WeaponId): void {
-    if (this.activeId === id && this.models.get(id)?.root.isEnabled()) return;
+  public triggerQuickMelee(): void {
+    if (!this.viewModelVisible) return;
+    if (this.activeSlot !== 2) {
+      this.quickMeleeReturnSlot = 1;
+      this.activeSlot = 2;
+      this.selectWeapon('knife', true);
+      this.equipDrop = 0.04;
+    }
+    this.tryFire();
+    this.semiTriggerConsumed = true;
+  }
 
+  public selectWeapon(id: WeaponId, silent = false): void {
+    const targetEnabled = this.models.get(id)?.root.isEnabled() ?? false;
     this.isReloading = false;
     this.reloadElapsed = 0;
     this.semiTriggerConsumed = false;
     this.activeId = id;
-    this.equipDrop = 0.14;
-    this.audio.playWeaponEquip();
+    this.activeSlot = id === 'knife' ? 2 : 1;
+
+    const cfg = WEAPONS[id];
+    this.player.setWeaponSpeedMultiplier(cfg.moveSpeedMultiplier ?? 1.0);
+
+    if (this.activeId !== 'knife') {
+      this.slashTimer = 0;
+    }
+
+    if (!silent && !targetEnabled) {
+      this.equipDrop = 0.14;
+      this.audio.playWeaponEquip();
+    }
 
     this.models.forEach((rig, key) => {
       rig.root.setEnabled(key === id);
@@ -409,8 +510,9 @@ export class WeaponSystem {
 
   public startReload(): void {
     if (this.isReloading || !this.viewModelVisible) return;
+    if (this.activeId === 'knife') return;
     const cfg = this.getActiveConfig();
-    const state = this.slots[this.activeId];
+    const state = this.slots[this.equippedGunId];
     if (state.ammoInMag >= cfg.magSize) return;
     if (state.reserveAmmo <= 0) return;
 
@@ -421,7 +523,7 @@ export class WeaponSystem {
   }
 
   public resupplyAll(): void {
-    (Object.keys(WEAPONS) as WeaponId[]).forEach((id) => {
+    GUN_IDS.forEach((id) => {
       this.slots[id].ammoInMag = WEAPONS[id].magSize;
       this.slots[id].reserveAmmo = WEAPONS[id].reserveMax;
     });
@@ -435,6 +537,8 @@ export class WeaponSystem {
     this.resupplyAll();
     this.fireCooldown = 0;
     this.semiTriggerConsumed = false;
+    this.slashTimer = 0;
+    this.quickMeleeReturnSlot = null;
     this.muzzleFlashTimer = 0;
     this.muzzleFlashMesh.isVisible = false;
     this.muzzleLight.intensity = 0;
@@ -446,6 +550,10 @@ export class WeaponSystem {
     this.swayPitch = 0;
     this.bobTimer = 0;
     this.equipDrop = 0;
+    this.charmSwingX = 0;
+    this.charmSwingZ = 0;
+    this.charmVelX = 0;
+    this.charmVelZ = 0;
     this.rangeDistanceMeters = null;
     this.targetingEnemy = false;
     this.clearTransientEffects();
@@ -455,9 +563,13 @@ export class WeaponSystem {
       this.weaponPivot.position.copyFrom(activeRig.hipPos);
       this.weaponPivot.rotation.setAll(0);
     }
+    this.player.setWeaponSpeedMultiplier(WEAPONS[this.activeId].moveSpeedMultiplier ?? 1.0);
   }
 
   public resetForNewMatch(): void {
+    this.activeSlot = 1;
+    this.activeId = this.equippedGunId;
+    this.selectWeapon(this.equippedGunId, true);
     this.resetForLife();
     this.clearDecals();
     this.shotsFired = 0;
@@ -472,7 +584,16 @@ export class WeaponSystem {
     this.fireCooldown = Math.max(0, this.fireCooldown - clampedDt);
     this.spreadBloom = Math.max(0, this.spreadBloom - clampedDt * 0.045);
 
-    if (this.isReloading && this.viewModelVisible) {
+    if (this.slashTimer > 0) {
+      this.slashTimer = Math.max(0, this.slashTimer - clampedDt);
+      if (this.slashTimer === 0 && this.quickMeleeReturnSlot === 1 && this.activeSlot === 2) {
+        this.quickMeleeReturnSlot = null;
+        this.activeSlot = 1;
+        this.selectWeapon(this.equippedGunId);
+      }
+    }
+
+    if (this.isReloading && this.viewModelVisible && this.activeId !== 'knife') {
       this.reloadElapsed += clampedDt;
       const cfg = this.getActiveConfig();
       const effectiveReloadTime = cfg.reloadTimeSec / this.reloadSpeedMultiplier;
@@ -481,7 +602,7 @@ export class WeaponSystem {
         this.audio.playReloadMagIn();
       }
       if (this.reloadElapsed >= effectiveReloadTime) {
-        const state = this.slots[this.activeId];
+        const state = this.slots[this.equippedGunId];
         const needed = cfg.magSize - state.ammoInMag;
         const transfer = Math.min(needed, state.reserveAmmo);
         state.ammoInMag += transfer;
@@ -533,7 +654,19 @@ export class WeaponSystem {
     if (this.isReloading || this.fireCooldown > 0) return;
 
     const cfg = this.getActiveConfig();
-    const state = this.slots[this.activeId];
+
+    if (cfg.isMelee || cfg.id === 'knife') {
+      this.fireCooldown = 60 / cfg.rpm;
+      this.slashTimer = this.slashDuration;
+      this.slashSide = -this.slashSide;
+      this.audio.playKnifeSlash();
+      this.charmVelZ += (Math.random() > 0.5 ? 1 : -1) * 14;
+      this.charmVelX += 11;
+      this.performMeleeStrike(cfg);
+      return;
+    }
+
+    const state = this.slots[this.equippedGunId];
 
     if (state.ammoInMag <= 0) {
       this.fireCooldown = 0.2;
@@ -552,8 +685,10 @@ export class WeaponSystem {
 
     this.audio.playGunshot(cfg.id);
 
-    this.kickBackZ = Math.min(0.11, this.kickBackZ + 0.062);
-    this.kickRotX = Math.min(0.2, this.kickRotX + 0.09);
+    const kickScale =
+      cfg.id === 'sniper' ? 1.35 : cfg.id === 'shotgun' ? 1.25 : cfg.id === 'smg' ? 0.65 : 1.0;
+    this.kickBackZ = Math.min(0.14, this.kickBackZ + 0.062 * kickScale);
+    this.kickRotX = Math.min(0.24, this.kickRotX + 0.09 * kickScale);
 
     const adsRecoilScale = this.player.getIsAds() ? 0.68 : 1.0;
     const yawRand = (Math.random() * 2 - 1) * cfg.recoilYaw * adsRecoilScale;
@@ -564,84 +699,101 @@ export class WeaponSystem {
     this.spawnShellCasing();
     this.performHitscan(cfg);
 
-    this.spreadBloom = Math.min(0.032, this.spreadBloom + 0.0055);
+    this.spreadBloom = Math.min(0.032, this.spreadBloom + (cfg.id === 'smg' ? 0.0038 : 0.0055));
   }
 
-  private performHitscan(cfg: WeaponConfig): void {
-    const spread = this.computeCurrentSpread();
+  private performMeleeStrike(cfg: WeaponConfig): void {
     const origin = this.camera.globalPosition.clone();
     const forward = this.camera.getDirection(Vector3.Forward()).normalize();
     const right = this.camera.getDirection(Vector3.Right()).normalize();
     const up = this.camera.getDirection(Vector3.Up()).normalize();
 
-    const angle = Math.random() * Math.PI * 2;
-    const radius = Math.sqrt(Math.random()) * spread;
-    const dir = forward
-      .add(right.scale(Math.cos(angle) * radius))
-      .add(up.scale(Math.sin(angle) * radius))
-      .normalize();
+    const offsets = [
+      Vector3.Zero(),
+      right.scale(0.08),
+      right.scale(-0.08),
+      up.scale(0.06),
+      up.scale(-0.06),
+    ];
 
-    const ray = new Ray(origin, dir, cfg.range);
-    const pick = this.scene.pickWithRay(
-      ray,
-      (mesh) => mesh.isPickable && mesh.isEnabled() && mesh !== this.player.collider
-    );
+    let bestEnemyPick: ReturnType<Scene['pickWithRay']> = null;
+    let bestWorldPick: ReturnType<Scene['pickWithRay']> = null;
 
-    const rig = this.models.get(this.activeId);
-    const muzzleWorld = rig
-      ? rig.muzzlePoint.getAbsolutePosition()
-      : origin.add(forward.scale(0.6));
+    for (const offset of offsets) {
+      const dir = forward.add(offset).normalize();
+      const ray = new Ray(origin, dir, cfg.range);
+      const pick = this.scene.pickWithRay(
+        ray,
+        (mesh) => mesh.isPickable && mesh.isEnabled() && mesh !== this.player.collider
+      );
+      if (!pick?.hit || !pick.pickedMesh || !pick.pickedPoint) continue;
 
-    const endPoint =
-      pick?.hit && pick.pickedPoint ? pick.pickedPoint.clone() : origin.add(dir.scale(cfg.range));
+      const meta = pick.pickedMesh.metadata as
+        | { isBot?: boolean; isRemotePlayer?: boolean; team?: TeamId; zone?: HitZone }
+        | undefined;
+      const isEnemy = this.multiplayerMode
+        ? Boolean(meta?.isRemotePlayer && (meta.team !== this.localTeam || this.friendlyFire))
+        : Boolean(meta?.isBot && meta.team === 'red');
 
-    this.spawnTracer(muzzleWorld, endPoint, cfg.suppressed);
+      if (isEnemy) {
+        if (!bestEnemyPick || pick.distance < bestEnemyPick.distance) {
+          bestEnemyPick = pick;
+        }
+      } else if (!bestWorldPick || pick.distance < bestWorldPick.distance) {
+        bestWorldPick = pick;
+      }
+    }
+
+    const chosenPick = bestEnemyPick ?? bestWorldPick;
+    if (!chosenPick?.hit || !chosenPick.pickedPoint || !chosenPick.pickedMesh) {
+      if (this.multiplayerMode) {
+        this.onNetworkShot?.({
+          muzzle: origin.add(forward.scale(0.45)),
+          endPoint: origin.add(forward.scale(cfg.range)),
+          weaponId: 'knife',
+        });
+      }
+      return;
+    }
+
+    const hitNormal = chosenPick.getNormal(true) ?? forward.scale(-1);
+    const hitPoint = chosenPick.pickedPoint.clone();
 
     if (this.multiplayerMode) {
+      const meta = chosenPick.pickedMesh.metadata as
+        | { isRemotePlayer?: boolean; playerId?: string; team?: TeamId; zone?: HitZone }
+        | undefined;
       let hitPlayerId: string | undefined;
       let hitZone: HitZone | undefined;
       let isTargetHit = false;
 
-      if (pick?.hit && pick.pickedMesh && pick.pickedPoint) {
-        const meta = pick.pickedMesh.metadata as
-          | { isRemotePlayer?: boolean; playerId?: string; team?: TeamId; zone?: HitZone }
-          | undefined;
-
-        if (meta?.isRemotePlayer && meta.playerId && meta.zone) {
-          const validTarget = meta.team !== this.localTeam || this.friendlyFire;
-          if (validTarget) {
-            hitPlayerId = meta.playerId;
-            hitZone = meta.zone;
-            isTargetHit = true;
-          }
-        }
-        const hitNormal = pick.getNormal(true) ?? dir.scale(-1);
-        this.spawnImpact(pick.pickedPoint, isTargetHit, hitNormal);
-        if (!meta?.isRemotePlayer) {
-          this.spawnBulletDecal(pick.pickedPoint, hitNormal);
+      if (meta?.isRemotePlayer && meta.playerId && meta.zone) {
+        const validTarget = meta.team !== this.localTeam || this.friendlyFire;
+        if (validTarget) {
+          hitPlayerId = meta.playerId;
+          hitZone = meta.zone;
+          isTargetHit = true;
         }
       }
 
+      this.audio.playKnifeHit(isTargetHit);
+      this.spawnImpact(hitPoint, isTargetHit, hitNormal);
       this.onNetworkShot?.({
-        muzzle: muzzleWorld,
-        endPoint,
-        weaponId: cfg.id,
+        muzzle: origin.add(forward.scale(0.45)),
+        endPoint: hitPoint,
+        weaponId: 'knife',
         targetId: hitPlayerId,
         zone: hitZone,
       });
       return;
     }
 
-    if (!pick?.hit || !pick.pickedMesh || !pick.pickedPoint) return;
-
-    const meta = pick.pickedMesh.metadata as
+    const meta = chosenPick.pickedMesh.metadata as
       | { isBot?: boolean; botId?: string; team?: TeamId; zone?: HitZone }
       | undefined;
 
-    const hitNormal = pick.getNormal(true) ?? dir.scale(-1);
-
     if (meta?.isBot && meta.botId && meta.zone && meta.team === 'red') {
-      const distanceMeters = Math.round(pick.distance * 10) / 10;
+      const distanceMeters = Math.round(chosenPick.distance * 10) / 10;
       const result = this.bots.applyDamageToBot(
         meta.botId,
         meta.zone,
@@ -653,6 +805,8 @@ export class WeaponSystem {
       );
 
       if (result) {
+        this.audio.playKnifeHit(true);
+        this.shotsFired += 1;
         this.shotsHit += 1;
         if (result.zone === 'head') {
           this.headshots += 1;
@@ -667,33 +821,184 @@ export class WeaponSystem {
           });
           this.audio.playKillConfirmation();
         }
-
         this.lastHitMarker = {
           id: ++this.hitMarkerCounter,
           zone: result.zone,
           killed: result.killed,
           timestamp: performance.now(),
         };
-
         this.audio.playHitMarker(result.zone === 'head');
-        this.spawnImpact(pick.pickedPoint, true, hitNormal);
+        this.spawnImpact(hitPoint, true, hitNormal);
         return;
       }
     }
 
-    this.spawnImpact(pick.pickedPoint, false, hitNormal);
-    if (!meta?.isBot) {
-      this.spawnBulletDecal(pick.pickedPoint, hitNormal);
+    this.audio.playKnifeHit(false);
+    this.spawnImpact(hitPoint, false, hitNormal);
+  }
+
+  private performHitscan(cfg: WeaponConfig): void {
+    const spread = this.computeCurrentSpread();
+    const origin = this.camera.globalPosition.clone();
+    const forward = this.camera.getDirection(Vector3.Forward()).normalize();
+    const right = this.camera.getDirection(Vector3.Right()).normalize();
+    const up = this.camera.getDirection(Vector3.Up()).normalize();
+
+    const rig = this.models.get(this.activeId);
+    const muzzleWorld = rig
+      ? rig.muzzlePoint.getAbsolutePosition()
+      : origin.add(forward.scale(0.6));
+
+    const pelletCount = Math.max(1, cfg.pellets ?? 1);
+    const networkPellets: NetworkShotPellet[] = [];
+
+    let primaryEndPoint = origin.add(forward.scale(cfg.range));
+    let primaryTargetId: string | undefined;
+    let primaryZone: HitZone | undefined;
+
+    let anyEnemyHit = false;
+    let anyHeadshot = false;
+    let anyKilled = false;
+
+    for (let p = 0; p < pelletCount; p++) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = Math.sqrt(Math.random()) * spread;
+      const dir = forward
+        .add(right.scale(Math.cos(angle) * radius))
+        .add(up.scale(Math.sin(angle) * radius))
+        .normalize();
+
+      const ray = new Ray(origin, dir, cfg.range);
+      const pick = this.scene.pickWithRay(
+        ray,
+        (mesh) => mesh.isPickable && mesh.isEnabled() && mesh !== this.player.collider
+      );
+
+      const endPoint =
+        pick?.hit && pick.pickedPoint ? pick.pickedPoint.clone() : origin.add(dir.scale(cfg.range));
+
+      if (p === 0) {
+        primaryEndPoint = endPoint;
+      }
+
+      this.spawnTracer(muzzleWorld, endPoint, cfg.suppressed);
+
+      if (this.multiplayerMode) {
+        let hitPlayerId: string | undefined;
+        let hitZone: HitZone | undefined;
+        let isTargetHit = false;
+
+        if (pick?.hit && pick.pickedMesh && pick.pickedPoint) {
+          const meta = pick.pickedMesh.metadata as
+            | { isRemotePlayer?: boolean; playerId?: string; team?: TeamId; zone?: HitZone }
+            | undefined;
+
+          if (meta?.isRemotePlayer && meta.playerId && meta.zone) {
+            const validTarget = meta.team !== this.localTeam || this.friendlyFire;
+            if (validTarget) {
+              hitPlayerId = meta.playerId;
+              hitZone = meta.zone;
+              isTargetHit = true;
+            }
+          }
+          const hitNormal = pick.getNormal(true) ?? dir.scale(-1);
+          this.spawnImpact(pick.pickedPoint, isTargetHit, hitNormal);
+          if (!meta?.isRemotePlayer) {
+            this.spawnBulletDecal(pick.pickedPoint, hitNormal);
+          }
+        }
+
+        if (p === 0) {
+          primaryTargetId = hitPlayerId;
+          primaryZone = hitZone;
+        }
+        networkPellets.push({
+          endPoint,
+          targetId: hitPlayerId,
+          zone: hitZone,
+        });
+        continue;
+      }
+
+      if (!pick?.hit || !pick.pickedMesh || !pick.pickedPoint) continue;
+
+      const meta = pick.pickedMesh.metadata as
+        | { isBot?: boolean; botId?: string; team?: TeamId; zone?: HitZone }
+        | undefined;
+      const hitNormal = pick.getNormal(true) ?? dir.scale(-1);
+
+      if (meta?.isBot && meta.botId && meta.zone && meta.team === 'red') {
+        const distanceMeters = Math.round(pick.distance * 10) / 10;
+        const result = this.bots.applyDamageToBot(
+          meta.botId,
+          meta.zone,
+          cfg.damage,
+          cfg.headshotMultiplier,
+          'player',
+          cfg.name,
+          distanceMeters
+        );
+
+        if (result) {
+          anyEnemyHit = true;
+          if (result.zone === 'head') {
+            anyHeadshot = true;
+          }
+          if (result.killed) {
+            anyKilled = true;
+            this.eliminations += 1;
+            this.onOfflineKill?.({
+              victimId: result.botId,
+              victimName: result.botName,
+              headshot: result.zone === 'head',
+              distanceMeters,
+            });
+          }
+          this.spawnImpact(pick.pickedPoint, true, hitNormal);
+          continue;
+        }
+      }
+
+      this.spawnImpact(pick.pickedPoint, false, hitNormal);
+      if (!meta?.isBot && (pelletCount === 1 || p % 2 === 0)) {
+        this.spawnBulletDecal(pick.pickedPoint, hitNormal);
+      }
+    }
+
+    if (this.multiplayerMode) {
+      this.onNetworkShot?.({
+        muzzle: muzzleWorld,
+        endPoint: primaryEndPoint,
+        weaponId: cfg.id,
+        targetId: primaryTargetId,
+        zone: primaryZone,
+        pellets: pelletCount > 1 ? networkPellets : undefined,
+      });
+      return;
+    }
+
+    if (anyEnemyHit) {
+      this.shotsHit += 1;
+      if (anyHeadshot) {
+        this.headshots += 1;
+      }
+      if (anyKilled) {
+        this.audio.playKillConfirmation();
+      }
+      this.lastHitMarker = {
+        id: ++this.hitMarkerCounter,
+        zone: anyHeadshot ? 'head' : 'body',
+        killed: anyKilled,
+        timestamp: performance.now(),
+      };
+      this.audio.playHitMarker(anyHeadshot);
     }
   }
 
   private updateRangefinder(): void {
     this.rangeRay.origin.copyFrom(this.camera.position);
     this.camera.getDirectionToRef(this.forwardAxis, this.rangeRay.direction);
-    const pick = this.scene.pickWithRay(
-      this.rangeRay,
-      this.rangePickPredicate
-    );
+    const pick = this.scene.pickWithRay(this.rangeRay, this.rangePickPredicate);
     if (pick?.hit) {
       this.rangeDistanceMeters = Math.round(pick.distance);
       const meta = pick.pickedMesh?.metadata as
@@ -732,6 +1037,7 @@ export class WeaponSystem {
 
   private spawnShellCasing(): void {
     if (this.graphicsQuality === 'LOW' || this.casings.length >= 18) return;
+    if (this.activeId === 'knife') return;
     const rig = this.models.get(this.activeId);
     if (!rig) return;
 
@@ -893,9 +1199,10 @@ export class WeaponSystem {
     if (!rig) return;
 
     const stance = this.player.getStance();
-    const adsBlend = this.player.getAdsBlend();
-    const isAds = this.player.getIsAds() && !this.isReloading;
-    const fullyScoped = this.activeId === 'intervention' && adsBlend > 0.88 && !this.isReloading;
+    const isKnife = this.activeId === 'knife';
+    const adsBlend = isKnife ? 0 : this.player.getAdsBlend();
+    const isAds = !isKnife && this.player.getIsAds() && !this.isReloading;
+    const fullyScoped = this.activeId === 'sniper' && adsBlend > 0.88 && !this.isReloading;
     rig.root.setEnabled(!fullyScoped);
     this.vmFillLight.setEnabled(this.viewModelVisible && !fullyScoped);
     this.vmRimLight.setEnabled(this.viewModelVisible && !fullyScoped);
@@ -932,14 +1239,33 @@ export class WeaponSystem {
     this.kickRotX *= Math.exp(-20 * dt);
     this.equipDrop *= Math.exp(-12 * dt);
 
+    // Knife slash arc
+    let slashOffX = 0;
+    let slashOffY = 0;
+    let slashOffZ = 0;
+    let slashRotX = 0;
+    let slashRotY = 0;
+    let slashRotZ = 0;
+    if (isKnife && this.slashTimer > 0) {
+      const p = 1 - this.slashTimer / this.slashDuration;
+      const swingCurve = Math.sin(p * Math.PI);
+      const windup = p < 0.25 ? p / 0.25 : 1 - (p - 0.25) / 0.75;
+      slashOffX = -0.19 * swingCurve * this.slashSide;
+      slashOffY = 0.05 * Math.sin(p * Math.PI * 2);
+      slashOffZ = 0.18 * swingCurve;
+      slashRotX = -0.68 * swingCurve;
+      slashRotY = 1.05 * swingCurve * this.slashSide;
+      slashRotZ = 0.55 * windup * this.slashSide;
+    }
+
     const baseTargetX = rig.hipPos.x + (rig.adsPos.x - rig.hipPos.x) * adsBlend;
     const baseTargetY = rig.hipPos.y + (rig.adsPos.y - rig.hipPos.y) * adsBlend;
     const baseTargetZ = rig.hipPos.z + (rig.adsPos.z - rig.hipPos.z) * adsBlend;
     const reloadOffsetY = this.isReloading ? -0.11 * Math.sin(this.getReloadProgress() * Math.PI) : 0;
     const reloadTiltZ = this.isReloading ? 0.42 * Math.sin(this.getReloadProgress() * Math.PI) : 0;
 
-    const sprinting = stance === 'sprint' && !isAds && !this.isReloading;
-    const slidingHip = stance === 'slide' && adsBlend < 0.4 && !this.isReloading;
+    const sprinting = stance === 'sprint' && !isAds && !this.isReloading && this.slashTimer === 0;
+    const slidingHip = stance === 'slide' && adsBlend < 0.4 && !this.isReloading && this.slashTimer === 0;
     const slidingAds = stance === 'slide' && isAds && !this.isReloading;
 
     const sprintRotY = sprinting ? -0.42 : 0;
@@ -950,11 +1276,11 @@ export class WeaponSystem {
     const slideRotY = slidingHip ? -0.14 : 0;
     const slideRotZ = slidingHip ? 0.14 : slidingAds ? 0.035 : 0;
 
-    const targetX = baseTargetX + bobX + swayX + slideOffsetX;
-    const targetY = baseTargetY + bobY + reloadOffsetY - this.equipDrop + slideOffsetY;
-    const targetZ = baseTargetZ - this.kickBackZ + swayZ;
+    const targetX = baseTargetX + bobX + swayX + slideOffsetX + slashOffX;
+    const targetY = baseTargetY + bobY + reloadOffsetY - this.equipDrop + slideOffsetY + slashOffY;
+    const targetZ = baseTargetZ - this.kickBackZ + swayZ + slashOffZ;
 
-    const posLerp = 1 - Math.exp(-(isAds ? 20 : 14) * dt);
+    const posLerp = 1 - Math.exp(-(this.slashTimer > 0 ? 28 : isAds ? 20 : 14) * dt);
     this.weaponPivot.position.x += (targetX - this.weaponPivot.position.x) * posLerp;
     this.weaponPivot.position.y += (targetY - this.weaponPivot.position.y) * posLerp;
     this.weaponPivot.position.z += (targetZ - this.weaponPivot.position.z) * posLerp;
@@ -963,14 +1289,32 @@ export class WeaponSystem {
     const adsRotY = rig.adsRot.y * adsBlend;
     const adsRotZ = rig.adsRot.z * adsBlend;
 
-    const targetRotX = -this.kickRotX + sprintRotX + this.swayPitch + adsRotX;
-    const targetRotY = sprintRotY + slideRotY + adsRotY;
-    const targetRotZ = reloadTiltZ + slideRotZ + this.swayRoll + adsRotZ;
+    const targetRotX = -this.kickRotX + sprintRotX + this.swayPitch + adsRotX + slashRotX;
+    const targetRotY = sprintRotY + slideRotY + adsRotY + slashRotY;
+    const targetRotZ = reloadTiltZ + slideRotZ + this.swayRoll + adsRotZ + slashRotZ;
 
-    const rotLerp = 1 - Math.exp(-(isAds ? 18 : 14) * dt);
+    const rotLerp = 1 - Math.exp(-(this.slashTimer > 0 ? 28 : isAds ? 18 : 14) * dt);
     this.weaponPivot.rotation.x += (targetRotX - this.weaponPivot.rotation.x) * rotLerp;
     this.weaponPivot.rotation.y += (targetRotY - this.weaponPivot.rotation.y) * rotLerp;
     this.weaponPivot.rotation.z += (targetRotZ - this.weaponPivot.rotation.z) * rotLerp;
+
+    // 3D Knife Charm pendulum motion physics
+    if (isKnife && this.charmPivot) {
+      const targetRestX = 0.18 + Math.max(-0.35, Math.min(0.45, fwdN * 0.25 + (isMoving ? Math.sin(this.bobTimer) * 0.1 : 0)));
+      const targetRestZ = Math.max(-0.55, Math.min(0.55, -strafeN * 0.38 + (this.swayRoll * 1.4)));
+      const springK = 68;
+      const damping = 7.5;
+      const ax = (targetRestX - this.charmSwingX) * springK - this.charmVelX * damping;
+      const az = (targetRestZ - this.charmSwingZ) * springK - this.charmVelZ * damping;
+      this.charmVelX += ax * dt;
+      this.charmVelZ += az * dt;
+      this.charmSwingX = Math.max(-0.85, Math.min(0.95, this.charmSwingX + this.charmVelX * dt));
+      this.charmSwingZ = Math.max(-0.85, Math.min(0.85, this.charmSwingZ + this.charmVelZ * dt));
+
+      this.charmPivot.rotation.x = this.charmSwingX;
+      this.charmPivot.rotation.z = this.charmSwingZ;
+      this.charmPivot.rotation.y = Math.sin(performance.now() * 0.0028) * 0.12;
+    }
   }
 
   private createMuzzleFlash(): Mesh {
@@ -992,12 +1336,18 @@ export class WeaponSystem {
     this.vmRimLight.includedOnlyMeshes = meshes;
   }
 
+  private applyCharmVisibility(): void {
+    this.charmRoots.forEach((root, charmId) => {
+      root.setEnabled(charmId === this.knifeCharmId);
+    });
+  }
+
   private createWeaponFinish(
     name: string,
     albedoHex: string,
     metallic: number,
     roughness: number,
-    kind: 'anodized' | 'brushed' | 'polymer' | 'scope'
+    kind: 'anodized' | 'brushed' | 'polymer' | 'scope' | 'wood'
   ): PBRMaterial {
     const tex = new DynamicTexture(`${name}_tex`, { width: 256, height: 256 }, this.scene, true);
     const ctx = tex.getContext();
@@ -1011,6 +1361,15 @@ export class WeaponSystem {
         ctx.fillRect(0, y, 256, 1);
         ctx.fillStyle = `rgba(0,0,0,${0.02 + (y % 5) * 0.004})`;
         ctx.fillRect(0, y, 256, 1);
+      }
+    } else if (kind === 'wood') {
+      for (let y = 0; y < 256; y += 3) {
+        ctx.fillStyle = y % 6 === 0 ? 'rgba(38,18,6,0.22)' : 'rgba(255,205,150,0.06)';
+        ctx.fillRect(0, y, 256, 2);
+      }
+      for (let i = 0; i < 650; i++) {
+        ctx.fillStyle = 'rgba(20,8,2,0.12)';
+        ctx.fillRect(Math.random() * 256, Math.random() * 256, 12, 1.2);
       }
     } else if (kind === 'polymer') {
       for (let i = 0; i < 2800; i++) {
@@ -1039,7 +1398,7 @@ export class WeaponSystem {
     mat.albedoTexture = tex;
     mat.metallic = metallic;
     mat.roughness = roughness;
-    mat.environmentIntensity = kind === 'polymer' || kind === 'anodized' ? 0.85 : 1.25;
+    mat.environmentIntensity = kind === 'polymer' || kind === 'anodized' || kind === 'wood' ? 0.85 : 1.25;
     this.materialsToDispose.push(mat);
     return mat;
   }
@@ -1048,7 +1407,10 @@ export class WeaponSystem {
     const gunmetal = this.createWeaponFinish('anodizedRecvMat', '#1a1d22', 0.72, 0.46, 'anodized');
     const polymer = this.createWeaponFinish('polymerMat', '#16181c', 0.06, 0.78, 'polymer');
     const coyote = this.createWeaponFinish('coyoteMat', '#6d5a42', 0.05, 0.74, 'polymer');
+    const walnut = this.createWeaponFinish('walnutMat', '#5d341c', 0.04, 0.62, 'wood');
     const steelSilver = this.createWeaponFinish('brushedGunmetalMat', '#6e7884', 0.94, 0.22, 'brushed');
+    const bladeEdge = this.createWeaponFinish('knifeEdgeMat', '#b7c3d0', 0.98, 0.14, 'brushed');
+    const odGreen = this.createWeaponFinish('odGreenMat', '#334232', 0.08, 0.72, 'polymer');
     const scopeTube = this.createWeaponFinish('scopeTubeMat', '#2a3038', 0.92, 0.18, 'scope');
 
     const reticleRed = new StandardMaterial('reticleRedMat', this.scene);
@@ -1058,6 +1420,10 @@ export class WeaponSystem {
     const tritiumGreen = new StandardMaterial('tritiumGreenMat', this.scene);
     tritiumGreen.disableLighting = true;
     tritiumGreen.emissiveColor = new Color3(0.35, 1.7, 0.65);
+
+    const amberFiber = new StandardMaterial('amberFiberMat', this.scene);
+    amberFiber.disableLighting = true;
+    amberFiber.emissiveColor = new Color3(1.8, 0.75, 0.15);
 
     const holoGlass = new PBRMaterial('holoGlassMat', this.scene);
     holoGlass.albedoColor = new Color3(0.12, 0.38, 0.48);
@@ -1078,144 +1444,213 @@ export class WeaponSystem {
     scopeLens.environmentIntensity = 1.4;
     scopeLens.backFaceCulling = false;
 
-    this.materialsToDispose.push(reticleRed, tritiumGreen, holoGlass, scopeLens);
+    this.materialsToDispose.push(
+      reticleRed,
+      tritiumGreen,
+      amberFiber,
+      holoGlass,
+      scopeLens
+    );
 
-    // 1. M4A1 Tactical
+    // 1. M870 Combat Shotgun
     {
-      const root = new TransformNode('vm_m4a1', this.scene);
+      const root = new TransformNode('vm_shotgun', this.scene);
       root.parent = this.weaponPivot;
 
-      this.addPart(root, 'm4_recv', { width: 0.048, height: 0.068, depth: 0.24 }, new Vector3(0, 0, 0), gunmetal);
-      this.addPart(root, 'm4_rail_top', { width: 0.024, height: 0.008, depth: 0.34 }, new Vector3(0, 0.036, 0.06), steelSilver);
-      this.addPart(root, 'm4_rail', { width: 0.044, height: 0.046, depth: 0.23 }, new Vector3(0, 0.008, 0.22), polymer);
-      this.addPart(root, 'm4_ejection_port', { width: 0.005, height: 0.018, depth: 0.055 }, new Vector3(0.024, 0.014, 0.02), steelSilver);
-      this.addCylinder(root, 'm4_barrel', 0.26, 0.02, new Vector3(0, 0.01, 0.38), Math.PI / 2, steelSilver);
-      this.addCylinder(root, 'm4_flash', 0.05, 0.028, new Vector3(0, 0.01, 0.51), Math.PI / 2, gunmetal);
-      this.addPart(root, 'm4_mag', { width: 0.032, height: 0.13, depth: 0.065 }, new Vector3(0, -0.09, 0.06), coyote, new Vector3(0.18, 0, 0));
-      this.addPart(root, 'm4_grip', { width: 0.032, height: 0.1, depth: 0.042 }, new Vector3(0, -0.075, -0.07), coyote, new Vector3(-0.32, 0, 0));
-      this.addPart(root, 'm4_stock', { width: 0.04, height: 0.09, depth: 0.18 }, new Vector3(0, -0.01, -0.2), coyote);
+      this.addPart(root, 'sg_recv', { width: 0.05, height: 0.068, depth: 0.23 }, new Vector3(0, 0, 0), gunmetal);
+      this.addPart(root, 'sg_eject_port', { width: 0.005, height: 0.022, depth: 0.065 }, new Vector3(0.025, 0.01, 0.02), steelSilver);
+      this.addCylinder(root, 'sg_barrel', 0.48, 0.028, new Vector3(0, 0.022, 0.35), Math.PI / 2, steelSilver);
+      this.addCylinder(root, 'sg_mag_tube', 0.42, 0.024, new Vector3(0, -0.009, 0.32), Math.PI / 2, gunmetal);
+      this.addPart(root, 'sg_barrel_clamp', { width: 0.032, height: 0.042, depth: 0.02 }, new Vector3(0, 0.006, 0.49), gunmetal);
+      // Ribbed tactical pump forend
+      this.addPart(root, 'sg_pump_core', { width: 0.048, height: 0.042, depth: 0.165 }, new Vector3(0, -0.012, 0.25), polymer);
+      for (let i = 0; i < 5; i++) {
+        this.addPart(
+          root,
+          `sg_pump_rib_${i}`,
+          { width: 0.052, height: 0.036, depth: 0.014 },
+          new Vector3(0, -0.012, 0.195 + i * 0.028),
+          gunmetal
+        );
+      }
+      this.addPart(root, 'sg_grip', { width: 0.034, height: 0.095, depth: 0.044 }, new Vector3(0, -0.072, -0.08), polymer, new Vector3(-0.34, 0, 0));
+      this.addPart(root, 'sg_stock', { width: 0.042, height: 0.088, depth: 0.22 }, new Vector3(0, -0.018, -0.2), polymer, new Vector3(0.08, 0, 0));
+      this.addPart(root, 'sg_buttpad', { width: 0.044, height: 0.096, depth: 0.022 }, new Vector3(0, -0.026, -0.31), coyote);
+      // Ghost-ring rear & fiber-optic front bead
+      this.addPart(root, 'sg_sight_r1', { width: 0.006, height: 0.016, depth: 0.014 }, new Vector3(-0.01, 0.042, -0.07), gunmetal);
+      this.addPart(root, 'sg_sight_r2', { width: 0.006, height: 0.016, depth: 0.014 }, new Vector3(0.01, 0.042, -0.07), gunmetal);
+      this.addPart(root, 'sg_sight_f', { width: 0.007, height: 0.016, depth: 0.012 }, new Vector3(0, 0.042, 0.56), gunmetal);
+      const bead = MeshBuilder.CreateSphere('sg_bead', { diameter: 0.0055 }, this.scene);
+      bead.position = new Vector3(0, 0.05, 0.56);
+      bead.parent = root;
+      bead.material = amberFiber;
+      bead.isPickable = false;
+      bead.renderingGroupId = 1;
 
-      this.addPart(root, 'm4_optic_base', { width: 0.04, height: 0.014, depth: 0.075 }, new Vector3(0, 0.044, 0.01), polymer);
-      this.addPart(root, 'm4_optic_l', { width: 0.006, height: 0.034, depth: 0.05 }, new Vector3(-0.017, 0.066, 0.01), polymer);
-      this.addPart(root, 'm4_optic_r', { width: 0.006, height: 0.034, depth: 0.05 }, new Vector3(0.017, 0.066, 0.01), polymer);
-      this.addPart(root, 'm4_optic_top', { width: 0.04, height: 0.006, depth: 0.05 }, new Vector3(0, 0.084, 0.01), polymer);
-      this.addPart(root, 'm4_optic_glass', { width: 0.028, height: 0.028, depth: 0.003 }, new Vector3(0, 0.066, 0.01), holoGlass);
-      const dot = MeshBuilder.CreateSphere('m4_dot', { diameter: 0.0045 }, this.scene);
-      dot.position = new Vector3(0, 0.066, 0.01);
-      dot.parent = root;
-      dot.material = reticleRed;
-      dot.isPickable = false;
-      dot.renderingGroupId = 1;
-
-      const ejectionPort = new TransformNode('m4_eject', this.scene);
+      const ejectionPort = new TransformNode('sg_eject', this.scene);
       ejectionPort.parent = root;
-      ejectionPort.position = new Vector3(0.035, 0.02, 0.02);
+      ejectionPort.position = new Vector3(0.036, 0.012, 0.02);
 
-      const muzzlePoint = new TransformNode('m4_muzzle', this.scene);
+      const muzzlePoint = new TransformNode('sg_muzzle', this.scene);
       muzzlePoint.parent = root;
-      muzzlePoint.position = new Vector3(0, 0.01, 0.54);
+      muzzlePoint.position = new Vector3(0, 0.022, 0.6);
 
-      this.models.set('m4a1', {
+      this.models.set('shotgun', {
         root,
         muzzlePoint,
         ejectionPort,
-        hipPos: new Vector3(0.21, -0.19, 0.42),
-        adsPos: new Vector3(0, -0.066, 0.29),
+        hipPos: new Vector3(0.21, -0.19, 0.41),
+        adsPos: new Vector3(0, -0.05, 0.28),
         adsRot: Vector3.Zero(),
       });
     }
 
-    // 2. MP5-SD Suppressed SMG
+    // 2. AK-47 Heavy Rifle
     {
-      const root = new TransformNode('vm_mp5', this.scene);
+      const root = new TransformNode('vm_ak47', this.scene);
       root.parent = this.weaponPivot;
 
-      this.addPart(root, 'mp5_recv', { width: 0.044, height: 0.062, depth: 0.24 }, new Vector3(0, 0, 0), gunmetal);
-      this.addPart(root, 'mp5_rail_top', { width: 0.022, height: 0.007, depth: 0.14 }, new Vector3(0, 0.034, 0.01), steelSilver);
-      this.addCylinder(root, 'mp5_supp', 0.26, 0.044, new Vector3(0, 0.006, 0.24), Math.PI / 2, polymer);
-      this.addPart(root, 'mp5_mag', { width: 0.026, height: 0.14, depth: 0.045 }, new Vector3(0, -0.095, 0.07), gunmetal, new Vector3(0.22, 0, 0));
-      this.addPart(root, 'mp5_grip', { width: 0.03, height: 0.095, depth: 0.04 }, new Vector3(0, -0.072, -0.06), polymer, new Vector3(-0.3, 0, 0));
-      this.addPart(root, 'mp5_optic_base', { width: 0.032, height: 0.01, depth: 0.045 }, new Vector3(0, 0.04, 0.01), polymer);
-      this.addPart(root, 'mp5_optic_l', { width: 0.005, height: 0.024, depth: 0.035 }, new Vector3(-0.013, 0.056, 0.01), polymer);
-      this.addPart(root, 'mp5_optic_r', { width: 0.005, height: 0.024, depth: 0.035 }, new Vector3(0.013, 0.056, 0.01), polymer);
-      this.addPart(root, 'mp5_optic_top', { width: 0.032, height: 0.005, depth: 0.035 }, new Vector3(0, 0.07, 0.01), polymer);
-      this.addPart(root, 'mp5_optic_glass', { width: 0.022, height: 0.02, depth: 0.003 }, new Vector3(0, 0.056, 0.01), holoGlass);
-      this.addPart(root, 'mp5_sight_f', { width: 0.012, height: 0.02, depth: 0.014 }, new Vector3(0, 0.038, 0.12), gunmetal);
+      this.addPart(root, 'ak_recv', { width: 0.046, height: 0.066, depth: 0.24 }, new Vector3(0, 0, 0), gunmetal);
+      this.addPart(root, 'ak_dust_cover', { width: 0.042, height: 0.024, depth: 0.21 }, new Vector3(0, 0.038, -0.01), steelSilver);
+      this.addPart(root, 'ak_bolt_handle', { width: 0.024, height: 0.01, depth: 0.028 }, new Vector3(0.03, 0.018, 0.03), steelSilver);
+      // Iconic walnut handguard & full stock
+      this.addPart(root, 'ak_handguard_l', { width: 0.042, height: 0.038, depth: 0.17 }, new Vector3(0, -0.004, 0.2), walnut);
+      this.addPart(root, 'ak_handguard_u', { width: 0.036, height: 0.026, depth: 0.15 }, new Vector3(0, 0.025, 0.19), walnut);
+      this.addPart(root, 'ak_stock', { width: 0.04, height: 0.092, depth: 0.23 }, new Vector3(0, -0.022, -0.22), walnut, new Vector3(0.09, 0, 0));
+      this.addPart(root, 'ak_grip', { width: 0.03, height: 0.105, depth: 0.042 }, new Vector3(0, -0.078, -0.075), polymer, new Vector3(-0.34, 0, 0));
+      // Curved banana magazine (two angled segments)
+      this.addPart(root, 'ak_mag_top', { width: 0.03, height: 0.085, depth: 0.062 }, new Vector3(0, -0.07, 0.065), coyote, new Vector3(0.14, 0, 0));
+      this.addPart(root, 'ak_mag_bot', { width: 0.029, height: 0.09, depth: 0.06 }, new Vector3(0, -0.145, 0.09), coyote, new Vector3(0.42, 0, 0));
+      // Gas tube, barrel, front sight post & slant brake
+      this.addCylinder(root, 'ak_gas_tube', 0.16, 0.018, new Vector3(0, 0.028, 0.24), Math.PI / 2, gunmetal);
+      this.addCylinder(root, 'ak_barrel', 0.34, 0.021, new Vector3(0, 0.008, 0.38), Math.PI / 2, steelSilver);
+      this.addPart(root, 'ak_fsb', { width: 0.014, height: 0.038, depth: 0.022 }, new Vector3(0, 0.024, 0.48), gunmetal);
+      this.addCylinder(root, 'ak_brake', 0.046, 0.026, new Vector3(0, 0.008, 0.56), Math.PI / 2, gunmetal);
+      // Rear sight notch & front blade
+      this.addPart(root, 'ak_sight_r1', { width: 0.008, height: 0.012, depth: 0.024 }, new Vector3(-0.009, 0.052, 0.06), gunmetal);
+      this.addPart(root, 'ak_sight_r2', { width: 0.008, height: 0.012, depth: 0.024 }, new Vector3(0.009, 0.052, 0.06), gunmetal);
+      this.addPart(root, 'ak_sight_f_pin', { width: 0.003, height: 0.016, depth: 0.004 }, new Vector3(0, 0.05, 0.48), gunmetal);
+      const akDot = MeshBuilder.CreateSphere('ak_tritium', { diameter: 0.004 }, this.scene);
+      akDot.position = new Vector3(0, 0.057, 0.48);
+      akDot.parent = root;
+      akDot.material = reticleRed;
+      akDot.isPickable = false;
+      akDot.renderingGroupId = 1;
 
-      const dot = MeshBuilder.CreateSphere('mp5_tritium', { diameter: 0.004 }, this.scene);
-      dot.position = new Vector3(0, 0.056, 0.01);
+      const ejectionPort = new TransformNode('ak_eject', this.scene);
+      ejectionPort.parent = root;
+      ejectionPort.position = new Vector3(0.036, 0.02, 0.03);
+
+      const muzzlePoint = new TransformNode('ak_muzzle', this.scene);
+      muzzlePoint.parent = root;
+      muzzlePoint.position = new Vector3(0, 0.008, 0.59);
+
+      this.models.set('ak47', {
+        root,
+        muzzlePoint,
+        ejectionPort,
+        hipPos: new Vector3(0.21, -0.19, 0.42),
+        adsPos: new Vector3(0, -0.056, 0.28),
+        adsRot: Vector3.Zero(),
+      });
+    }
+
+    // 3. Vector-9 SMG
+    {
+      const root = new TransformNode('vm_smg', this.scene);
+      root.parent = this.weaponPivot;
+
+      this.addPart(root, 'smg_upper', { width: 0.044, height: 0.056, depth: 0.26 }, new Vector3(0, 0.014, 0.03), gunmetal);
+      this.addPart(root, 'smg_lower_shroud', { width: 0.042, height: 0.064, depth: 0.13 }, new Vector3(0, -0.024, 0.095), polymer);
+      this.addPart(root, 'smg_rail_top', { width: 0.022, height: 0.007, depth: 0.22 }, new Vector3(0, 0.044, 0.03), steelSilver);
+      this.addCylinder(root, 'smg_barrel', 0.12, 0.02, new Vector3(0, 0.008, 0.21), Math.PI / 2, steelSilver);
+      this.addCylinder(root, 'smg_comp', 0.055, 0.03, new Vector3(0, 0.008, 0.27), Math.PI / 2, gunmetal);
+      this.addPart(root, 'smg_mag', { width: 0.026, height: 0.155, depth: 0.038 }, new Vector3(0, -0.105, 0.09), gunmetal, new Vector3(0.18, 0, 0));
+      this.addPart(root, 'smg_grip', { width: 0.03, height: 0.092, depth: 0.04 }, new Vector3(0, -0.065, -0.055), polymer, new Vector3(-0.28, 0, 0));
+      this.addPart(root, 'smg_brace', { width: 0.022, height: 0.018, depth: 0.16 }, new Vector3(0, 0.01, -0.17), polymer);
+      // Low-profile reflex optic
+      this.addPart(root, 'smg_opt_base', { width: 0.032, height: 0.01, depth: 0.046 }, new Vector3(0, 0.05, 0.02), polymer);
+      this.addPart(root, 'smg_opt_l', { width: 0.005, height: 0.024, depth: 0.036 }, new Vector3(-0.013, 0.066, 0.02), polymer);
+      this.addPart(root, 'smg_opt_r', { width: 0.005, height: 0.024, depth: 0.036 }, new Vector3(0.013, 0.066, 0.02), polymer);
+      this.addPart(root, 'smg_opt_top', { width: 0.032, height: 0.005, depth: 0.036 }, new Vector3(0, 0.08, 0.02), polymer);
+      this.addPart(root, 'smg_opt_glass', { width: 0.022, height: 0.02, depth: 0.003 }, new Vector3(0, 0.066, 0.02), holoGlass);
+
+      const dot = MeshBuilder.CreateSphere('smg_tritium', { diameter: 0.004 }, this.scene);
+      dot.position = new Vector3(0, 0.066, 0.02);
       dot.parent = root;
       dot.material = tritiumGreen;
       dot.isPickable = false;
       dot.renderingGroupId = 1;
 
-      const ejectionPort = new TransformNode('mp5_eject', this.scene);
+      const ejectionPort = new TransformNode('smg_eject', this.scene);
       ejectionPort.parent = root;
-      ejectionPort.position = new Vector3(0.032, 0.018, 0.02);
+      ejectionPort.position = new Vector3(0.03, 0.018, 0.04);
 
-      const muzzlePoint = new TransformNode('mp5_muzzle', this.scene);
+      const muzzlePoint = new TransformNode('smg_muzzle', this.scene);
       muzzlePoint.parent = root;
-      muzzlePoint.position = new Vector3(0, 0.006, 0.38);
+      muzzlePoint.position = new Vector3(0, 0.008, 0.31);
 
-      this.models.set('mp5', {
+      this.models.set('smg', {
         root,
         muzzlePoint,
         ejectionPort,
         hipPos: new Vector3(0.2, -0.18, 0.42),
-        adsPos: new Vector3(0, -0.056, 0.3),
+        adsPos: new Vector3(0, -0.066, 0.3),
         adsRot: Vector3.Zero(),
       });
     }
 
-    // 3. Intervention .50 Heavy Sniper
+    // 4. AWP-50 Sniper
     {
-      const root = new TransformNode('vm_intervention', this.scene);
+      const root = new TransformNode('vm_sniper', this.scene);
       root.parent = this.weaponPivot;
 
-      this.addPart(root, 'int_recv', { width: 0.052, height: 0.075, depth: 0.38 }, new Vector3(0, 0, 0), gunmetal);
-      this.addCylinder(root, 'int_barrel', 0.58, 0.034, new Vector3(0, 0.012, 0.44), Math.PI / 2, steelSilver);
-      this.addCylinder(root, 'int_brake', 0.12, 0.042, new Vector3(0, 0.012, 0.75), Math.PI / 2, gunmetal);
-      this.addPart(root, 'int_mag', { width: 0.036, height: 0.14, depth: 0.09 }, new Vector3(0, -0.095, 0.12), coyote, new Vector3(0.15, 0, 0));
-      this.addPart(root, 'int_grip', { width: 0.032, height: 0.1, depth: 0.044 }, new Vector3(0, -0.075, -0.1), coyote, new Vector3(-0.3, 0, 0));
-      this.addPart(root, 'int_stock', { width: 0.044, height: 0.12, depth: 0.28 }, new Vector3(0, -0.02, -0.32), coyote);
+      this.addPart(root, 'snp_chassis', { width: 0.052, height: 0.066, depth: 0.42 }, new Vector3(0, -0.004, 0.02), odGreen);
+      this.addPart(root, 'snp_recv', { width: 0.046, height: 0.044, depth: 0.24 }, new Vector3(0, 0.026, 0.02), gunmetal);
+      this.addCylinder(root, 'snp_barrel', 0.56, 0.032, new Vector3(0, 0.016, 0.44), Math.PI / 2, steelSilver);
+      this.addCylinder(root, 'snp_brake', 0.11, 0.044, new Vector3(0, 0.016, 0.75), Math.PI / 2, gunmetal);
+      this.addPart(root, 'snp_mag', { width: 0.036, height: 0.11, depth: 0.09 }, new Vector3(0, -0.075, 0.1), gunmetal, new Vector3(0.12, 0, 0));
+      this.addPart(root, 'snp_grip', { width: 0.032, height: 0.095, depth: 0.044 }, new Vector3(0, -0.072, -0.1), odGreen, new Vector3(-0.28, 0, 0));
+      this.addPart(root, 'snp_stock', { width: 0.044, height: 0.115, depth: 0.27 }, new Vector3(0, -0.018, -0.31), odGreen);
+      this.addPart(root, 'snp_cheek', { width: 0.046, height: 0.026, depth: 0.13 }, new Vector3(0, 0.046, -0.27), polymer);
 
-      this.addPart(root, 'int_scope_base', { width: 0.036, height: 0.02, depth: 0.16 }, new Vector3(0, 0.05, 0.04), polymer);
-      this.addPart(root, 'int_scope_rings', { width: 0.042, height: 0.028, depth: 0.09 }, new Vector3(0, 0.07, 0.04), gunmetal);
-      this.addCylinder(root, 'int_scope_tube', 0.168, 0.034, new Vector3(0, 0.088, 0.04), Math.PI / 2, scopeTube);
-      this.addCylinder(root, 'int_scope_obj', 0.038, 0.054, new Vector3(0, 0.088, 0.146), Math.PI / 2, scopeTube);
-      this.addCylinder(root, 'int_scope_obj_lip', 0.01, 0.06, new Vector3(0, 0.088, 0.168), Math.PI / 2, gunmetal);
-      this.addCylinder(root, 'int_scope_oc', 0.034, 0.048, new Vector3(0, 0.088, -0.066), Math.PI / 2, scopeTube);
-      this.addCylinder(root, 'int_scope_oc_lip', 0.01, 0.052, new Vector3(0, 0.088, -0.088), Math.PI / 2, gunmetal);
-      this.addCylinder(root, 'int_scope_turret', 0.026, 0.02, new Vector3(0, 0.114, 0.04), 0, steelSilver);
-      this.addCylinder(root, 'int_lens_f', 0.006, 0.048, new Vector3(0, 0.088, 0.172), Math.PI / 2, scopeLens);
-      this.addCylinder(root, 'int_lens_r', 0.005, 0.042, new Vector3(0, 0.088, -0.094), Math.PI / 2, scopeLens);
+      this.addPart(root, 'snp_scope_base', { width: 0.036, height: 0.02, depth: 0.16 }, new Vector3(0, 0.054, 0.04), polymer);
+      this.addPart(root, 'snp_scope_rings', { width: 0.042, height: 0.028, depth: 0.09 }, new Vector3(0, 0.074, 0.04), gunmetal);
+      this.addCylinder(root, 'snp_scope_tube', 0.168, 0.034, new Vector3(0, 0.092, 0.04), Math.PI / 2, scopeTube);
+      this.addCylinder(root, 'snp_scope_obj', 0.038, 0.054, new Vector3(0, 0.092, 0.146), Math.PI / 2, scopeTube);
+      this.addCylinder(root, 'snp_scope_obj_lip', 0.01, 0.06, new Vector3(0, 0.092, 0.168), Math.PI / 2, gunmetal);
+      this.addCylinder(root, 'snp_scope_oc', 0.034, 0.048, new Vector3(0, 0.092, -0.066), Math.PI / 2, scopeTube);
+      this.addCylinder(root, 'snp_scope_oc_lip', 0.01, 0.052, new Vector3(0, 0.092, -0.088), Math.PI / 2, gunmetal);
+      this.addCylinder(root, 'snp_scope_turret', 0.026, 0.02, new Vector3(0, 0.118, 0.04), 0, steelSilver);
+      this.addCylinder(root, 'snp_lens_f', 0.006, 0.048, new Vector3(0, 0.092, 0.172), Math.PI / 2, scopeLens);
+      this.addCylinder(root, 'snp_lens_r', 0.005, 0.042, new Vector3(0, 0.092, -0.094), Math.PI / 2, scopeLens);
 
-      const ejectionPort = new TransformNode('int_eject', this.scene);
+      const ejectionPort = new TransformNode('snp_eject', this.scene);
       ejectionPort.parent = root;
-      ejectionPort.position = new Vector3(0.038, 0.025, 0.05);
+      ejectionPort.position = new Vector3(0.038, 0.028, 0.05);
 
-      const muzzlePoint = new TransformNode('int_muzzle', this.scene);
+      const muzzlePoint = new TransformNode('snp_muzzle', this.scene);
       muzzlePoint.parent = root;
-      muzzlePoint.position = new Vector3(0, 0.012, 0.82);
+      muzzlePoint.position = new Vector3(0, 0.016, 0.82);
 
-      this.models.set('intervention', {
+      this.models.set('sniper', {
         root,
         muzzlePoint,
         ejectionPort,
         hipPos: new Vector3(0.22, -0.2, 0.45),
-        adsPos: new Vector3(0, -0.088, 0.3),
+        adsPos: new Vector3(0, -0.092, 0.3),
         adsRot: Vector3.Zero(),
       });
     }
 
-    // 4. M1911 Ops Sidearm
+    // 5. USP-45 Tactical Pistol
     {
-      const root = new TransformNode('vm_m1911', this.scene);
+      const root = new TransformNode('vm_pistol', this.scene);
       root.parent = this.weaponPivot;
 
-      this.addPart(root, 'p_frame', { width: 0.032, height: 0.026, depth: 0.18 }, new Vector3(0, -0.01, 0.04), polymer);
-      this.addPart(root, 'p_slide', { width: 0.034, height: 0.032, depth: 0.2 }, new Vector3(0, 0.018, 0.03), steelSilver);
-      this.addPart(root, 'p_grip', { width: 0.03, height: 0.1, depth: 0.046 }, new Vector3(0, -0.062, -0.03), coyote, new Vector3(-0.26, 0, 0));
+      this.addPart(root, 'p_frame', { width: 0.032, height: 0.026, depth: 0.185 }, new Vector3(0, -0.01, 0.04), polymer);
+      this.addPart(root, 'p_slide', { width: 0.034, height: 0.032, depth: 0.205 }, new Vector3(0, 0.018, 0.03), steelSilver);
+      this.addPart(root, 'p_grip', { width: 0.03, height: 0.1, depth: 0.046 }, new Vector3(0, -0.062, -0.03), gunmetal, new Vector3(-0.26, 0, 0));
       this.addPart(root, 'p_sight_r1', { width: 0.007, height: 0.009, depth: 0.01 }, new Vector3(-0.008, 0.038, -0.055), gunmetal);
       this.addPart(root, 'p_sight_r2', { width: 0.007, height: 0.009, depth: 0.01 }, new Vector3(0.008, 0.038, -0.055), gunmetal);
       this.addPart(root, 'p_sight_f', { width: 0.005, height: 0.01, depth: 0.01 }, new Vector3(0, 0.038, 0.115), gunmetal);
@@ -1233,9 +1668,9 @@ export class WeaponSystem {
 
       const muzzlePoint = new TransformNode('p_muzzle', this.scene);
       muzzlePoint.parent = root;
-      muzzlePoint.position = new Vector3(0, 0.018, 0.14);
+      muzzlePoint.position = new Vector3(0, 0.018, 0.145);
 
-      this.models.set('m1911', {
+      this.models.set('pistol', {
         root,
         muzzlePoint,
         ejectionPort,
@@ -1243,6 +1678,175 @@ export class WeaponSystem {
         adsPos: new Vector3(0, -0.042, 0.38),
         adsRot: Vector3.Zero(),
       });
+    }
+
+    // 6. K-Bar Combat Knife + 3D Weapon Charm Mount
+    {
+      const root = new TransformNode('vm_knife', this.scene);
+      root.parent = this.weaponPivot;
+
+      // Tilt the knife vertically forward at an ergonomic combat grip angle
+      const gripHolder = new TransformNode('knife_grip_holder', this.scene);
+      gripHolder.parent = root;
+      gripHolder.rotation.set(0.46, -0.22, 0.18);
+
+      // Ribbed leather/polymer handle
+      this.addCylinder(gripHolder, 'kn_handle', 0.115, 0.026, new Vector3(0, -0.035, 0), 0, polymer);
+      for (let i = 0; i < 4; i++) {
+        this.addCylinder(
+          gripHolder,
+          `kn_grip_ring_${i}`,
+          0.01,
+          0.029,
+          new Vector3(0, -0.072 + i * 0.024, 0),
+          0,
+          coyote
+        );
+      }
+      // Steel pommel cap & charm lanyard loop
+      this.addCylinder(gripHolder, 'kn_pommel', 0.016, 0.032, new Vector3(0, -0.098, 0), 0, steelSilver);
+      this.addPart(gripHolder, 'kn_charm_lug', { width: 0.008, height: 0.012, depth: 0.012 }, new Vector3(0.016, -0.098, -0.004), bladeEdge);
+
+      // Steel crossguard
+      this.addPart(gripHolder, 'kn_guard', { width: 0.018, height: 0.01, depth: 0.056 }, new Vector3(0, 0.028, 0.004), gunmetal);
+
+      // Tactical Tanto / Clip-point blade: dark spine + bright honed cutting bevel
+      this.addPart(gripHolder, 'kn_blade_spine', { width: 0.006, height: 0.165, depth: 0.024 }, new Vector3(0, 0.114, -0.002), gunmetal);
+      this.addPart(gripHolder, 'kn_blade_edge', { width: 0.003, height: 0.162, depth: 0.012 }, new Vector3(0, 0.112, 0.013), bladeEdge);
+      this.addPart(
+        gripHolder,
+        'kn_blade_tip',
+        { width: 0.004, height: 0.044, depth: 0.018 },
+        new Vector3(0, 0.205, 0.004),
+        bladeEdge,
+        new Vector3(-0.32, 0, 0)
+      );
+
+      // Charm pivot hanging freely from the knife pommel lug
+      const charmPivot = new TransformNode('knife_charm_pivot', this.scene);
+      charmPivot.parent = gripHolder;
+      charmPivot.position.set(0.022, -0.098, -0.006);
+      this.charmPivot = charmPivot;
+      this.buildKnifeCharms(charmPivot, steelSilver, gunmetal);
+
+      const ejectionPort = new TransformNode('kn_eject', this.scene);
+      ejectionPort.parent = root;
+
+      const muzzlePoint = new TransformNode('kn_tip', this.scene);
+      muzzlePoint.parent = gripHolder;
+      muzzlePoint.position.set(0, 0.22, 0);
+
+      this.models.set('knife', {
+        root,
+        muzzlePoint,
+        ejectionPort,
+        hipPos: new Vector3(0.22, -0.17, 0.44),
+        adsPos: new Vector3(0.22, -0.17, 0.44),
+        adsRot: Vector3.Zero(),
+      });
+    }
+  }
+
+  private buildKnifeCharms(
+    charmPivot: TransformNode,
+    steelSilver: PBRMaterial,
+    gunmetal: PBRMaterial
+  ): void {
+    const createCharmMat = (charmId: KnifeCharmId): PBRMaterial => {
+      const cfg = KNIFE_CHARMS[charmId];
+      const mat = new PBRMaterial(`charmMat_${charmId}`, this.scene);
+      mat.albedoColor = Color3.FromHexString(cfg.accentHex);
+      mat.metallic = cfg.metallic;
+      mat.roughness = cfg.roughness;
+      if (cfg.emissiveHex) {
+        mat.emissiveColor = Color3.FromHexString(cfg.emissiveHex);
+      }
+      mat.environmentIntensity = 1.3;
+      this.materialsToDispose.push(mat);
+      return mat;
+    };
+
+    // 1. Tactical Dog Tag
+    {
+      const root = new TransformNode('charm_tactical_tag', this.scene);
+      root.parent = charmPivot;
+      const mat = createCharmMat('tactical_tag');
+      this.addCylinder(root, 'ch_tag_chain', 0.018, 0.003, new Vector3(0, -0.009, 0), 0, steelSilver);
+      this.addPart(root, 'ch_tag_plate', { width: 0.02, height: 0.032, depth: 0.0035 }, new Vector3(0, -0.031, 0), mat);
+      this.addPart(root, 'ch_tag_rim', { width: 0.022, height: 0.006, depth: 0.0045 }, new Vector3(0, -0.018, 0), gunmetal);
+      this.charmRoots.set('tactical_tag', root);
+    }
+
+    // 2. Crimson Fang
+    {
+      const root = new TransformNode('charm_crimson_fang', this.scene);
+      root.parent = charmPivot;
+      const mat = createCharmMat('crimson_fang');
+      this.addCylinder(root, 'ch_fang_ring', 0.015, 0.003, new Vector3(0, -0.007, 0), 0, steelSilver);
+      this.addCylinder(root, 'ch_fang_cap', 0.008, 0.014, new Vector3(0, -0.018, 0), 0, gunmetal);
+      this.addPart(
+        root,
+        'ch_fang_body',
+        { width: 0.012, height: 0.03, depth: 0.008 },
+        new Vector3(0, -0.034, 0.002),
+        mat,
+        new Vector3(0.22, 0, 0)
+      );
+      this.charmRoots.set('crimson_fang', root);
+    }
+
+    // 3. 24K Brass Bullet Shell
+    {
+      const root = new TransformNode('charm_gold_bullet', this.scene);
+      root.parent = charmPivot;
+      const mat = createCharmMat('gold_bullet');
+      this.addCylinder(root, 'ch_bul_ring', 0.014, 0.003, new Vector3(0, -0.007, 0), 0, mat);
+      this.addCylinder(root, 'ch_bul_case', 0.026, 0.012, new Vector3(0, -0.025, 0), 0, mat);
+      const tip = MeshBuilder.CreateCylinder(
+        'ch_bul_tip',
+        { height: 0.016, diameterTop: 0.002, diameterBottom: 0.011, tessellation: 12 },
+        this.scene
+      );
+      tip.parent = root;
+      tip.position.set(0, -0.045, 0);
+      tip.rotation.x = Math.PI;
+      tip.material = this.brassMaterial;
+      tip.isPickable = false;
+      tip.renderingGroupId = 1;
+      this.charmRoots.set('gold_bullet', root);
+    }
+
+    // 4. Cobalt Cyber Core
+    {
+      const root = new TransformNode('charm_cyber_core', this.scene);
+      root.parent = charmPivot;
+      const mat = createCharmMat('cyber_core');
+      this.addCylinder(root, 'ch_cyb_ring', 0.014, 0.003, new Vector3(0, -0.007, 0), 0, steelSilver);
+      this.addPart(root, 'ch_cyb_cage', { width: 0.02, height: 0.024, depth: 0.02 }, new Vector3(0, -0.026, 0), gunmetal);
+      const core = MeshBuilder.CreatePolyhedron('ch_cyb_crystal', { type: 1, size: 0.013 }, this.scene);
+      core.parent = root;
+      core.position.set(0, -0.026, 0);
+      core.material = mat;
+      core.isPickable = false;
+      core.renderingGroupId = 1;
+      this.charmRoots.set('cyber_core', root);
+    }
+
+    // 5. Recon Emerald Prism
+    {
+      const root = new TransformNode('charm_emerald_prism', this.scene);
+      root.parent = charmPivot;
+      const mat = createCharmMat('emerald_prism');
+      this.addCylinder(root, 'ch_em_ring', 0.014, 0.003, new Vector3(0, -0.007, 0), 0, steelSilver);
+      this.addPart(root, 'ch_em_bezel', { width: 0.016, height: 0.007, depth: 0.016 }, new Vector3(0, -0.017, 0), gunmetal);
+      const gem = MeshBuilder.CreatePolyhedron('ch_em_gem', { type: 1, size: 0.014 }, this.scene);
+      gem.parent = root;
+      gem.position.set(0, -0.032, 0);
+      gem.scaling.set(0.85, 1.35, 0.85);
+      gem.material = mat;
+      gem.isPickable = false;
+      gem.renderingGroupId = 1;
+      this.charmRoots.set('emerald_prism', root);
     }
   }
 
@@ -1295,6 +1899,8 @@ export class WeaponSystem {
   public dispose(): void {
     this.clearDecals();
     this.clearTransientEffects();
+    this.charmRoots.clear();
+    this.charmPivot = null;
     this.models.forEach((rig) => rig.root.dispose());
     this.models.clear();
     this.muzzleFlashMesh.dispose();

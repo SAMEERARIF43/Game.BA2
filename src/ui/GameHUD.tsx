@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
-import { HudState, WEAPONS, WeaponId } from '../game/types';
+import { GUN_IDS, GunId, HudState, KNIFE_CHARMS, WEAPONS } from '../game/types';
 import { formatMatchTime, ScoreboardOverlay } from './ScoreboardOverlay';
 
 interface GameHUDProps {
   hud: HudState;
   showFps?: boolean;
+  onSelectGun?: (id: GunId) => void;
 }
 
 function getCardinalLabel(deg: number): string {
@@ -14,7 +15,7 @@ function getCardinalLabel(deg: number): string {
   return dirs[idx];
 }
 
-export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false }) => {
+export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false, onSelectGun }) => {
   const [onboardingVisible, setOnboardingVisible] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
@@ -80,7 +81,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false }) => {
   const localTeam =
     hud.match.participants.find((p) => p.isPlayer)?.team ?? 'blue';
   const sniperScopeBlend =
-    hud.activeWeapon.id === 'intervention' && hud.isAlive ? hud.adsBlend : 0;
+    hud.activeWeapon.id === 'sniper' && hud.isAlive ? hud.adsBlend : 0;
   const showSniperOverlay =
     sniperScopeBlend > 0.18 && hud.isPointerLocked && !hud.showScoreboard;
   const hideHipReticle = showSniperOverlay && sniperScopeBlend > 0.42;
@@ -369,8 +370,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false }) => {
 
       {/* Killer Banner & Kill-Cam Respawn Overlay */}
       {!hud.isAlive && hud.match.phase === 'playing' && (
-        <div className="absolute inset-0 flex items-end justify-center pb-14">
-          <div className="w-full max-w-md border border-white/20 bg-[#0b0f16]/90 px-6 py-4 backdrop-blur-md">
+        <div className="absolute inset-0 flex items-end justify-center pb-10">
+          <div className="pointer-events-auto w-full max-w-xl border border-white/20 bg-[#0b0f16]/90 px-6 py-4 backdrop-blur-md">
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <span className="font-display text-xs font-bold tracking-widest text-red-400">
                 ELIMINATED BY
@@ -432,6 +433,43 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false }) => {
                 </div>
               )
             )}
+
+            {/* Death / Pre-Spawn Gun Switcher */}
+            <div className="mt-3.5 border-t border-white/10 pt-3">
+              <div className="flex items-center justify-between text-[10px]">
+                <span className="font-display font-semibold tracking-wider text-slate-300">
+                  NEXT SPAWN GUN · PRESS [1–5] OR CLICK
+                </span>
+                <span className="font-mono-tabular text-amber-300">
+                  {WEAPONS[hud.queuedGunId].name} + Knife
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-5 gap-1.5">
+                {GUN_IDS.map((gunId, idx) => {
+                  const g = WEAPONS[gunId];
+                  const selected = hud.queuedGunId === gunId;
+                  return (
+                    <button
+                      key={gunId}
+                      type="button"
+                      onClick={() => onSelectGun?.(gunId)}
+                      className={`cursor-pointer border px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
+                        selected
+                          ? 'border-amber-400 bg-amber-400/20 text-white'
+                          : 'border-white/10 bg-black/40 text-slate-300 hover:border-white/25 hover:bg-white/10'
+                      }`}
+                    >
+                      <div className="font-mono-tabular text-[9px] font-bold text-amber-300">
+                        [{idx + 1}]
+                      </div>
+                      <div className="truncate font-display text-[11px] font-semibold">
+                        {g.shortName}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -707,45 +745,66 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false }) => {
                 {hud.activeWeapon.name}
               </div>
               <div className="text-xs text-slate-400">
-                {hud.activeWeapon.category} ·{' '}
-                {hud.activeWeapon.fireMode === 'auto' ? 'Full Auto' : 'Semi-Auto'}
+                {hud.activeWeapon.isMelee
+                  ? `Melee · Charm: ${KNIFE_CHARMS[hud.knifeCharmId].name}`
+                  : `${hud.activeWeapon.category} · ${
+                      hud.activeWeapon.fireMode === 'auto' ? 'Full Auto' : 'Semi-Auto'
+                    }`}
               </div>
             </div>
-            <div className="flex items-baseline gap-1.5 font-mono-tabular">
-              <span
-                className={`font-display text-3xl font-bold ${
-                  (activeSlot?.ammoInMag ?? 0) <= Math.ceil(hud.activeWeapon.magSize * 0.25)
-                    ? 'text-red-400'
-                    : 'text-white'
-                }`}
-              >
-                {String(activeSlot?.ammoInMag ?? 0).padStart(2, '0')}
-              </span>
-              <span className="text-sm text-slate-500">/</span>
-              <span className="text-sm text-slate-300">
-                {String(activeSlot?.reserveAmmo ?? 0).padStart(2, '0')}
-              </span>
-            </div>
-          </div>
-
-          <div className="mt-2.5 flex items-center gap-2 border-t border-white/10 pt-2 text-xs">
-            {(['m4a1', 'mp5', 'intervention', 'm1911'] as WeaponId[]).map((id) => {
-              const w = WEAPONS[id];
-              const active = hud.activeWeapon.id === id;
-              const shortName = id === 'intervention' ? '.50 Cal' : w.name.split(' ')[0];
-              return (
-                <div
-                  key={id}
-                  className={`border px-2 py-0.5 font-mono-tabular ${
-                    active
-                      ? 'border-amber-400/40 bg-amber-400/20 text-amber-300'
-                      : 'border-transparent text-slate-400'
+            {hud.activeWeapon.isMelee ? (
+              <div className="flex items-baseline gap-1.5 font-mono-tabular">
+                <span className="font-display text-2xl font-bold text-emerald-300">∞</span>
+                <span className="text-[11px] font-semibold tracking-wider text-slate-400">
+                  MELEE
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-baseline gap-1.5 font-mono-tabular">
+                <span
+                  className={`font-display text-3xl font-bold ${
+                    (activeSlot?.ammoInMag ?? 0) <= Math.ceil(hud.activeWeapon.magSize * 0.25)
+                      ? 'text-red-400'
+                      : 'text-white'
                   }`}
                 >
-                  [{w.slot}] {shortName}
-                </div>
-              );
-            })}
+                  {String(activeSlot?.ammoInMag ?? 0).padStart(2, '0')}
+                </span>
+                <span className="text-sm text-slate-500">/</span>
+                <span className="text-sm text-slate-300">
+                  {String(activeSlot?.reserveAmmo ?? 0).padStart(2, '0')}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-white/10 pt-2 text-xs">
+            <div className="flex items-center gap-2">
+              <div
+                className={`border px-2 py-0.5 font-mono-tabular ${
+                  hud.activeWeapon.slot === 1
+                    ? 'border-amber-400/40 bg-amber-400/20 text-amber-300'
+                    : 'border-white/10 text-slate-400'
+                }`}
+              >
+                [1] {WEAPONS[hud.equippedGunId].shortName}
+              </div>
+              <div
+                className={`border px-2 py-0.5 font-mono-tabular ${
+                  hud.activeWeapon.slot === 2
+                    ? 'border-amber-400/40 bg-amber-400/20 text-amber-300'
+                    : 'border-white/10 text-slate-400'
+                }`}
+              >
+                [2] Knife · [V/F]
+              </div>
+            </div>
+
+            {hud.queuedGunId !== hud.equippedGunId && (
+              <span className="border border-sky-400/35 bg-sky-500/15 px-1.5 py-0.5 font-mono-tabular text-[10px] font-semibold text-sky-300">
+                NEXT: {WEAPONS[hud.queuedGunId].shortName}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -780,9 +839,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false }) => {
             </div>
             <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-4">
               {[
+                { key: '1 / 2', label: 'Gun & Knife' },
+                { key: 'V / F', label: 'Quick Knife' },
                 { key: 'Shift+C', label: 'Slide' },
-                { key: 'RMB', label: 'ADS / [B] Zoom' },
-                { key: '1-4', label: 'Weapons' },
                 { key: 'F1-F3', label: 'Streaks' },
               ].map((hint) => (
                 <div

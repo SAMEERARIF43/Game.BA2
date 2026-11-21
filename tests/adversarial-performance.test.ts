@@ -22,7 +22,7 @@ function createPlayer(
   z: number,
   rotY = 0,
   pitch = 0,
-  weaponId = 'm4a1',
+  weaponId = 'ak47',
   isBot = false
 ): PlayerSchema {
   const p = new PlayerSchema();
@@ -52,14 +52,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   await t.test('Scenario 1: Fabricated muzzle coordinates + behind solid cover', () => {
     // Shooter at (-5, 0, 2.8) facing west. Target at (-20, 0, 2.8) behind west storefront wall.
     // Client fabricates muzzle at (-19, 1.5, 2.8) next to target trying to bypass cover and distance.
-    const shooter = createPlayer('s1', 'blue', -5, 0, 2.8, -Math.PI / 2, 0, 'm4a1');
-    const target = createPlayer('t1', 'red', -20, 0, 2.8, 0, 0, 'm4a1');
+    const shooter = createPlayer('s1', 'blue', -5, 0, 2.8, -Math.PI / 2, 0, 'ak47');
+    const target = createPlayer('t1', 'red', -20, 0, 2.8, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         muzzleX: -19, // fabricated muzzle
         muzzleY: 1.55,
@@ -86,14 +86,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   await t.test('Scenario 2: Backward firing + claimed headshot', () => {
     // Shooter at (8, 0, 0) facing +Z (rotY=0). Target behind at (8, 0, -15).
     // Client claims headshot.
-    const shooter = createPlayer('s2', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = createPlayer('t2', 'red', 8, 0, -15, 0, 0, 'm4a1');
+    const shooter = createPlayer('s2', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = createPlayer('t2', 'red', 8, 0, -15, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         zone: 'head',
         endX: target.x,
@@ -114,15 +114,15 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
     assert.strictEqual(result.reason, 'FIRING_DIRECTION_INVALID');
   });
 
-  await t.test('Scenario 3: Spawn-protected target + lethal sniper weapon (Intervention)', () => {
-    const shooter = createPlayer('s3', 'blue', 8, 0, 0, 0, 0, 'intervention');
-    const target = createPlayer('t3', 'red', 8, 0, 15, 0, 0, 'm4a1');
+  await t.test('Scenario 3: Spawn-protected target + lethal sniper weapon (AWP-50 Sniper)', () => {
+    const shooter = createPlayer('s3', 'blue', 8, 0, 0, 0, 0, 'sniper');
+    const target = createPlayer('t3', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'intervention',
+        weaponId: 'sniper',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -143,8 +143,8 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   });
 
   await t.test('Scenario 4: Dead target + valid line of sight and orientation', () => {
-    const shooter = createPlayer('s4', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = createPlayer('t4', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = createPlayer('s4', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = createPlayer('t4', 'red', 8, 0, 15, 0, 0, 'ak47');
     target.isAlive = false;
     target.health = 0;
 
@@ -152,7 +152,7 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -173,14 +173,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   });
 
   await t.test('Scenario 5: Friendly-fire disabled + ally claimed headshot', () => {
-    const shooter = createPlayer('s5', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const ally = createPlayer('ally5', 'blue', 8, 0, 15, 0, 0, 'm4a1'); // same team
+    const shooter = createPlayer('s5', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const ally = createPlayer('ally5', 'blue', 8, 0, 15, 0, 0, 'ak47'); // same team
 
     const result = validateAuthoritativeHit(
       shooter,
       ally,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: ally.id,
         zone: 'head',
         endX: ally.x,
@@ -202,14 +202,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   });
 
   await t.test('Scenario 6: Friendly-fire enabled + ally legitimate hit', () => {
-    const shooter = createPlayer('s6', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const ally = createPlayer('ally6', 'blue', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = createPlayer('s6', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const ally = createPlayer('ally6', 'blue', 8, 0, 15, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       ally,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: ally.id,
         zone: 'body',
         endX: ally.x,
@@ -227,37 +227,37 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
     );
 
     assert.strictEqual(result.accepted, true);
-    assert.strictEqual(result.damage, 28);
+    assert.strictEqual(result.damage, 34);
     assert.strictEqual(result.verifiedZone, 'body');
   });
 
   await t.test('Scenario 7: Rate-of-fire spam against multiple targets in sub-cooldown', () => {
     // In production MatchRoom, rate of fire is enforced via this.lastShotAt.
     // Verify weapon minFireIntervalMs * 0.72 correctly guards consecutive shots.
-    const minInterval = 833; // Intervention
-    const threshold = minInterval * 0.72; // ~599.76ms
+    const minInterval = 850; // AWP-50 Sniper
+    const threshold = minInterval * 0.72; // 612ms
     let lastShotAt = 1000;
 
-    const rapidShotTime = 1200; // 200ms delta < 599ms
+    const rapidShotTime = 1200; // 200ms delta < 612ms
     const isRapid = rapidShotTime - lastShotAt < threshold;
     assert.strictEqual(isRapid, true, 'Sub-interval shot must be recognized as rate-of-fire violation');
 
-    const validShotTime = 1700; // 700ms delta > 599ms
+    const validShotTime = 1700; // 700ms delta > 612ms
     const isValid = validShotTime - lastShotAt < threshold;
     assert.strictEqual(isValid, false, 'Legitimate cadence must be permitted');
   });
 
   await t.test('Scenario 8: Out-of-range shot + valid line of sight and aim', () => {
-    // MP5 max range 130m. Tolerance 6m -> cutoff 136m.
+    // SMG max range 125m. Tolerance 6m -> cutoff 131m.
     // Target placed at 160m in clear lane.
-    const shooter = createPlayer('s8', 'blue', 8, 0, 0, 0, 0, 'mp5');
-    const target = createPlayer('t8', 'red', 8, 0, 160, 0, 0, 'mp5');
+    const shooter = createPlayer('s8', 'blue', 8, 0, 0, 0, 0, 'smg');
+    const target = createPlayer('t8', 'red', 8, 0, 160, 0, 0, 'smg');
 
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'mp5',
+        weaponId: 'smg',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -280,14 +280,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   await t.test('Scenario 9: Valid aim + LOS obstructed by partial cover edge', () => {
     // Target is behind corner of tactical van (0.2, 1.0, 0.2). Half width = 2.2 -> x in [-2.0, 2.4]
     // Ray from (0, 1.2, -10) to (0, 1.2, 10) directly clips through van center.
-    const shooter = createPlayer('s9', 'blue', 0, 0, -10, 0, 0, 'm4a1');
-    const target = createPlayer('t9', 'red', 0, 0, 10, 0, 0, 'm4a1');
+    const shooter = createPlayer('s9', 'blue', 0, 0, -10, 0, 0, 'ak47');
+    const target = createPlayer('t9', 'red', 0, 0, 10, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -309,14 +309,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
 
   await t.test('Scenario 10: Client claiming headshot at extreme angle (>85° yaw deviation)', () => {
     // Shooter facing +Z (rotY = 0). Target placed at +X (rotY ≈ 90° = 1.57 rad).
-    const shooter = createPlayer('s10', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = createPlayer('t10', 'red', 25, 0, 0, 0, 0, 'm4a1');
+    const shooter = createPlayer('s10', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = createPlayer('t10', 'red', 25, 0, 0, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         zone: 'head',
         endX: target.x,
@@ -338,15 +338,15 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   });
 
   await t.test('Scenario 11: Malformed payload: NaN muzzle coordinates safely handled', () => {
-    const shooter = createPlayer('s11', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = createPlayer('t11', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = createPlayer('s11', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = createPlayer('t11', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     // Client passes NaN for muzzle coordinates. Server ignores client muzzle and uses authoritative position.
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         muzzleX: NaN,
         muzzleY: NaN,
@@ -367,18 +367,18 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
 
     // Shot is valid because server authoritatively derives muzzle!
     assert.strictEqual(result.accepted, true);
-    assert.strictEqual(result.damage, 28);
+    assert.strictEqual(result.damage, 34);
   });
 
   await t.test('Scenario 12: Malformed payload: Infinity end coordinates rejected', () => {
-    const shooter = createPlayer('s12', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = createPlayer('t12', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = createPlayer('s12', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = createPlayer('t12', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: Infinity,
         endY: 1.25,
@@ -399,13 +399,13 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   });
 
   await t.test('Scenario 13: Empty / undefined targetId rejected', () => {
-    const shooter = createPlayer('s13', 'blue', 8, 0, 0, 0, 0, 'm4a1');
+    const shooter = createPlayer('s13', 'blue', 8, 0, 0, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       undefined, // nonexistent target
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: '',
         endX: 8,
         endY: 1.25,
@@ -426,14 +426,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   });
 
   await t.test('Scenario 14: Firing on unregistered map ID with otherwise perfect aim', () => {
-    const shooter = createPlayer('s14', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = createPlayer('t14', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = createPlayer('s14', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = createPlayer('t14', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -456,14 +456,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
 
   await t.test('Scenario 15: Shooter positioned inside a solid cover AABB trying to shoot out', () => {
     // RES-2: Shooter glitching or clipping inside center van (0.2, 1.0, 0.2)
-    const shooter = createPlayer('s15', 'blue', 0.2, 0.5, 0.2, 0, 0, 'm4a1');
-    const target = createPlayer('t15', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = createPlayer('s15', 'blue', 0.2, 0.5, 0.2, 0, 0, 'ak47');
+    const target = createPlayer('t15', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     const result = validateAuthoritativeHit(
       shooter,
       target,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: target.id,
         endX: target.x,
         endY: target.y + 1.25,
@@ -514,15 +514,15 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
 
   await t.test('Bot Combat: Normal bot engagement hitting human player', () => {
     // Bot shooter facing +Z
-    const bot = createPlayer('bot_red_1', 'red', 8, 0, 0, 0, 0, 'm4a1', true);
-    const human = createPlayer('p_human', 'blue', 8, 0, 15, 0, 0, 'm4a1', false);
+    const bot = createPlayer('bot_red_1', 'red', 8, 0, 0, 0, 0, 'ak47', true);
+    const human = createPlayer('p_human', 'blue', 8, 0, 15, 0, 0, 'ak47', false);
 
     // In MatchRoom, server derives botEndX, botEndY, botEndZ and passes isBotShooter=true
     const result = validateAuthoritativeHit(
       bot,
       human,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: human.id,
         endX: human.x,
         endY: human.y + 1.25,
@@ -544,18 +544,18 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
 
     assert.strictEqual(result.accepted, true);
     assert.strictEqual(result.verifiedZone, 'body');
-    assert.strictEqual(result.damage, 28);
+    assert.strictEqual(result.damage, 34);
   });
 
   await t.test('Bot Combat: Bot-to-bot engagement on opposing teams', () => {
-    const botBlue = createPlayer('bot_blue_1', 'blue', 8, 0, 0, 0, 0, 'mp5', true);
-    const botRed = createPlayer('bot_red_2', 'red', 8, 0, 10, 0, 0, 'mp5', true);
+    const botBlue = createPlayer('bot_blue_1', 'blue', 8, 0, 0, 0, 0, 'smg', true);
+    const botRed = createPlayer('bot_red_2', 'red', 8, 0, 10, 0, 0, 'smg', true);
 
     const result = validateAuthoritativeHit(
       botBlue,
       botRed,
       {
-        weaponId: 'mp5',
+        weaponId: 'smg',
         targetId: botRed.id,
         endX: botRed.x,
         endY: botRed.y + 1.25,
@@ -577,19 +577,19 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
 
     assert.strictEqual(result.accepted, true);
     assert.strictEqual(result.verifiedZone, 'body');
-    assert.strictEqual(result.damage, 24); // MP5 base damage is 24
+    assert.strictEqual(result.damage, 21); // SMG base damage is 21
   });
 
   await t.test('Bot Combat: Bot shot blocked by map cover', () => {
     // Bot at (-5, 0, 2.8) facing west (-X). Human at (-20, 0, 2.8) behind wall.
-    const bot = createPlayer('bot_red_3', 'red', -5, 0, 2.8, -Math.PI / 2, 0, 'm4a1', true);
-    const human = createPlayer('p_human', 'blue', -20, 0, 2.8, 0, 0, 'm4a1', false);
+    const bot = createPlayer('bot_red_3', 'red', -5, 0, 2.8, -Math.PI / 2, 0, 'ak47', true);
+    const human = createPlayer('p_human', 'blue', -20, 0, 2.8, 0, 0, 'ak47', false);
 
     const result = validateAuthoritativeHit(
       bot,
       human,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: human.id,
         endX: human.x,
         endY: human.y + 1.25,
@@ -614,14 +614,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   });
 
   await t.test('Bot Combat: Bot out-of-range shot rejected', () => {
-    const bot = createPlayer('bot_red_4', 'red', 8, 0, 0, 0, 0, 'mp5', true);
-    const human = createPlayer('p_human', 'blue', 8, 0, 150, 0, 0, 'mp5', false);
+    const bot = createPlayer('bot_red_4', 'red', 8, 0, 0, 0, 0, 'smg', true);
+    const human = createPlayer('p_human', 'blue', 8, 0, 150, 0, 0, 'smg', false);
 
     const result = validateAuthoritativeHit(
       bot,
       human,
       {
-        weaponId: 'mp5',
+        weaponId: 'smg',
         targetId: human.id,
         endX: human.x,
         endY: human.y + 1.25,
@@ -646,14 +646,14 @@ test('ADVERSARIAL & PERFORMANCE: 15 Multi-Vector Attack Scenarios, Micro-Benchma
   });
 
   await t.test('Bot Combat: Bot friendly-fire blocked when disabled', () => {
-    const bot1 = createPlayer('bot_blue_1', 'blue', 8, 0, 0, 0, 0, 'm4a1', true);
-    const bot2 = createPlayer('bot_blue_2', 'blue', 8, 0, 15, 0, 0, 'm4a1', true);
+    const bot1 = createPlayer('bot_blue_1', 'blue', 8, 0, 0, 0, 0, 'ak47', true);
+    const bot2 = createPlayer('bot_blue_2', 'blue', 8, 0, 15, 0, 0, 'ak47', true);
 
     const result = validateAuthoritativeHit(
       bot1,
       bot2,
       {
-        weaponId: 'm4a1',
+        weaponId: 'ak47',
         targetId: bot2.id,
         endX: bot2.x,
         endY: bot2.y + 1.25,

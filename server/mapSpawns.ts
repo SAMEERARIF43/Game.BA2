@@ -156,46 +156,66 @@ export const SERVER_MAP_LAYOUTS: Record<ServerMapId, ServerMapLayout> = {
 };
 
 export interface ServerWeaponSpec {
-  id: 'm4a1' | 'mp5' | 'intervention' | 'm1911';
+  id: 'shotgun' | 'ak47' | 'smg' | 'sniper' | 'pistol' | 'knife';
   name: string;
   damage: number;
   headshotMultiplier: number;
   minFireIntervalMs: number;
   range: number;
+  pellets?: number;
+  isMelee?: boolean;
 }
 
 export const SERVER_WEAPONS: Record<string, ServerWeaponSpec> = {
-  m4a1: {
-    id: 'm4a1',
-    name: 'M4A1 Tactical',
-    damage: 28,
+  shotgun: {
+    id: 'shotgun',
+    name: 'M870 Combat Shotgun',
+    damage: 16,
+    headshotMultiplier: 1.5,
+    minFireIntervalMs: 750,
+    range: 45,
+    pellets: 8,
+  },
+  ak47: {
+    id: 'ak47',
+    name: 'AK-47 Heavy Rifle',
+    damage: 34,
     headshotMultiplier: 2.0,
-    minFireIntervalMs: 55,
-    range: 180,
+    minFireIntervalMs: 65,
+    range: 185,
   },
-  mp5: {
-    id: 'mp5',
-    name: 'MP5-SD',
-    damage: 24,
+  smg: {
+    id: 'smg',
+    name: 'Vector-9 SMG',
+    damage: 21,
     headshotMultiplier: 1.85,
-    minFireIntervalMs: 48,
-    range: 130,
+    minFireIntervalMs: 42,
+    range: 125,
   },
-  m1911: {
-    id: 'm1911',
-    name: 'M1911 Sidearm',
-    damage: 36,
+  sniper: {
+    id: 'sniper',
+    name: 'AWP-50 Sniper',
+    damage: 115,
+    headshotMultiplier: 2.5,
+    minFireIntervalMs: 850,
+    range: 300,
+  },
+  pistol: {
+    id: 'pistol',
+    name: 'USP-45 Tactical',
+    damage: 38,
     headshotMultiplier: 2.2,
-    minFireIntervalMs: 176,
+    minFireIntervalMs: 165,
     range: 120,
   },
-  intervention: {
-    id: 'intervention',
-    name: 'Intervention .50',
-    damage: 110,
-    headshotMultiplier: 2.5,
-    minFireIntervalMs: 833,
-    range: 300,
+  knife: {
+    id: 'knife',
+    name: 'K-Bar Combat Knife',
+    damage: 75,
+    headshotMultiplier: 1.6,
+    minFireIntervalMs: 400,
+    range: 2.8,
+    isMelee: true,
   },
 };
 

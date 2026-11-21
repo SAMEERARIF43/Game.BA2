@@ -47,7 +47,7 @@ function setupTestRoom(options: { mapId?: string; friendlyFire?: boolean } = {})
     z: number,
     rotY = 0,
     pitch = 0,
-    weaponId = 'm4a1'
+    weaponId = 'ak47'
   ) => {
     const p = new PlayerSchema();
     p.id = id;
@@ -85,12 +85,12 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     room.clients.push(shooterClient as any, targetClient as any);
 
     // Shooter at (8, 0, 0) facing +Z (rotY=0), target at (8, 0, 15) on opposing team
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     // Emit fire message through production onMessage handler
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: target.id,
       zone: 'body',
       endX: target.x,
@@ -101,21 +101,21 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
       muzzleZ: 0,
     });
 
-    // Verify target took authoritative M4A1 body damage (28)
-    assert.strictEqual(target.health, 72, 'Target health should be 100 - 28 = 72');
+    // Verify target took authoritative AK-47 body damage (34)
+    assert.strictEqual(target.health, 66, 'Target health should be 100 - 34 = 66');
     assert.strictEqual(target.isAlive, true);
 
     // Verify shooter received hit_confirm message
     const hitConfirm = shooterClient.sentMessages.find((m) => m.type === 'hit_confirm');
     assert.ok(hitConfirm, 'Shooter must receive hit_confirm');
     assert.strictEqual(hitConfirm.data.zone, 'body');
-    assert.strictEqual(hitConfirm.data.damage, 28);
+    assert.strictEqual(hitConfirm.data.damage, 34);
     assert.strictEqual(hitConfirm.data.killed, false);
 
     // Verify target received player_damaged message
     const playerDamaged = targetClient.sentMessages.find((m) => m.type === 'player_damaged');
     assert.ok(playerDamaged, 'Target must receive player_damaged');
-    assert.strictEqual(playerDamaged.data.damage, 28);
+    assert.strictEqual(playerDamaged.data.damage, 34);
     assert.strictEqual(playerDamaged.data.headshot, false);
 
     cleanup();
@@ -127,12 +127,12 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const targetClient = createMockClient('p_target');
     room.clients.push(shooterClient as any, targetClient as any);
 
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     // Malicious client claims headshot, but end coordinates hit chest (y = target.y + 1.16)
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: target.id,
       zone: 'head', // untrusted client claim
       endX: target.x,
@@ -143,11 +143,11 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
       muzzleZ: 0,
     });
 
-    // Must be classified as body damage only (28), not headshot (56)
-    assert.strictEqual(target.health, 72);
+    // Must be classified as body damage only (34), not headshot (68)
+    assert.strictEqual(target.health, 66);
     const hitConfirm = shooterClient.sentMessages.find((m) => m.type === 'hit_confirm');
     assert.strictEqual(hitConfirm?.data.zone, 'body', 'Server must authoritatively override zone to body');
-    assert.strictEqual(hitConfirm?.data.damage, 28);
+    assert.strictEqual(hitConfirm?.data.damage, 34);
 
     cleanup();
   });
@@ -158,12 +158,12 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const targetClient = createMockClient('p_target');
     room.clients.push(shooterClient as any, targetClient as any);
 
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     // Valid head hit (y = target.y + 1.70)
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: target.id,
       zone: 'body', // client claims body, server upgrades to head
       endX: target.x,
@@ -171,11 +171,11 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
       endZ: target.z,
     });
 
-    // M4A1 headshot damage = 28 * 2.0 = 56
-    assert.strictEqual(target.health, 44, 'Target health should be 100 - 56 = 44');
+    // AK-47 headshot damage = 34 * 2.0 = 68
+    assert.strictEqual(target.health, 32, 'Target health should be 100 - 68 = 32');
     const hitConfirm = shooterClient.sentMessages.find((m) => m.type === 'hit_confirm');
     assert.strictEqual(hitConfirm?.data.zone, 'head');
-    assert.strictEqual(hitConfirm?.data.damage, 56);
+    assert.strictEqual(hitConfirm?.data.damage, 68);
 
     const playerDamaged = targetClient.sentMessages.find((m) => m.type === 'player_damaged');
     assert.strictEqual(playerDamaged?.data.headshot, true);
@@ -189,12 +189,12 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const targetClient = createMockClient('p_target');
     room.clients.push(shooterClient as any, targetClient as any);
 
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'intervention');
-    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'sniper');
+    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');
 
-    // Intervention does 110 base damage -> 1-shot lethal
+    // Sniper does 115 base damage -> 1-shot lethal
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'intervention',
+      weaponId: 'sniper',
       targetId: target.id,
       endX: target.x,
       endY: target.y + 1.25,
@@ -219,11 +219,11 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     room.clients.push(shooterClient as any);
 
     // Shooter at (0, 0, -20) facing +Z (rotY=0). Target at (-Z, behind shooter at z=-35)
-    const shooter = addPlayer('p_shooter', 'blue', 0, 0, -20, 0, 0, 'm4a1');
-    const target = addPlayer('p_target', 'red', 0, 0, -35, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', 0, 0, -20, 0, 0, 'ak47');
+    const target = addPlayer('p_target', 'red', 0, 0, -35, 0, 0, 'ak47');
 
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: target.id,
       endX: target.x,
       endY: target.y + 1.25,
@@ -243,11 +243,11 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     room.clients.push(shooterClient as any);
 
     // Shooter at (-5, 0, 2.8) facing west (-X). Target at (-20, 0, 2.8) on other side of west building wall
-    const shooter = addPlayer('p_shooter', 'blue', -5, 0, 2.8, -Math.PI / 2, 0, 'm4a1');
-    const target = addPlayer('p_target', 'red', -20, 0, 2.8, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', -5, 0, 2.8, -Math.PI / 2, 0, 'ak47');
+    const target = addPlayer('p_target', 'red', -20, 0, 2.8, 0, 0, 'ak47');
 
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: target.id,
       endX: target.x,
       endY: target.y + 1.25,
@@ -267,12 +267,12 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     room.clients.push(shooterClient as any);
 
     // Shooter at (8, 0, 0). Target at (8, 0, 180) - well beyond MP5 range (130m + 6m = 136m threshold)
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'mp5');
-    const target = addPlayer('p_target', 'red', 8, 0, 180, 0, 0, 'mp5');
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'smg');
+    const target = addPlayer('p_target', 'red', 8, 0, 180, 0, 0, 'smg');
 
     // Client fabricates muzzle near target (8, 1.55, 120) attempting to claim in-range shot
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'mp5',
+      weaponId: 'smg',
       targetId: target.id,
       muzzleX: 8,
       muzzleY: 1.55,
@@ -293,13 +293,13 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const shooterClient = createMockClient('p_shooter');
     room.clients.push(shooterClient as any);
 
-    // Intervention fire interval is 833ms (min interval * 0.72 = ~599ms)
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'intervention');
-    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    // Sniper minFireIntervalMs is 850ms (min interval * 0.72 = 612ms)
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'sniper');
+    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     // First shot
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'intervention',
+      weaponId: 'sniper',
       targetId: target.id,
       endX: target.x,
       endY: target.y + 1.25,
@@ -311,9 +311,9 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     target.health = 100;
     target.isAlive = true;
 
-    // Immediate second shot (within 50ms < 600ms threshold)
+    // Immediate second shot (within 50ms < 612ms threshold)
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'intervention',
+      weaponId: 'sniper',
       targetId: target.id,
       endX: target.x,
       endY: target.y + 1.25,
@@ -329,11 +329,11 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const { room: roomNoFF, addPlayer: addPlayerNoFF, cleanup: cleanupNoFF } = setupTestRoom({ friendlyFire: false });
     const c1 = createMockClient('p1');
     roomNoFF.clients.push(c1 as any);
-    const s1 = addPlayerNoFF('p1', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const ally1 = addPlayerNoFF('ally1', 'blue', 8, 0, 15, 0, 0, 'm4a1'); // same team
+    const s1 = addPlayerNoFF('p1', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const ally1 = addPlayerNoFF('ally1', 'blue', 8, 0, 15, 0, 0, 'ak47'); // same team
 
     (roomNoFF as any).onMessageEvents.emit('player_fire', c1, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: ally1.id,
       endX: ally1.x,
       endY: ally1.y + 1.25,
@@ -346,17 +346,17 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const { room: roomFF, addPlayer: addPlayerFF, cleanup: cleanupFF } = setupTestRoom({ friendlyFire: true });
     const c2 = createMockClient('p2');
     roomFF.clients.push(c2 as any);
-    const s2 = addPlayerFF('p2', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const ally2 = addPlayerFF('ally2', 'blue', 8, 0, 15, 0, 0, 'm4a1');
+    const s2 = addPlayerFF('p2', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const ally2 = addPlayerFF('ally2', 'blue', 8, 0, 15, 0, 0, 'ak47');
 
     (roomFF as any).onMessageEvents.emit('player_fire', c2, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: ally2.id,
       endX: ally2.x,
       endY: ally2.y + 1.25,
       endZ: ally2.z,
     });
-    assert.strictEqual(ally2.health, 72, 'Ally takes damage when friendly fire is enabled');
+    assert.strictEqual(ally2.health, 66, 'Ally takes damage when friendly fire is enabled');
     cleanupFF();
   });
 
@@ -365,14 +365,14 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const shooterClient = createMockClient('p_shooter');
     room.clients.push(shooterClient as any);
 
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'intervention');
-    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'sniper');
+    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     // Activate spawn protection for 3000ms
     (room as any).spawnProtectionUntil.set(target.id, Date.now() + 3000);
 
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'intervention',
+      weaponId: 'sniper',
       targetId: target.id,
       endX: target.x,
       endY: target.y + 1.25,
@@ -388,14 +388,14 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const shooterClient = createMockClient('p_shooter');
     room.clients.push(shooterClient as any);
 
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const deadTarget = addPlayer('p_dead', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const deadTarget = addPlayer('p_dead', 'red', 8, 0, 15, 0, 0, 'ak47');
     deadTarget.isAlive = false;
     deadTarget.health = 0;
 
     // Shot against dead player
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: deadTarget.id,
       endX: deadTarget.x,
       endY: deadTarget.y + 1.25,
@@ -405,7 +405,7 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
 
     // Shot against nonexistent player ID
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: 'ghost_id_404',
       endX: 8,
       endY: 1.25,
@@ -422,11 +422,11 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const shooterClient = createMockClient('p_shooter');
     room.clients.push(shooterClient as any);
 
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: target.id,
       endX: target.x,
       endY: target.y + 1.25,
@@ -447,17 +447,17 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const t1Client = createMockClient('p_target');
     rPos.clients.push(c1 as any, t1Client as any);
 
-    const sPos = addPPos('p_shooter', 'blue', 8, 0, 0, 0, 0, 'm4a1'); // facing +Z (rotY=0)
-    const tPos = addPPos('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');  // at +15m along +Z
+    const sPos = addPPos('p_shooter', 'blue', 8, 0, 0, 0, 0, 'ak47'); // facing +Z (rotY=0)
+    const tPos = addPPos('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');  // at +15m along +Z
 
     (rPos as any).onMessageEvents.emit('player_fire', c1, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: tPos.id,
       endX: tPos.x,
       endY: tPos.y + 1.25,
       endZ: tPos.z,
     });
-    assert.strictEqual(tPos.health, 72, 'All controls valid -> shot applies 28 damage');
+    assert.strictEqual(tPos.health, 66, 'All controls valid -> shot applies 34 damage');
     assert.strictEqual(c1.sentMessages.filter((m) => m.type === 'hit_confirm').length, 1);
     cPos();
 
@@ -465,10 +465,10 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const { room: rA, addPlayer: addPA, cleanup: cA } = setupTestRoom({ mapId: 'urban' });
     const cAClient = createMockClient('p_shooter');
     rA.clients.push(cAClient as any);
-    const sA = addPA('p_shooter', 'blue', -5, 0, 2.8, -Math.PI / 2, 0, 'm4a1'); // facing -X directly at target
-    const tA = addPA('p_target', 'red', -20, 0, 2.8, 0, 0, 'm4a1');              // behind storefront wall
+    const sA = addPA('p_shooter', 'blue', -5, 0, 2.8, -Math.PI / 2, 0, 'ak47'); // facing -X directly at target
+    const tA = addPA('p_target', 'red', -20, 0, 2.8, 0, 0, 'ak47');              // behind storefront wall
     (rA as any).onMessageEvents.emit('player_fire', cAClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: tA.id,
       endX: tA.x,
       endY: tA.y + 1.25,
@@ -482,10 +482,10 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const { room: rB, addPlayer: addPB, cleanup: cB } = setupTestRoom({ mapId: 'urban' });
     const cBClient = createMockClient('p_shooter');
     rB.clients.push(cBClient as any);
-    const sB = addPB('p_shooter', 'blue', 8, 0, 0, 0, 0, 'm4a1'); // facing +Z
-    const tB = addPB('p_target', 'red', 8, 0, -15, 0, 0, 'm4a1');  // behind shooter at -Z
+    const sB = addPB('p_shooter', 'blue', 8, 0, 0, 0, 0, 'ak47'); // facing +Z
+    const tB = addPB('p_target', 'red', 8, 0, -15, 0, 0, 'ak47');  // behind shooter at -Z
     (rB as any).onMessageEvents.emit('player_fire', cBClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: tB.id,
       endX: tB.x,
       endY: tB.y + 1.25,
@@ -499,10 +499,10 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const { room: rC, addPlayer: addPC, cleanup: cC } = setupTestRoom({ mapId: 'urban' });
     const cCClient = createMockClient('p_shooter');
     rC.clients.push(cCClient as any);
-    const sC = addPC('p_shooter', 'blue', 8, 0, 0, 0, 0, 'mp5');   // MP5 max range 130m + 6m = 136m
-    const tC = addPC('p_target', 'red', 8, 0, 160, 0, 0, 'mp5');    // 160m away
+    const sC = addPC('p_shooter', 'blue', 8, 0, 0, 0, 0, 'smg');   // MP5 max range 130m + 6m = 136m
+    const tC = addPC('p_target', 'red', 8, 0, 160, 0, 0, 'smg');    // 160m away
     (rC as any).onMessageEvents.emit('player_fire', cCClient, {
-      weaponId: 'mp5',
+      weaponId: 'smg',
       targetId: tC.id,
       endX: tC.x,
       endY: tC.y + 1.25,
@@ -517,10 +517,10 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     rD.state.mapId = 'unregistered_custom_map';
     const cDClient = createMockClient('p_shooter');
     rD.clients.push(cDClient as any);
-    const sD = addPD('p_shooter', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const tD = addPD('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const sD = addPD('p_shooter', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const tD = addPD('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');
     (rD as any).onMessageEvents.emit('player_fire', cDClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: tD.id,
       endX: tD.x,
       endY: tD.y + 1.25,
@@ -536,14 +536,14 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     const shooterClient = createMockClient('p_shooter');
     room.clients.push(shooterClient as any);
 
-    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'm4a1');
-    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const shooter = addPlayer('p_shooter', 'blue', 8, 0, 0, 0, 0, 'ak47');
+    const target = addPlayer('p_target', 'red', 8, 0, 15, 0, 0, 'ak47');
 
     // 1. Force mapId to undefined
     (room.state as any).mapId = undefined;
 
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: target.id,
       endX: target.x,
       endY: target.y + 1.25,
@@ -560,7 +560,7 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     (room as any).lastShotAt.delete(shooter.id);
 
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: target.id,
       endX: target.x,
       endY: target.y + 1.25,
@@ -568,10 +568,10 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     });
 
     // Valid firing resumes gracefully
-    assert.strictEqual(target.health, 72, 'Restored valid map applies authoritative damage');
+    assert.strictEqual(target.health, 66, 'Restored valid map applies authoritative damage');
     const hitConfirm = shooterClient.sentMessages.find((m) => m.type === 'hit_confirm');
     assert.ok(hitConfirm);
-    assert.strictEqual(hitConfirm.data.damage, 28);
+    assert.strictEqual(hitConfirm.data.damage, 34);
 
     cleanup();
   });
@@ -590,7 +590,7 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     bot.health = 100;
     bot.kills = 0;
     bot.deaths = 0;
-    bot.weaponId = 'm4a1';
+    bot.weaponId = 'ak47';
     bot.x = 8;
     bot.y = 0;
     bot.z = 0;
@@ -598,7 +598,7 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     bot.pitch = 0;
     room.state.players.set(bot.id, bot);
 
-    const target = addPlayer('p_human', 'red', 8, 0, 15, 0, 0, 'm4a1');
+    const target = addPlayer('p_human', 'red', 8, 0, 15, 0, 0, 'ak47');
     const targetClient = createMockClient('p_human');
     room.clients.push(targetClient as any);
 
@@ -620,11 +620,11 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
       // Execute production simulateBot
       (room as any).simulateBot(bot, 0.05);
 
-      // Verify human target took authoritative M4A1 damage (28)
-      assert.strictEqual(target.health, 72, 'Bot attack applies authoritative M4A1 body damage');
+      // Verify human target took authoritative AK-47 damage (34)
+      assert.strictEqual(target.health, 66, 'Bot attack applies authoritative AK-47 body damage');
       const playerDamaged = targetClient.sentMessages.find((m) => m.type === 'player_damaged');
       assert.ok(playerDamaged, 'Human target received player_damaged notification');
-      assert.strictEqual(playerDamaged.data.damage, 28);
+      assert.strictEqual(playerDamaged.data.damage, 34);
       assert.strictEqual(playerDamaged.data.attackerName, 'Bot_Alpha');
     } finally {
       Math.random = originalRandom;
@@ -648,7 +648,7 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
       // Verify bot rotated towards moved target
       const expectedYaw = Math.atan2(12 - bot.x, 20 - bot.z);
       assert.ok(Math.abs(bot.rotY - expectedYaw) < 0.01, 'Bot rotated authoritatively to target position');
-      assert.strictEqual(target.health, 72, 'Bot successfully damaged moving human target');
+      assert.strictEqual(target.health, 66, 'Bot successfully damaged moving human target');
     } finally {
       Math.random = originalRandom;
     }
@@ -677,7 +677,7 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
 
     // 4. Verify client cannot forge isBotShooter
     // A malicious human client attempts to bypass aim checks by sending forged payload
-    const humanShooter = addPlayer('p_exploiter', 'blue', 8, 0, 0, 0, 0, 'm4a1'); // facing +Z
+    const humanShooter = addPlayer('p_exploiter', 'blue', 8, 0, 0, 0, 0, 'ak47'); // facing +Z
     const humanClient = createMockClient('p_exploiter');
     room.clients.push(humanClient as any);
     target.x = 8;
@@ -685,7 +685,7 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     target.health = 100;
 
     (room as any).onMessageEvents.emit('player_fire', humanClient, {
-      weaponId: 'm4a1',
+      weaponId: 'ak47',
       targetId: target.id,
       isBotShooter: true, // untrusted forged flag!
       endX: target.x,

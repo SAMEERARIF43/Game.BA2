@@ -1,3 +1,4 @@
+import { normalizeGunId, normalizeKnifeCharmId } from '../game/loadoutRules';
 import { GameSettings, GraphicsQuality } from '../game/types';
 
 export const SETTINGS_STORAGE_KEY = 'strike_force_profile_v1';
@@ -20,6 +21,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   killLimit: 30,
   botsPerTeam: 4,
   screenShakeScale: 1.0,
+  selectedGunId: 'ak47',
+  knifeCharmId: 'tactical_tag',
 };
 
 function clampNumber(val: unknown, min: number, max: number, fallback: number): number {
@@ -63,12 +66,18 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     killLimit: Math.round(clampNumber(obj.killLimit, 5, 100, fallback.killLimit)),
     botsPerTeam: Math.round(clampNumber(obj.botsPerTeam, 1, 6, fallback.botsPerTeam)),
     screenShakeScale: clampNumber(obj.screenShakeScale, 0, 1, fallback.screenShakeScale ?? 1.0),
+    selectedGunId: normalizeGunId(obj.selectedGunId, fallback.selectedGunId ?? 'ak47'),
+    knifeCharmId: normalizeKnifeCharmId(obj.knifeCharmId, fallback.knifeCharmId ?? 'tactical_tag'),
   };
 }
 
 export function loadPersistedSettings(): GameSettings {
   try {
-    const legacyCallsign = window.localStorage.getItem(LEGACY_CALLSIGN_KEY);
+    const storage = typeof window !== 'undefined' ? window.localStorage : undefined;
+    if (!storage) {
+      return { ...DEFAULT_SETTINGS };
+    }
+    const legacyCallsign = storage.getItem(LEGACY_CALLSIGN_KEY);
     const baseDefault: GameSettings = {
       ...DEFAULT_SETTINGS,
       callsign: sanitizeCallsign(
@@ -77,7 +86,7 @@ export function loadPersistedSettings(): GameSettings {
       ),
     };
 
-    const rawJson = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    const rawJson = storage.getItem(SETTINGS_STORAGE_KEY);
     if (!rawJson) {
       savePersistedSettings(baseDefault);
       return baseDefault;
@@ -94,8 +103,11 @@ export function loadPersistedSettings(): GameSettings {
 export function savePersistedSettings(settings: GameSettings): GameSettings {
   const validated = validateSettings(settings);
   try {
-    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(validated));
-    window.localStorage.setItem(LEGACY_CALLSIGN_KEY, validated.callsign);
+    const storage = typeof window !== 'undefined' ? window.localStorage : undefined;
+    if (storage) {
+      storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(validated));
+      storage.setItem(LEGACY_CALLSIGN_KEY, validated.callsign);
+    }
   } catch {
     // Ignore storage quota or private browsing errors
   }
