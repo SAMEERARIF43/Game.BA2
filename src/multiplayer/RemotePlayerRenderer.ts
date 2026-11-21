@@ -143,13 +143,31 @@ export class RemotePlayerRenderer {
     }
   }
 
-  public getRadarActors(): { id: string; x: number; z: number; team: TeamId; isAlive: boolean }[] {
-    const list: { id: string; x: number; z: number; team: TeamId; isAlive: boolean }[] = [];
+  public getRadarActors(): {
+    id: string;
+    name: string;
+    x: number;
+    z: number;
+    yawRad: number;
+    team: TeamId;
+    isAlive: boolean;
+  }[] {
+    const list: {
+      id: string;
+      name: string;
+      x: number;
+      z: number;
+      yawRad: number;
+      team: TeamId;
+      isAlive: boolean;
+    }[] = [];
     for (const a of this.avatars.values()) {
       list.push({
         id: a.id,
+        name: a.name,
         x: a.root.position.x,
         z: a.root.position.z,
+        yawRad: a.root.rotation.y,
         team: a.team,
         isAlive: a.isAlive,
       });

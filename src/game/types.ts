@@ -431,6 +431,28 @@ export interface RadarBlip {
   pingKind?: PingKind;
 }
 
+export interface MinimapActor {
+  id: string;
+  name: string;
+  x: number;
+  z: number;
+  yawRad: number;
+  team: TeamId;
+  kind: 'teammate' | 'enemy' | 'ping';
+  pingKind?: PingKind;
+  distanceMeters: number;
+}
+
+export interface MinimapState {
+  mapId: MapId;
+  halfExtent: number;
+  playerX: number;
+  playerZ: number;
+  playerYawRad: number;
+  localTeam: TeamId;
+  actors: MinimapActor[];
+}
+
 export interface KillerBannerInfo {
   name: string;
   team: TeamId;
@@ -482,6 +504,7 @@ export interface HudState {
   killstreakBanner: KillstreakBanner | null;
   scorePopups: ScorePopup[];
   radarBlips: RadarBlip[];
+  minimap: MinimapState;
   pings: PingHudMarker[];
   xp: number;
   sessionXpEarned: number;

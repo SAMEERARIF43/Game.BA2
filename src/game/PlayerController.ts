@@ -13,6 +13,7 @@ import {
   validateKeybindings,
 } from '../settings/keybindings';
 import { AudioEngine } from './AudioEngine';
+import type { ChatChannel } from '../multiplayer/chat';
 import { PostSlideStance, SlideTriggerMode, Stance } from './types';
 
 export interface PlayerInputCallbacks {
@@ -31,6 +32,7 @@ export interface PlayerInputCallbacks {
   onFocusLost?: () => void;
   onCycleScopeMagnification?: () => void;
   onPing?: () => void;
+  onOpenChat?: (channel: ChatChannel) => void;
 }
 
 const PLAYER_HALF_HEIGHT = 0.9;
@@ -145,6 +147,8 @@ export class PlayerController {
   private isFireHeld = false;
   private canControl = false;
   private isDead = false;
+  private chatInputOpen = false;
+  private chatTriggersEnabled = true;
   private orbitPreviewActive = true;
   private lastWheelTime = 0;
 
@@ -194,9 +198,26 @@ export class PlayerController {
     }
   }
 
+  public setChatTriggersEnabled(enabled: boolean): void {
+    this.chatTriggersEnabled = enabled;
+  }
+
+  public setChatInputOpen(open: boolean): void {
+    if (this.chatInputOpen === open) return;
+    this.chatInputOpen = open;
+    if (open) {
+      this.clearHeldInputs();
+    }
+  }
+
+  public isChatInputOpen(): boolean {
+    return this.chatInputOpen;
+  }
+
   public setCanControl(enabled: boolean): void {
     this.canControl = enabled;
     if (!enabled) {
+      this.chatInputOpen = false;
       this.keys.clear();
       this.isFireHeld = false;
       this.isAds = false;
@@ -244,6 +265,7 @@ export class PlayerController {
   public setDeadState(dead: boolean): void {
     this.isDead = dead;
     if (dead) {
+      this.chatInputOpen = false;
       this.keys.clear();
       this.isFireHeld = false;
       this.isAds = false;
@@ -277,6 +299,7 @@ export class PlayerController {
     this.recoilYaw = 0;
     this.isAds = false;
     this.isFireHeld = false;
+    this.chatInputOpen = false;
     this.keys.clear();
     this.isCrouching = false;
     this.crouchToggled = false;
@@ -772,7 +795,13 @@ export class PlayerController {
   }
 
   public getIsFireHeld(): boolean {
-    return this.isFireHeld && this.isPointerLocked && this.canControl && !this.isDead;
+    return (
+      this.isFireHeld &&
+      this.isPointerLocked &&
+      this.canControl &&
+      !this.isDead &&
+      !this.chatInputOpen
+    );
   }
 
   public getHorizontalSpeed(): number {
@@ -805,7 +834,8 @@ export class PlayerController {
     this.recoilPitch *= recoilDecay;
     this.recoilYaw *= recoilDecay;
 
-    const activeInput = this.isPointerLocked && this.canControl && !this.isDead;
+    const activeInput =
+      this.isPointerLocked && this.canControl && !this.isDead && !this.chatInputOpen;
 
     let forwardInput = 0;
     let strafeInput = 0;
@@ -1179,6 +1209,7 @@ export class PlayerController {
       this.isPointerLocked &&
       this.canControl &&
       !this.isDead &&
+      !this.chatInputOpen &&
       this.isSprintHeld() &&
       this.keys.has(this.keybindings.moveForward)
     );
@@ -1229,7 +1260,36 @@ export class PlayerController {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (!this.isPointerLocked || !this.canControl) return;
+    if (!this.isPointerLocked || !this.canControl || this.chatInputOpen) return;
+
+    if (
+      !this.isDead &&
+      !e.repeat &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      this.chatTriggersEnabled &&
+      this.callbacks.onOpenChat
+    ) {
+      if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+        e.preventDefault();
+        this.setChatInputOpen(true);
+        this.callbacks.onOpenChat('all');
+        return;
+      }
+      if (e.code === 'KeyT' && !this.boundCodes.has('KeyT')) {
+        e.preventDefault();
+        this.setChatInputOpen(true);
+        this.callbacks.onOpenChat('all');
+        return;
+      }
+      if (e.code === 'KeyY' && !this.boundCodes.has('KeyY')) {
+        e.preventDefault();
+        this.setChatInputOpen(true);
+        this.callbacks.onOpenChat('team');
+        return;
+      }
+    }
 
     const kb = this.keybindings;
 
@@ -1306,7 +1366,7 @@ export class PlayerController {
   };
 
   private onMouseMove = (e: MouseEvent): void => {
-    if (!this.isPointerLocked || !this.canControl || this.isDead) return;
+    if (!this.isPointerLocked || !this.canControl || this.isDead || this.chatInputOpen) return;
     const adsMix = this.getAdsBlend();
     const adsMult = 1 + (this.adsSensitivityMultiplier - 1) * adsMix;
     const opticalScale = Math.max(0.2, this.currentFovRad / this.baseFovRad);
@@ -1320,7 +1380,7 @@ export class PlayerController {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
-    if (!this.canControl) return;
+    if (!this.canControl || this.chatInputOpen) return;
 
     if (!this.isPointerLocked) {
       if (e.target === this.canvas) {
@@ -1363,7 +1423,7 @@ export class PlayerController {
   };
 
   private onWheel = (e: WheelEvent): void => {
-    if (!this.isPointerLocked || !this.canControl || this.isDead) return;
+    if (!this.isPointerLocked || !this.canControl || this.isDead || this.chatInputOpen) return;
     if (Math.abs(e.deltaY) < 1) return;
     e.preventDefault();
     const now = performance.now();
@@ -1405,12 +1465,14 @@ export class PlayerController {
   }
 
   private onWindowBlur = (): void => {
+    this.chatInputOpen = false;
     this.clearHeldInputs();
     this.callbacks.onFocusLost?.();
   };
 
   private onVisibilityChange = (): void => {
     if (document.hidden) {
+      this.chatInputOpen = false;
       this.clearHeldInputs();
       this.exitPointerLock();
       this.callbacks.onFocusLost?.();

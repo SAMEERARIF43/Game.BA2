@@ -81,16 +81,19 @@ export default function App() {
           errorBanner={disconnectError}
           onCallsignChange={actions.updateCallsign}
           onCreateMatch={actions.createPrivateMatch}
+          onCreateSoloCustom={actions.createSoloCustomLobby}
           onJoinMatch={actions.joinPrivateMatch}
           onLookupRoom={actions.lookupRoom}
           onBack={actions.backToMenu}
         />
       )}
 
-      {!contextLost && status === 'mp_lobby' && lobbySnapshot && (
+      {!contextLost && (status === 'mp_lobby' || status === 'local_custom_lobby') && lobbySnapshot && (
         <LobbyScreen
           lobby={lobbySnapshot}
           systemNotice={systemNotice}
+          chatMessages={derived.chatMessages}
+          onSendChat={actions.sendChatMessage}
           onUpdateConfig={actions.updateRoomConfig}
           onBalanceTeams={actions.balanceRoomTeams}
           onKickPlayer={actions.kickRoomPlayer}
@@ -98,7 +101,11 @@ export default function App() {
           onSwitchTeam={actions.switchRoomTeam}
           onToggleReady={actions.toggleRoomReady}
           onLeaveLobby={() => {
-            void actions.leaveMultiplayer();
+            if (lobbySnapshot.isLocalSolo) {
+              actions.backToMenu();
+            } else {
+              void actions.leaveMultiplayer();
+            }
           }}
         />
       )}
@@ -110,6 +117,13 @@ export default function App() {
             showFps={settings.showFps}
             keybindings={settings.keybindings}
             onSelectGun={actions.selectGun}
+            isCustomMatch
+            chatMessages={derived.chatMessages}
+            chatOpen={derived.chatOpen}
+            chatChannel={derived.chatChannel}
+            onChangeChatChannel={actions.setChatChannel}
+            onSendChat={actions.sendChatMessage}
+            onCloseChat={actions.closeInMatchChat}
           />
 
           {status === 'mp_playing' && hud.match.phase === 'paused' && (
@@ -155,6 +169,13 @@ export default function App() {
             showFps={settings.showFps}
             keybindings={settings.keybindings}
             onSelectGun={actions.selectGun}
+            isCustomMatch={derived.isCustomMatch}
+            chatMessages={derived.chatMessages}
+            chatOpen={derived.chatOpen}
+            chatChannel={derived.chatChannel}
+            onChangeChatChannel={actions.setChatChannel}
+            onSendChat={actions.sendChatMessage}
+            onCloseChat={actions.closeInMatchChat}
           />
 
           {status === 'offline_paused' && (
@@ -179,6 +200,7 @@ export default function App() {
               xp={hud.xp}
               sessionXpEarned={hud.sessionXpEarned}
               onPlayAgain={actions.restartMatch}
+              onReturnToLobby={lobbySnapshot?.isLocalSolo ? actions.returnToLobby : undefined}
               onReturnToMenu={actions.backToMenu}
             />
           )}

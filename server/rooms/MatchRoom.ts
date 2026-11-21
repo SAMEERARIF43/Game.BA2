@@ -13,6 +13,11 @@ import {
   type PlayerSchemaType,
 } from '../schema/MatchState.ts';
 import { validateAuthoritativeHit } from '../hitValidation.ts';
+import {
+  CHAT_RATE_LIMIT_MS,
+  type ChatMessage,
+  validateChatPayload,
+} from '../../src/multiplayer/chat.ts';
 
 export interface CreateRoomOptions {
   playerName?: string;
@@ -112,11 +117,13 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
   private spawnProtectionUntil = new Map<string, number>();
   private lastShotAt = new Map<string, number>();
   private lastPingAt = new Map<string, number>();
+  private lastChatAt = new Map<string, number>();
   private equippedGunByPlayer = new Map<string, string>();
   private queuedGunByPlayer = new Map<string, string>();
   private botBrains = new Map<string, BotBrain>();
   private killFeedSeq = 0;
   private pingSeq = 0;
+  private chatSeq = 0;
 
   public onCreate(options: CreateRoomOptions = {}): void {
     const code = generateUniqueRoomCode();
@@ -221,16 +228,19 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     }
 
     this.state.players.set(client.sessionId, player);
+    this.emitSystemChat(`${player.name} joined the room (${player.team.toUpperCase()}).`);
   }
 
   public onLeave(client: Client): void {
     const leaving = this.state.players.get(client.sessionId);
     if (leaving) {
       this.state.players.delete(client.sessionId);
+      this.emitSystemChat(`${leaving.name} left the room.`);
     }
     this.spawnProtectionUntil.delete(client.sessionId);
     this.lastShotAt.delete(client.sessionId);
     this.lastPingAt.delete(client.sessionId);
+    this.lastChatAt.delete(client.sessionId);
     this.equippedGunByPlayer.delete(client.sessionId);
     this.queuedGunByPlayer.delete(client.sessionId);
 
@@ -251,6 +261,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         this.broadcast('system_notice', {
           message: `${promoted.name} is now the room host.`,
         });
+        this.emitSystemChat(`${promoted.name} is now the room host.`);
       } else {
         this.state.hostId = '';
       }
@@ -263,8 +274,27 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     this.spawnProtectionUntil.clear();
     this.lastShotAt.clear();
     this.lastPingAt.clear();
+    this.lastChatAt.clear();
     this.equippedGunByPlayer.clear();
     this.queuedGunByPlayer.clear();
+  }
+
+  private emitSystemChat(text: string): void {
+    const clean = text.trim();
+    if (!clean) return;
+    const msg: ChatMessage = {
+      id: `sys_${++this.chatSeq}`,
+      senderId: 'system',
+      senderName: 'SYSTEM',
+      senderTeam: 'system',
+      channel: 'all',
+      text: clean,
+      timestamp: Date.now(),
+      isSystem: true,
+    };
+    for (const c of this.clients) {
+      c.send('chat', msg);
+    }
   }
 
   private resolvePlayerEquippedGun(p: PlayerSchemaType): string {
@@ -286,6 +316,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       if (!p.isHost) {
         p.ready = false;
       }
+      this.emitSystemChat(`${p.name} switched to ${p.team.toUpperCase()} team.`);
     });
 
     this.onMessage('toggle_ready', (client) => {
@@ -353,6 +384,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
 
       const targetClient = this.clients.find((c) => c.sessionId === targetId);
       if (targetClient) {
+        this.emitSystemChat(`${targetPlayer.name} was removed from the room.`);
         targetClient.send('kicked', { reason: 'Removed from room by host.' });
         setTimeout(() => {
           targetClient.leave(4001);
@@ -630,6 +662,45 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         }
       }
     );
+
+    this.onMessage('chat', (client, payload: unknown) => {
+      const sender = this.state.players.get(client.sessionId);
+      if (!sender || sender.isBot) return;
+
+      const validated = validateChatPayload(payload);
+      if (!validated) return;
+
+      const now = Date.now();
+      const prevChat = this.lastChatAt.get(sender.id) ?? 0;
+      if (now - prevChat < CHAT_RATE_LIMIT_MS) {
+        return;
+      }
+      this.lastChatAt.set(sender.id, now);
+
+      const chatMsg: ChatMessage = {
+        id: `chat_${sender.id}_${++this.chatSeq}`,
+        senderId: sender.id,
+        senderName: sender.name,
+        senderTeam: sender.team === 'red' ? 'red' : 'blue',
+        channel: validated.channel,
+        text: validated.text,
+        timestamp: now,
+      };
+
+      if (validated.channel === 'team') {
+        for (const c of this.clients) {
+          const recipient = this.state.players.get(c.sessionId);
+          if (recipient && recipient.team === sender.team) {
+            c.send('chat', chatMsg);
+          }
+        }
+        return;
+      }
+
+      for (const c of this.clients) {
+        c.send('chat', chatMsg);
+      }
+    });
   }
 
   private startMatch(): void {

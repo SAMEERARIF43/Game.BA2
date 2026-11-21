@@ -1,6 +1,18 @@
-import React, { useEffect, useState } from 'react';
-import { Crosshair, MapPin, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Crosshair, MapPin, MessageSquare, Send, X } from 'lucide-react';
+import {
+  MINIMAP_LAYOUTS,
+  worldSizeToMinimapPercent,
+  worldToMinimapPercent,
+  yawRadToCompassDeg,
+} from '../game/minimap';
 import { GUN_IDS, GunId, HudState, KNIFE_CHARMS, WEAPONS } from '../game/types';
+import {
+  CHAT_FADE_MS,
+  CHAT_MAX_LENGTH,
+  ChatChannel,
+  ChatMessage,
+} from '../multiplayer/chat';
 import {
   DEFAULT_KEYBINDINGS,
   formatKeyCode,
@@ -13,6 +25,13 @@ interface GameHUDProps {
   showFps?: boolean;
   keybindings?: KeybindingsConfig;
   onSelectGun?: (id: GunId) => void;
+  isCustomMatch?: boolean;
+  chatMessages?: ChatMessage[];
+  chatOpen?: boolean;
+  chatChannel?: ChatChannel;
+  onChangeChatChannel?: (channel: ChatChannel) => void;
+  onSendChat?: (text: string, channel: ChatChannel) => void;
+  onCloseChat?: (restorePointerLock: boolean) => void;
 }
 
 function getCardinalLabel(deg: number): string {
@@ -26,9 +45,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   showFps = false,
   keybindings = DEFAULT_KEYBINDINGS,
   onSelectGun,
+  isCustomMatch = false,
+  chatMessages = [],
+  chatOpen = false,
+  chatChannel = 'all',
+  onChangeChatChannel,
+  onSendChat,
+  onCloseChat,
 }) => {
   const [onboardingVisible, setOnboardingVisible] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatClockMs, setChatClockMs] = useState(() => Date.now());
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const chatFeedRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!hud.showOnboarding) {
@@ -66,6 +96,37 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     };
   }, [hud.isAds, hud.match.phase, hud.showOnboarding, onboardingDismissed]);
 
+  useEffect(() => {
+    if (chatOpen) {
+      setChatClockMs(Date.now());
+      const focusTimer = window.setTimeout(() => {
+        chatInputRef.current?.focus();
+      }, 10);
+      return () => window.clearTimeout(focusTimer);
+    }
+    setChatDraft('');
+  }, [chatOpen]);
+
+  useEffect(() => {
+    setChatClockMs(Date.now());
+    const el = chatFeedRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [chatMessages, chatOpen]);
+
+  const newestChatTs =
+    chatMessages.length > 0 ? chatMessages[chatMessages.length - 1].timestamp : 0;
+
+  useEffect(() => {
+    if (!isCustomMatch || chatOpen || newestChatTs === 0) return;
+    if (Date.now() - newestChatTs > CHAT_FADE_MS + 1000) return;
+    const interval = window.setInterval(() => {
+      setChatClockMs(Date.now());
+    }, 450);
+    return () => window.clearInterval(interval);
+  }, [chatOpen, isCustomMatch, newestChatTs]);
+
   const activeSlot = hud.weaponSlots.find((s) => s.id === hud.activeWeapon.id);
   const stanceLabel =
     hud.stance === 'stand'
@@ -89,8 +150,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const tickLen = hud.isAds ? 4 : 9;
   const reticleColor = hud.targetingEnemy ? '#ef4444' : '#f8fafc';
 
-  const localTeam =
-    hud.match.participants.find((p) => p.isPlayer)?.team ?? 'blue';
   const sniperScopeBlend =
     hud.activeWeapon.id === 'sniper' && hud.isAlive ? hud.adsBlend : 0;
   const showSniperOverlay =
@@ -110,6 +169,55 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     (showAkRedDotOverlay && akRedDotBlend > 0.48);
   const swayX = showSniperOverlay ? Math.sin(now * 0.003) * (hud.speed > 0.5 ? 3.2 : 0.8) : 0;
   const swayY = showSniperOverlay ? Math.cos(now * 0.0025) * (hud.speed > 0.5 ? 3.2 : 0.8) : 0;
+
+  // Real-time 2D Minimap projection data
+  const minimap = hud.minimap;
+  const mapStructures = MINIMAP_LAYOUTS[minimap.mapId] ?? MINIMAP_LAYOUTS.urban;
+  const playerMapPos = worldToMinimapPercent(
+    minimap.playerX,
+    minimap.playerZ,
+    minimap.halfExtent
+  );
+  const playerCompassDeg = yawRadToCompassDeg(minimap.playerYawRad);
+  const teammateCount = minimap.actors.filter(
+    (a) => !a.pingKind && a.team === minimap.localTeam
+  ).length;
+
+  // Custom Match In-Game Chat Feed filtering (always show last 6 when typing, fade >6s otherwise)
+  const visibleChatMessages = chatOpen
+    ? chatMessages.slice(-6)
+    : chatMessages
+        .filter((m) => chatClockMs - m.timestamp < CHAT_FADE_MS)
+        .slice(-4);
+  const showInMatchChat =
+    isCustomMatch &&
+    hud.match.phase === 'playing' &&
+    !hud.showScoreboard &&
+    (chatOpen || visibleChatMessages.length > 0);
+
+  const handleChatFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = chatDraft.trim();
+    if (trimmed.length > 0) {
+      onSendChat?.(trimmed, chatChannel);
+    }
+    setChatDraft('');
+    chatInputRef.current?.blur();
+    onCloseChat?.(true);
+  };
+
+  const handleChatInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      setChatDraft('');
+      chatInputRef.current?.blur();
+      onCloseChat?.(true);
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      onChangeChatChannel?.(chatChannel === 'all' ? 'team' : 'all');
+    }
+  };
 
   return (
     <div className="pointer-events-none fixed inset-0 z-10 overflow-hidden">
@@ -697,63 +805,157 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         </div>
       )}
 
-      {/* Top-Left Corner Tactical Radar + Stats */}
+      {/* Top-Left Corner Real-Time 2D Tactical Minimap + Telemetry */}
       <div className="absolute top-4 left-4 flex flex-col gap-2">
         <div className="flex items-start gap-2.5">
-          {/* Circular Tactical Radar */}
-          <div className="relative h-[126px] w-[126px] shrink-0 overflow-hidden rounded-full border border-white/20 bg-[#080c12]/80 backdrop-blur-sm">
-            <svg viewBox="-60 -60 120 120" className="h-full w-full">
-              <circle cx="0" cy="0" r="28" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
-              <circle cx="0" cy="0" r="54" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-              <polygon points="0,0 -34,-54 34,-54" fill="rgba(255,255,255,0.05)" />
-              <line x1="-58" y1="0" x2="58" y2="0" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
-              <line x1="0" y1="-58" x2="0" y2="58" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+          {/* Real-Time 2D Minimap */}
+          <div
+            className="flex flex-col border border-slate-400/25 bg-[#080c12]/85 shadow-lg shadow-black/30 backdrop-blur-md"
+            aria-label="Real-time 2D tactical minimap"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-2 py-0.5 font-mono-tabular text-[9px] font-bold tracking-wider">
+              <span className={hud.uavActive ? 'text-sky-400' : 'text-slate-300'}>
+                {hud.uavActive ? 'UAV SWEEP' : '2D MINIMAP'}
+              </span>
+              <span className="text-sky-300/80">{teammateCount} ALLY</span>
+            </div>
 
-              {hud.uavActive && (
-                <circle
-                  cx="0"
-                  cy="0"
-                  r={4 + hud.uavPulseProgress * 54}
-                  fill="none"
-                  stroke="#38bdf8"
-                  strokeWidth="1.5"
-                  opacity={Math.max(0, 1 - hud.uavPulseProgress)}
-                />
-              )}
+            <div className="relative h-[132px] w-[132px] shrink-0 overflow-hidden bg-[#06090e]">
+              <svg viewBox="0 0 100 100" className="h-full w-full">
+                {/* Arena perimeter & North/South spawn sectors */}
+                <rect x="4" y="4" width="92" height="92" fill="rgba(15,23,42,0.55)" stroke="rgba(148,163,184,0.28)" strokeWidth="0.9" />
+                <rect x="4" y="4" width="92" height="16" fill="rgba(239,68,68,0.10)" />
+                <rect x="4" y="80" width="92" height="16" fill="rgba(59,130,246,0.12)" />
 
-              {hud.radarBlips.map((b) => {
-                const px = b.relX * 52;
-                const py = -b.relZ * 52;
-                if (b.pingKind) {
-                  const isEnemyPing = b.pingKind === 'enemy';
+                {/* Tactical sector grid */}
+                <line x1="50" y1="4" x2="50" y2="96" stroke="rgba(255,255,255,0.07)" strokeWidth="0.6" strokeDasharray="2 2" />
+                <line x1="4" y1="50" x2="96" y2="50" stroke="rgba(255,255,255,0.07)" strokeWidth="0.6" strokeDasharray="2 2" />
+                <text x="50" y="9.5" textAnchor="middle" fill="rgba(251,191,36,0.75)" fontSize="4.6" fontFamily="monospace" fontWeight="bold">
+                  N
+                </text>
+
+                {/* Map geometry obstacles */}
+                {mapStructures.map((s, idx) => {
+                  const pos = worldToMinimapPercent(s.x, s.z, minimap.halfExtent);
+                  const size = worldSizeToMinimapPercent(s.width, s.depth, minimap.halfExtent);
+                  const fill =
+                    s.kind === 'building'
+                      ? 'rgba(148,163,184,0.38)'
+                      : s.kind === 'vehicle'
+                        ? 'rgba(100,116,139,0.45)'
+                        : 'rgba(203,213,225,0.24)';
                   return (
-                    <polygon
-                      key={b.id}
-                      points={`${px},${py - 4.5} ${px + 4.5},${py} ${px},${py + 4.5} ${px - 4.5},${py}`}
-                      fill={isEnemyPing ? '#f87171' : '#38bdf8'}
-                      stroke="#090d13"
-                      strokeWidth="1"
+                    <rect
+                      key={`${minimap.mapId}_${idx}`}
+                      x={pos.xPct - size.wPct / 2}
+                      y={pos.yPct - size.hPct / 2}
+                      width={size.wPct}
+                      height={size.hPct}
+                      fill={fill}
+                      stroke="rgba(255,255,255,0.16)"
+                      strokeWidth="0.4"
                     />
                   );
-                }
-                const isFriend = b.team === localTeam;
-                return (
-                  <circle
-                    key={b.id}
-                    cx={px}
-                    cy={py}
-                    r={isFriend ? 3.2 : 3.6}
-                    fill={isFriend ? '#38bdf8' : '#ef4444'}
-                    stroke="#090d13"
-                    strokeWidth="1"
-                  />
-                );
-              })}
+                })}
 
-              <polygon points="0,-6 4.5,4.5 0,2 -4.5,4.5" fill="#fbbf24" />
-            </svg>
-            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 font-mono-tabular text-[9px] font-semibold tracking-wider text-slate-300">
-              {hud.uavActive ? <span className="text-sky-400">UAV</span> : 'RADAR'}
+                {/* UAV pulse ring centered on local player */}
+                {hud.uavActive && (
+                  <circle
+                    cx={playerMapPos.xPct}
+                    cy={playerMapPos.yPct}
+                    r={4 + hud.uavPulseProgress * 46}
+                    fill="none"
+                    stroke="#38bdf8"
+                    strokeWidth="1.2"
+                    opacity={Math.max(0, 1 - hud.uavPulseProgress)}
+                  />
+                )}
+
+                {/* Teammates, revealed enemies, and tactical pings */}
+                {minimap.actors.map((actor) => {
+                  const pt = worldToMinimapPercent(actor.x, actor.z, minimap.halfExtent);
+                  if (actor.pingKind) {
+                    const isEnemyPing = actor.pingKind === 'enemy';
+                    return (
+                      <polygon
+                        key={actor.id}
+                        points={`${pt.xPct},${pt.yPct - 3.4} ${pt.xPct + 3.4},${pt.yPct} ${pt.xPct},${pt.yPct + 3.4} ${pt.xPct - 3.4},${pt.yPct}`}
+                        fill={isEnemyPing ? '#f87171' : '#38bdf8'}
+                        stroke="#090d13"
+                        strokeWidth="0.7"
+                      />
+                    );
+                  }
+
+                  const isFriend = actor.team === minimap.localTeam;
+                  if (isFriend) {
+                    const deg = yawRadToCompassDeg(actor.yawRad);
+                    return (
+                      <g
+                        key={actor.id}
+                        transform={`translate(${pt.xPct} ${pt.yPct}) rotate(${deg})`}
+                      >
+                        <circle
+                          cx="0"
+                          cy="0"
+                          r="2.6"
+                          fill="#38bdf8"
+                          stroke="#090d13"
+                          strokeWidth="0.7"
+                        />
+                        <line
+                          x1="0"
+                          y1="-2.2"
+                          x2="0"
+                          y2="-5.0"
+                          stroke="#bae6fd"
+                          strokeWidth="1.1"
+                          strokeLinecap="round"
+                        />
+                      </g>
+                    );
+                  }
+
+                  return (
+                    <circle
+                      key={actor.id}
+                      cx={pt.xPct}
+                      cy={pt.yPct}
+                      r="2.6"
+                      fill="#ef4444"
+                      stroke="#090d13"
+                      strokeWidth="0.7"
+                    />
+                  );
+                })}
+
+                {/* Local player position & live orientation FOV wedge */}
+                <g
+                  transform={`translate(${playerMapPos.xPct} ${playerMapPos.yPct}) rotate(${playerCompassDeg})`}
+                >
+                  <polygon
+                    points="0,0 -9,-16 9,-16"
+                    fill="rgba(251,191,36,0.18)"
+                  />
+                  <polygon
+                    points="0,-4.6 3.5,3.4 0,1.5 -3.5,3.4"
+                    fill="#fbbf24"
+                    stroke="#090d13"
+                    strokeWidth="0.7"
+                  />
+                </g>
+              </svg>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-white/10 px-2 py-0.5 font-mono-tabular text-[9px] text-slate-400">
+              <span>
+                X {minimap.playerX >= 0 ? '+' : ''}
+                {Math.round(minimap.playerX)}
+              </span>
+              <span>
+                Z {minimap.playerZ >= 0 ? '+' : ''}
+                {Math.round(minimap.playerZ)}
+              </span>
             </div>
           </div>
 
@@ -793,6 +995,118 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Custom Match In-Game Tactical Chat Overlay */}
+      {showInMatchChat && (
+        <div
+          className={`absolute bottom-28 left-4 z-30 flex w-72 flex-col gap-1.5 sm:w-80 ${
+            chatOpen ? 'pointer-events-auto' : 'pointer-events-none'
+          }`}
+          role="region"
+          aria-label="In-match tactical chat"
+        >
+          {visibleChatMessages.length > 0 && (
+            <div
+              ref={chatFeedRef}
+              className="max-h-36 overflow-y-auto border border-slate-400/20 bg-slate-950/80 px-2.5 py-2 shadow-lg shadow-black/30 backdrop-blur-md"
+            >
+              <div className="space-y-1 text-[11px]">
+                {visibleChatMessages.map((msg) => {
+                  const ageMs = Math.max(0, chatClockMs - msg.timestamp);
+                  const opacity = chatOpen
+                    ? 1
+                    : Math.max(0, Math.min(1, (CHAT_FADE_MS - ageMs) / 900));
+                  const isSys = Boolean(msg.isSystem || msg.senderTeam === 'system');
+                  const nameColor = isSys
+                    ? 'text-amber-300'
+                    : msg.senderTeam === 'blue'
+                      ? 'text-blue-400'
+                      : 'text-red-400';
+                  const tagLabel = isSys
+                    ? '[SYS]'
+                    : msg.channel === 'team'
+                      ? '[TEAM]'
+                      : '[ALL]';
+                  const tagColor = isSys
+                    ? 'text-amber-400/80'
+                    : msg.channel === 'team'
+                      ? 'text-sky-400'
+                      : 'text-slate-400';
+
+                  return (
+                    <div
+                      key={msg.id}
+                      className="break-words leading-snug"
+                      style={{ opacity }}
+                    >
+                      <span className={`mr-1 font-mono-tabular text-[10px] font-bold ${tagColor}`}>
+                        {tagLabel}
+                      </span>
+                      {!isSys && (
+                        <span className={`mr-1 font-semibold ${nameColor}`}>
+                          {msg.senderName}:
+                        </span>
+                      )}
+                      <span className={isSys ? 'text-amber-200/90' : 'text-slate-100'}>
+                        {msg.text}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {chatOpen && (
+            <form
+              onSubmit={handleChatFormSubmit}
+              className="flex items-center gap-1 border border-amber-400/45 bg-slate-950/92 p-1.5 shadow-xl shadow-black/40 backdrop-blur-md"
+            >
+              <button
+                type="button"
+                onClick={() => onChangeChatChannel?.(chatChannel === 'all' ? 'team' : 'all')}
+                title="Switch channel (Tab)"
+                className={`shrink-0 cursor-pointer border px-1.5 py-1 font-mono-tabular text-[10px] font-bold ${
+                  chatChannel === 'team'
+                    ? 'border-sky-400/50 bg-sky-500/20 text-sky-200'
+                    : 'border-amber-400/50 bg-amber-400/20 text-amber-200'
+                }`}
+              >
+                [{chatChannel.toUpperCase()}]
+              </button>
+              <input
+                ref={chatInputRef}
+                type="text"
+                maxLength={CHAT_MAX_LENGTH}
+                value={chatDraft}
+                onChange={(e) => setChatDraft(e.target.value)}
+                onKeyDown={handleChatInputKeyDown}
+                placeholder="Type message... (Enter send / Esc cancel)"
+                className="min-w-0 flex-1 bg-transparent px-1.5 py-1 text-xs text-white outline-none placeholder:text-slate-500"
+              />
+              <button
+                type="submit"
+                aria-label="Send message"
+                className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center bg-amber-500/25 text-amber-200 hover:bg-amber-500/40"
+              >
+                <Send className="h-3 w-3" />
+              </button>
+            </form>
+          )}
+        </div>
+      )}
+
+      {isCustomMatch &&
+        hud.match.phase === 'playing' &&
+        !chatOpen &&
+        hud.isAlive &&
+        !hud.showScoreboard &&
+        visibleChatMessages.length === 0 && (
+          <div className="absolute bottom-24 left-4 flex items-center gap-1.5 border border-white/10 bg-black/45 px-2 py-0.5 font-mono-tabular text-[10px] text-slate-400">
+            <MessageSquare className="h-3 w-3 text-slate-400" />
+            <span>[Enter / T] All · [Y] Team Chat</span>
+          </div>
+        )}
 
       {/* Bottom-Left Player Vitals & Stance */}
       <div className="absolute bottom-4 left-4 border border-slate-400/20 bg-slate-950/80 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
@@ -937,6 +1251,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* First-spawn Quick Controls */}
       {hud.showOnboarding &&
         !onboardingDismissed &&
+        !chatOpen &&
         hud.isAlive &&
         hud.match.phase === 'playing' && (
           <div

@@ -3,6 +3,12 @@ import { normalizeCharacterId, normalizeWeaponId } from '../game/loadoutRules';
 import { CharacterId, GunId, Stance, WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 import {
+  CHAT_HISTORY_LIMIT,
+  ChatChannel,
+  ChatMessage,
+  validateChatPayload,
+} from './chat';
+import {
   CreatePrivateMatchOptions,
   LobbyPlayerInfo,
   LobbyRoomSnapshot,
@@ -22,14 +28,20 @@ export interface NetworkManagerCallbacks {
   onPlayerRespawn: (pos: { x: number; y: number; z: number; rotY: number }) => void;
   onKillFeed: (event: NetworkKillFeedEvent) => void;
   onTeamPing?: (event: NetworkPingEvent) => void;
+  onChatMessage?: (message: ChatMessage) => void;
+  onChatUpdate?: (messages: ChatMessage[]) => void;
   onSystemNotice: (message: string) => void;
   onDisconnected: (reason: string) => void;
 }
 
 function getColyseusEndpoint(): string {
-  const custom = import.meta.env.VITE_COLYSEUS_URL as string | undefined;
+  const metaEnv = (import.meta as { env?: Record<string, string | undefined> }).env;
+  const custom = metaEnv?.VITE_COLYSEUS_URL;
   if (custom && custom.trim().length > 0) {
     return custom.trim();
+  }
+  if (typeof window === 'undefined') {
+    return 'ws://localhost:3000';
   }
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${window.location.host}`;
@@ -40,6 +52,8 @@ export class NetworkManager {
   private room: Room | null = null;
   private callbacks: NetworkManagerCallbacks;
   private intentionalLeave = false;
+  private chatHistory: ChatMessage[] = [];
+  private localChatSeq = 0;
 
   constructor(callbacks: NetworkManagerCallbacks) {
     this.callbacks = callbacks;
@@ -52,6 +66,39 @@ export class NetworkManager {
 
   public getLocalSessionId(): string {
     return this.room?.sessionId ?? '';
+  }
+
+  public getChatMessages(): ChatMessage[] {
+    return [...this.chatHistory];
+  }
+
+  public clearChatMessages(): void {
+    if (this.chatHistory.length === 0) return;
+    this.chatHistory = [];
+    this.callbacks.onChatUpdate?.([]);
+  }
+
+  public pushSystemNoticeToChat(text: string): ChatMessage | null {
+    const clean = text.trim();
+    if (!clean) return null;
+    const msg: ChatMessage = {
+      id: `local_sys_${++this.localChatSeq}`,
+      senderId: 'system',
+      senderName: 'SYSTEM',
+      senderTeam: 'system',
+      channel: 'all',
+      text: clean,
+      timestamp: Date.now(),
+      isSystem: true,
+    };
+    this.appendChatMessage(msg);
+    return msg;
+  }
+
+  private appendChatMessage(msg: ChatMessage): void {
+    this.chatHistory = [...this.chatHistory.slice(-(CHAT_HISTORY_LIMIT - 1)), msg];
+    this.callbacks.onChatMessage?.(msg);
+    this.callbacks.onChatUpdate?.([...this.chatHistory]);
   }
 
   public async lookupRoom(code: string): Promise<RoomLookupSummary> {
@@ -72,6 +119,7 @@ export class NetworkManager {
   public async createPrivateMatch(options: CreatePrivateMatchOptions): Promise<LobbyRoomSnapshot> {
     await this.leaveRoom();
     this.intentionalLeave = false;
+    this.clearChatMessages();
 
     const room = await this.client.create('match', options);
     this.attachRoomListeners(room);
@@ -87,6 +135,7 @@ export class NetworkManager {
   ): Promise<LobbyRoomSnapshot> {
     await this.leaveRoom();
     this.intentionalLeave = false;
+    this.clearChatMessages();
 
     const normalized = roomCode.trim().toUpperCase();
     if (!/^[A-Z0-9]{6}$/.test(normalized)) {
@@ -147,6 +196,35 @@ export class NetworkManager {
     this.room?.send('select_loadout', { weaponId, characterId });
   }
 
+  public sendChatMessage(
+    text: string,
+    channel: ChatChannel = 'all',
+    localSender?: { id?: string; name?: string; team?: TeamId }
+  ): ChatMessage | null {
+    const validated = validateChatPayload({ text, channel });
+    if (!validated) {
+      return null;
+    }
+
+    if (this.room) {
+      this.room.send('chat', validated);
+      return null;
+    }
+
+    // Local / Solo Custom Match offline fallback
+    const msg: ChatMessage = {
+      id: `local_chat_${++this.localChatSeq}`,
+      senderId: localSender?.id ?? 'local_player',
+      senderName: localSender?.name?.trim() || 'Operator',
+      senderTeam: localSender?.team ?? 'blue',
+      channel: validated.channel,
+      text: validated.text,
+      timestamp: Date.now(),
+    };
+    this.appendChatMessage(msg);
+    return msg;
+  }
+
   public sendMove(
     x: number,
     y: number,
@@ -194,6 +272,7 @@ export class NetworkManager {
 
   public async leaveRoom(): Promise<void> {
     const active = this.room;
+    this.clearChatMessages();
     if (!active) return;
     this.intentionalLeave = true;
     this.room = null;
@@ -234,6 +313,11 @@ export class NetworkManager {
 
     room.onMessage('team_ping', (msg: NetworkPingEvent) => {
       this.callbacks.onTeamPing?.(msg);
+    });
+
+    room.onMessage('chat', (msg: ChatMessage) => {
+      if (!msg || typeof msg.text !== 'string') return;
+      this.appendChatMessage(msg);
     });
 
     room.onMessage('system_notice', (msg: { message?: string }) => {

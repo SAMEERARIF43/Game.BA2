@@ -229,11 +229,21 @@ export class BotManager {
     this.redPalette = null;
   }
 
-  public getRadarActors(): { id: string; x: number; z: number; team: TeamId; isAlive: boolean }[] {
+  public getRadarActors(): {
+    id: string;
+    name: string;
+    x: number;
+    z: number;
+    yawRad: number;
+    team: TeamId;
+    isAlive: boolean;
+  }[] {
     return this.bots.map((b) => ({
       id: b.id,
+      name: b.name,
       x: b.root.position.x,
       z: b.root.position.z,
+      yawRad: b.yaw,
       team: b.team,
       isAlive: b.isAlive,
     }));

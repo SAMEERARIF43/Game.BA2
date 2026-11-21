@@ -7,18 +7,29 @@ import {
   Link2,
   Lock,
   LogOut,
+  MessageSquare,
   Scale,
+  Send,
   Share2,
   Shield,
   UserX,
 } from 'lucide-react';
 import { MAP_LIST } from '../maps/MapManager';
 import { MapId } from '../maps/types';
+import {
+  CHAT_MAX_LENGTH,
+  ChatChannel,
+  ChatMessage,
+  QUICK_CHAT_CALLOUTS,
+  formatChatTimestamp,
+} from '../multiplayer/chat';
 import { CreatePrivateMatchOptions, LobbyPlayerInfo, LobbyRoomSnapshot } from '../multiplayer/types';
 
 interface LobbyScreenProps {
   lobby: LobbyRoomSnapshot;
   systemNotice: string | null;
+  chatMessages: ChatMessage[];
+  onSendChat: (text: string, channel: ChatChannel) => void;
   onUpdateConfig: (patch: Partial<CreatePrivateMatchOptions>) => void;
   onBalanceTeams: () => void;
   onKickPlayer: (targetId: string) => void;
@@ -31,6 +42,8 @@ interface LobbyScreenProps {
 export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   lobby,
   systemNotice,
+  chatMessages,
+  onSendChat,
   onUpdateConfig,
   onBalanceTeams,
   onKickPlayer,
@@ -40,7 +53,10 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   onLeaveLobby,
 }) => {
   const [toast, setToast] = useState<string | null>(null);
+  const [chatText, setChatText] = useState('');
+  const [chatChannel, setChatChannel] = useState<ChatChannel>('all');
   const toastTimerRef = useRef<number | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return () => {
@@ -49,6 +65,12 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
       }
     };
   }, []);
+
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [chatMessages]);
 
   const localPlayer = lobby.players.find((p) => p.id === lobby.localPlayerId);
   const isHost = lobby.hostId === lobby.localPlayerId;
@@ -103,12 +125,24 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
     await handleCopyInvite();
   };
 
+  const handleSubmitChat = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = chatText.trim();
+    if (!trimmed) return;
+    onSendChat(trimmed, chatChannel);
+    setChatText('');
+  };
+
+  const handleCallout = (callout: string) => {
+    onSendChat(callout, chatChannel);
+  };
+
   const renderRosterRow = (p: LobbyPlayerInfo) => {
     const isSelf = p.id === lobby.localPlayerId;
     return (
       <div
         key={p.id}
-        className={`flex items-center justify-between border-b border-white/5 px-4 py-2.5 text-xs last:border-b-0 ${
+        className={`flex items-center justify-between border-b border-white/5 px-4 py-2 text-xs last:border-b-0 ${
           isSelf ? 'bg-amber-400/10' : ''
         }`}
       >
@@ -153,14 +187,19 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   };
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/80 p-6 backdrop-blur-sm md:p-10">
-      <div className="w-full max-w-5xl border border-white/15 bg-[#0e131b]/95 p-6 shadow-2xl">
+    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/80 p-4 backdrop-blur-sm md:p-6">
+      <div className="my-auto max-h-[calc(100vh-2rem)] w-full max-w-5xl overflow-y-auto border border-white/15 bg-[#0e131b]/95 p-5 shadow-2xl md:p-6">
         {/* Top Lobby Header */}
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3.5">
           <div>
             <div className="flex items-center gap-2.5">
-              <h1 className="font-display text-2xl font-bold text-white">{lobby.roomName}</h1>
+              <h1 className="font-display text-xl font-bold text-white md:text-2xl">{lobby.roomName}</h1>
               {lobby.hasPassword && <Lock className="h-4 w-4 text-amber-400" />}
+              {lobby.isLocalSolo && (
+                <span className="border border-sky-400/40 bg-sky-500/15 px-2 py-0.5 font-mono-tabular text-[10px] font-semibold text-sky-300">
+                  SOLO OFFLINE
+                </span>
+              )}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-400">
               <span>
@@ -182,7 +221,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             <button
               type="button"
               onClick={handleCopyCode}
-              className="inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/10 whitespace-nowrap"
+              className="inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-white/10 whitespace-nowrap"
             >
               <Copy className="h-3.5 w-3.5" />
               Copy Code
@@ -191,7 +230,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             <button
               type="button"
               onClick={handleCopyInvite}
-              className="inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/10 whitespace-nowrap"
+              className="inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-white/10 whitespace-nowrap"
             >
               <Link2 className="h-3.5 w-3.5" />
               Copy Invite Link
@@ -200,7 +239,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             <button
               type="button"
               onClick={handleNativeShare}
-              className="inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/10 whitespace-nowrap"
+              className="inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-white/10 whitespace-nowrap"
             >
               <Share2 className="h-3.5 w-3.5" />
               Share
@@ -209,7 +248,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             <button
               type="button"
               onClick={onLeaveLobby}
-              className="inline-flex cursor-pointer items-center gap-1.5 border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-300 hover:bg-red-500/20 whitespace-nowrap"
+              className="inline-flex cursor-pointer items-center gap-1.5 border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-300 hover:bg-red-500/20 whitespace-nowrap"
             >
               <LogOut className="h-3.5 w-3.5" />
               Leave Lobby
@@ -224,9 +263,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
         )}
 
         {/* Team Rosters */}
-        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="border border-blue-500/30 bg-black/40">
-            <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
               <span className="font-display text-sm font-bold text-blue-400">
                 Blue Task Force
               </span>
@@ -234,9 +273,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                 {bluePlayers.length} Operators
               </span>
             </div>
-            <div>
+            <div className="max-h-40 overflow-y-auto">
               {bluePlayers.length === 0 ? (
-                <div className="px-4 py-6 text-center text-xs text-slate-500">
+                <div className="px-4 py-5 text-center text-xs text-slate-500">
                   No operators assigned
                 </div>
               ) : (
@@ -246,7 +285,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           </div>
 
           <div className="border border-red-500/30 bg-black/40">
-            <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
               <span className="font-display text-sm font-bold text-red-400">
                 Red Opposition
               </span>
@@ -254,9 +293,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                 {redPlayers.length} Operators
               </span>
             </div>
-            <div>
+            <div className="max-h-40 overflow-y-auto">
               {redPlayers.length === 0 ? (
-                <div className="px-4 py-6 text-center text-xs text-slate-500">
+                <div className="px-4 py-5 text-center text-xs text-slate-500">
                   No operators assigned
                 </div>
               ) : (
@@ -266,8 +305,126 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           </div>
         </div>
 
+        {/* Lobby Comms Chat Panel */}
+        <div
+          className="mt-4 border border-slate-400/20 bg-slate-950/75 p-3.5 backdrop-blur-md"
+          role="region"
+          aria-label="Lobby chat"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-3.5 w-3.5 text-amber-400" />
+              <span className="font-display text-xs font-bold tracking-wider text-slate-200">
+                LOBBY COMMS
+              </span>
+              <div className="ml-1 flex border border-white/15 bg-black/40">
+                {(['all', 'team'] as const).map((ch) => (
+                  <button
+                    key={ch}
+                    type="button"
+                    onClick={() => setChatChannel(ch)}
+                    className={`cursor-pointer px-2 py-0.5 font-mono-tabular text-[10px] font-bold transition-colors ${
+                      chatChannel === ch
+                        ? ch === 'team'
+                          ? 'bg-sky-500/25 text-sky-200'
+                          : 'bg-amber-400/25 text-amber-200'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    [{ch.toUpperCase()}]
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              {QUICK_CHAT_CALLOUTS.map((callout) => (
+                <button
+                  key={callout}
+                  type="button"
+                  onClick={() => handleCallout(callout)}
+                  className="cursor-pointer border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] text-slate-300 transition-colors hover:border-amber-400/40 hover:bg-amber-400/10 hover:text-amber-200"
+                >
+                  {callout}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div
+            ref={chatScrollRef}
+            className="mt-2 h-28 overflow-y-auto scroll-smooth border border-white/10 bg-black/45 px-3 py-2 text-xs"
+            aria-live="polite"
+          >
+            {chatMessages.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-[11px] text-slate-500">
+                No lobby messages yet. Send a callout or press Enter to chat.
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {chatMessages.map((msg) => {
+                  const isSys = Boolean(msg.isSystem || msg.senderTeam === 'system');
+                  const nameColor = isSys
+                    ? 'text-amber-300'
+                    : msg.senderTeam === 'blue'
+                      ? 'text-blue-400'
+                      : 'text-red-400';
+                  const tagLabel = isSys
+                    ? '[SYS]'
+                    : msg.channel === 'team'
+                      ? '[TEAM]'
+                      : '[ALL]';
+                  const tagColor = isSys
+                    ? 'text-amber-400/80'
+                    : msg.channel === 'team'
+                      ? 'text-sky-400'
+                      : 'text-slate-400';
+
+                  return (
+                    <div key={msg.id} className="flex items-baseline gap-1.5 break-words leading-snug">
+                      <span className="shrink-0 font-mono-tabular text-[10px] text-slate-500">
+                        {formatChatTimestamp(msg.timestamp)}
+                      </span>
+                      <span className={`shrink-0 font-mono-tabular text-[10px] font-bold ${tagColor}`}>
+                        {tagLabel}
+                      </span>
+                      {!isSys && (
+                        <span className={`shrink-0 font-semibold ${nameColor}`}>
+                          {msg.senderName}:
+                        </span>
+                      )}
+                      <span className={isSys ? 'text-amber-200/90' : 'text-slate-200'}>
+                        {msg.text}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <form onSubmit={handleSubmitChat} className="mt-2 flex items-center gap-2">
+            <input
+              type="text"
+              maxLength={CHAT_MAX_LENGTH}
+              value={chatText}
+              onChange={(e) => setChatText(e.target.value)}
+              placeholder={`Message ${chatChannel === 'team' ? 'team' : 'lobby'}...`}
+              className="min-w-0 flex-1 border border-white/15 bg-black/55 px-3 py-1.5 text-xs text-white outline-none placeholder:text-slate-500 focus:border-amber-400"
+            />
+            <button
+              type="submit"
+              disabled={chatText.trim().length === 0}
+              className="inline-flex cursor-pointer items-center gap-1.5 border border-amber-400/50 bg-amber-500/20 px-3.5 py-1.5 font-display text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Send
+            </button>
+          </form>
+        </div>
+
         {/* Host Rules & Player Controls */}
-        <div className="mt-5 grid grid-cols-1 gap-5 border-t border-white/10 pt-5 lg:grid-cols-12">
+        <div className="mt-4 grid grid-cols-1 gap-4 border-t border-white/10 pt-4 lg:grid-cols-12">
           <div className="space-y-3 lg:col-span-8">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-400">
@@ -365,11 +522,11 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           </div>
 
           {/* Right Action Stack */}
-          <div className="flex flex-col justify-end gap-2.5 lg:col-span-4">
+          <div className="flex flex-col justify-end gap-2 lg:col-span-4">
             <button
               type="button"
               onClick={onSwitchTeam}
-              className="flex w-full cursor-pointer items-center justify-center gap-2 border border-white/15 bg-white/5 px-4 py-2.5 font-display text-xs font-semibold text-white hover:bg-white/10"
+              className="flex w-full cursor-pointer items-center justify-center gap-2 border border-white/15 bg-white/5 px-4 py-2 font-display text-xs font-semibold text-white hover:bg-white/10"
             >
               <ArrowLeftRight className="h-3.5 w-3.5" />
               Switch Team ({localPlayer?.team === 'blue' ? 'to Red' : 'to Blue'})
@@ -379,7 +536,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               <button
                 type="button"
                 onClick={onStartMatch}
-                className="flex w-full cursor-pointer items-center justify-center gap-2 bg-amber-500 px-5 py-3 font-display text-sm font-bold tracking-wide text-slate-950 transition-colors hover:bg-amber-400"
+                className="flex w-full cursor-pointer items-center justify-center gap-2 bg-amber-500 px-5 py-2.5 font-display text-sm font-bold tracking-wide text-slate-950 transition-colors hover:bg-amber-400"
               >
                 <Crosshair className="h-4 w-4" />
                 START MATCH
@@ -388,7 +545,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               <button
                 type="button"
                 onClick={onToggleReady}
-                className={`flex w-full cursor-pointer items-center justify-center gap-2 px-5 py-3 font-display text-sm font-bold tracking-wide transition-colors ${
+                className={`flex w-full cursor-pointer items-center justify-center gap-2 px-5 py-2.5 font-display text-sm font-bold tracking-wide transition-colors ${
                   localPlayer?.ready
                     ? 'border border-emerald-400 bg-emerald-500/20 text-emerald-300'
                     : 'bg-amber-500 text-slate-950 hover:bg-amber-400'

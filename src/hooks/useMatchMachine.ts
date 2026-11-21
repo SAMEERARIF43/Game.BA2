@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { EngineManager, InitProgressState } from '../game/EngineManager';
-import { CharacterId, GameSettings, GunId, KnifeCharmId } from '../game/types';
-import { MapId } from '../maps/types';
+import { CharacterId, GameSettings, GunId, KnifeCharmId, WeaponId } from '../game/types';
+import { MapId, TeamId } from '../maps/types';
 import {
   createInitialMatchState,
   deriveActiveRoute,
@@ -14,8 +14,14 @@ import {
   matchReducer,
   PostMatchStats,
 } from '../match/matchMachine';
+import { ChatChannel, ChatMessage } from '../multiplayer/chat';
 import { NetworkManager } from '../multiplayer/NetworkManager';
-import { CreatePrivateMatchOptions, RoomLookupSummary } from '../multiplayer/types';
+import {
+  CreatePrivateMatchOptions,
+  LobbyPlayerInfo,
+  LobbyRoomSnapshot,
+  RoomLookupSummary,
+} from '../multiplayer/types';
 import { getRankSummary, loadProgression } from '../settings/progressionStorage';
 import {
   loadPersistedSettings,
@@ -26,9 +32,91 @@ import { toggleFullscreen } from '../utils/fullscreen';
 import { navigateToRoute, parseRouteFromLocation } from '../utils/router';
 import { registerUiAudioHandler } from '../utils/uiAudio';
 
+function buildSoloLobbyPlayers(
+  localTeam: TeamId,
+  botCount: number,
+  playerName: string,
+  characterId: CharacterId,
+  weaponId: WeaponId
+): LobbyPlayerInfo[] {
+  const safeName = playerName.trim() || 'Operator-101';
+  const players: LobbyPlayerInfo[] = [
+    {
+      id: 'player',
+      name: safeName,
+      team: localTeam,
+      isBot: false,
+      isHost: true,
+      ready: true,
+      isAlive: true,
+      respawnTimer: 0,
+      x: 0,
+      y: 0,
+      z: localTeam === 'blue' ? -20 : 20,
+      rotY: localTeam === 'blue' ? 0 : Math.PI,
+      pitch: 0,
+      characterId,
+      weaponId,
+      stance: 'stand',
+      health: 100,
+      kills: 0,
+      deaths: 0,
+    },
+  ];
+
+  const blueNames = ['Vanguard-1', 'Ghost-2', 'Echo-3', 'Specter-4', 'Nomad-5'];
+  const redNames = ['Viper-1', 'Talon-2', 'Reaper-3', 'Jackal-4', 'Raven-5'];
+  let blueTotal = localTeam === 'blue' ? 1 : 0;
+  let redTotal = localTeam === 'red' ? 1 : 0;
+  let blueBots = 0;
+  let redBots = 0;
+
+  for (let i = 0; i < botCount; i++) {
+    const team: TeamId = blueTotal <= redTotal ? 'blue' : 'red';
+    if (team === 'blue') {
+      blueTotal++;
+      blueBots++;
+    } else {
+      redTotal++;
+      redBots++;
+    }
+    const callsign =
+      team === 'blue'
+        ? blueNames[blueBots - 1] ?? `Blue-${blueBots}`
+        : redNames[redBots - 1] ?? `Red-${redBots}`;
+    players.push({
+      id: `solo_bot_${i + 1}`,
+      name: callsign,
+      team,
+      isBot: true,
+      isHost: false,
+      ready: true,
+      isAlive: true,
+      respawnTimer: 0,
+      x: 0,
+      y: 0,
+      z: team === 'blue' ? -20 : 20,
+      rotY: team === 'blue' ? 0 : Math.PI,
+      pitch: 0,
+      characterId: 'assault',
+      weaponId: 'ak47',
+      stance: 'stand',
+      health: 100,
+      kills: 0,
+      deaths: 0,
+    });
+  }
+
+  return players;
+}
+
 export interface MatchMachineDerived {
   isMultiplayerInMatch: boolean;
   isMultiplayerHost: boolean;
+  isCustomMatch: boolean;
+  chatMessages: ChatMessage[];
+  chatOpen: boolean;
+  chatChannel: ChatChannel;
   postMatchStats: PostMatchStats;
   initProgress: InitProgressState;
   connectStage: string | null;
@@ -52,6 +140,7 @@ export interface MatchMachineActions {
   previewShowcase: (focus: 'gun' | 'knife', offsetX?: number) => void;
   lookupRoom: (roomCode: string) => Promise<RoomLookupSummary>;
   createPrivateMatch: (options: CreatePrivateMatchOptions) => Promise<void>;
+  createSoloCustomLobby: (options: CreatePrivateMatchOptions) => void;
   joinPrivateMatch: (roomCode: string, playerName: string, password?: string) => Promise<void>;
   cancelMpConnect: () => void;
   leaveMultiplayer: () => Promise<void>;
@@ -62,6 +151,9 @@ export interface MatchMachineActions {
   startRoomMatch: () => void;
   switchRoomTeam: () => void;
   toggleRoomReady: () => void;
+  sendChatMessage: (text: string, channel?: ChatChannel) => void;
+  setChatChannel: (channel: ChatChannel) => void;
+  closeInMatchChat: (restorePointerLock: boolean) => void;
 }
 
 export function useMatchMachine() {
@@ -79,6 +171,9 @@ export function useMatchMachine() {
     stage: 'Initializing 3D viewport',
   });
   const [connectStage, setConnectStage] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatChannel, setChatChannel] = useState<ChatChannel>('all');
 
   const stateRef = useRef<MatchMachineState>(state);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -139,6 +234,9 @@ export function useMatchMachine() {
       onTeamPing: (event) => {
         engineRef.current?.handleNetworkPing(event);
       },
+      onChatUpdate: (messages) => {
+        setChatMessages(messages);
+      },
       onSystemNotice: (message) => {
         if (!isActiveMultiplayerStatus(stateRef.current.status)) {
           return;
@@ -157,6 +255,8 @@ export function useMatchMachine() {
           return;
         }
         clearNoticeTimer();
+        setChatOpen(false);
+        setChatMessages([]);
         navigateToRoute(deriveActiveRoute(nextState));
         engineRef.current?.returnToMenu();
       },
@@ -189,6 +289,12 @@ export function useMatchMachine() {
           selectedGunId: gunId,
         });
         dispatchAction({ type: 'SETTINGS_UPDATED', settings: saved });
+      },
+      onChatOpenChange: (open, channel) => {
+        setChatOpen(open);
+        if (open) {
+          setChatChannel(channel);
+        }
       },
     });
     engineRef.current = manager;
@@ -241,6 +347,8 @@ export function useMatchMachine() {
 
       if (wasActiveMp && !stillInMp) {
         clearNoticeTimer();
+        setChatOpen(false);
+        setChatMessages([]);
         if (networkRef.current?.isConnected()) {
           void networkRef.current.leaveRoom();
         }
@@ -316,10 +424,14 @@ export function useMatchMachine() {
 
   const playOfflineTdm = useCallback(() => {
     const mapId = stateRef.current.selectedMapId;
+    networkRef.current?.clearChatMessages();
+    setChatMessages([]);
+    setChatOpen(false);
     const nextState = dispatchAction({
       type: 'START_OFFLINE_MATCH',
       mapId,
       requestLock: true,
+      isCustomMatch: false,
     });
     if (nextState.status !== 'offline_playing') return;
     navigateToRoute(deriveActiveRoute(nextState));
@@ -350,10 +462,14 @@ export function useMatchMachine() {
 
   const deployMap = useCallback(
     (mapId: MapId) => {
+      networkRef.current?.clearChatMessages();
+      setChatMessages([]);
+      setChatOpen(false);
       const nextState = dispatchAction({
         type: 'START_OFFLINE_MATCH',
         mapId,
         requestLock: true,
+        isCustomMatch: false,
       });
       if (nextState.status !== 'offline_playing') return;
       navigateToRoute(deriveActiveRoute(nextState));
@@ -365,6 +481,9 @@ export function useMatchMachine() {
   const backToMenu = useCallback(() => {
     const wasMp = isMultiplayerOrConnecting(stateRef.current.status);
     clearNoticeTimer();
+    setChatOpen(false);
+    networkRef.current?.clearChatMessages();
+    setChatMessages([]);
     const nextState = dispatchAction({ type: 'NAVIGATE_MENU' });
     if (wasMp || networkRef.current?.isConnected()) {
       void networkRef.current?.leaveRoom();
@@ -483,6 +602,54 @@ export function useMatchMachine() {
     [dispatchAction]
   );
 
+  const createSoloCustomLobby = useCallback(
+    (options: CreatePrivateMatchOptions) => {
+      if (stateRef.current.status !== 'custom_menu') return;
+      const latestSettings = stateRef.current.settings;
+      const safeName = options.playerName.trim() || latestSettings.callsign || 'Operator-101';
+      if (safeName !== latestSettings.callsign) {
+        const saved = savePersistedSettings({ ...latestSettings, callsign: safeName });
+        dispatchAction({ type: 'SETTINGS_UPDATED', settings: saved });
+      }
+      const snapshot: LobbyRoomSnapshot = {
+        roomCode: 'SOLO01',
+        roomName: options.roomName.trim() || 'Solo Custom Lobby',
+        mapId: options.mapId,
+        phase: 'lobby',
+        killLimit: options.killLimit,
+        timeLimit: options.timeLimit,
+        timeRemaining: options.timeLimit,
+        respawnDelay: options.respawnDelay,
+        friendlyFire: options.friendlyFire,
+        botCount: options.botCount,
+        hasPassword: false,
+        hostId: 'player',
+        blueScore: 0,
+        redScore: 0,
+        winner: '',
+        players: buildSoloLobbyPlayers(
+          'blue',
+          options.botCount,
+          safeName,
+          latestSettings.selectedCharacterId,
+          latestSettings.selectedGunId
+        ),
+        localPlayerId: 'player',
+        isLocalSolo: true,
+      };
+      networkRef.current?.clearChatMessages();
+      setChatMessages([]);
+      setChatOpen(false);
+      networkRef.current?.pushSystemNoticeToChat(
+        `${safeName} opened Solo Custom lobby (${snapshot.roomName}). Local chat active.`
+      );
+      const nextState = dispatchAction({ type: 'OPEN_SOLO_CUSTOM_LOBBY', snapshot });
+      navigateToRoute(deriveActiveRoute(nextState));
+      engineRef.current?.previewMap(snapshot.mapId);
+    },
+    [dispatchAction]
+  );
+
   const joinPrivateMatch = useCallback(
     async (roomCode: string, playerName: string, password?: string) => {
       const network = networkRef.current;
@@ -540,6 +707,9 @@ export function useMatchMachine() {
   const leaveMultiplayer = useCallback(async () => {
     clearNoticeTimer();
     setConnectStage(null);
+    setChatOpen(false);
+    networkRef.current?.clearChatMessages();
+    setChatMessages([]);
     const nextState = dispatchAction({ type: 'LEAVE_MULTIPLAYER' });
     navigateToRoute(deriveActiveRoute(nextState));
     engineRef.current?.returnToMenu();
@@ -547,14 +717,58 @@ export function useMatchMachine() {
   }, [clearNoticeTimer, dispatchAction]);
 
   const returnToLobby = useCallback(() => {
+    if (stateRef.current.lobbySnapshot?.isLocalSolo) {
+      setChatOpen(false);
+      const nextState = dispatchAction({ type: 'RETURN_SOLO_CUSTOM_LOBBY' });
+      navigateToRoute(deriveActiveRoute(nextState));
+      engineRef.current?.previewMap(nextState.selectedMapId);
+      networkRef.current?.pushSystemNoticeToChat('Returned to Solo Custom lobby.');
+      return;
+    }
     networkRef.current?.returnToLobby();
-  }, []);
+  }, [dispatchAction]);
 
-  const updateRoomConfig = useCallback((patch: Partial<CreatePrivateMatchOptions>) => {
-    networkRef.current?.updateConfig(patch);
-  }, []);
+  const updateRoomConfig = useCallback(
+    (patch: Partial<CreatePrivateMatchOptions>) => {
+      const snap = stateRef.current.lobbySnapshot;
+      if (stateRef.current.status === 'local_custom_lobby' && snap?.isLocalSolo) {
+        const localPlayer = snap.players.find((p) => p.id === snap.localPlayerId);
+        const nextBotCount =
+          typeof patch.botCount === 'number' ? Math.max(0, Math.min(10, patch.botCount)) : snap.botCount;
+        const nextMapId = patch.mapId ?? snap.mapId;
+        const nextSnapshot: LobbyRoomSnapshot = {
+          ...snap,
+          mapId: nextMapId,
+          killLimit: patch.killLimit ?? snap.killLimit,
+          timeLimit: patch.timeLimit ?? snap.timeLimit,
+          timeRemaining: patch.timeLimit ?? snap.timeRemaining,
+          friendlyFire: patch.friendlyFire ?? snap.friendlyFire,
+          botCount: nextBotCount,
+          players: buildSoloLobbyPlayers(
+            localPlayer?.team ?? 'blue',
+            nextBotCount,
+            localPlayer?.name ?? stateRef.current.settings.callsign,
+            localPlayer?.characterId ?? stateRef.current.settings.selectedCharacterId,
+            localPlayer?.weaponId ?? stateRef.current.settings.selectedGunId
+          ),
+        };
+        dispatchAction({ type: 'UPDATE_SOLO_CUSTOM_LOBBY', snapshot: nextSnapshot });
+        if (patch.mapId && patch.mapId !== snap.mapId) {
+          engineRef.current?.previewMap(nextMapId);
+        }
+        networkRef.current?.pushSystemNoticeToChat('Host updated match settings.');
+        return;
+      }
+      networkRef.current?.updateConfig(patch);
+    },
+    [dispatchAction]
+  );
 
   const balanceRoomTeams = useCallback(() => {
+    if (stateRef.current.status === 'local_custom_lobby' && stateRef.current.lobbySnapshot?.isLocalSolo) {
+      networkRef.current?.pushSystemNoticeToChat('Host balanced teams.');
+      return;
+    }
     networkRef.current?.balanceTeams();
   }, []);
 
@@ -563,15 +777,70 @@ export function useMatchMachine() {
   }, []);
 
   const startRoomMatch = useCallback(() => {
+    const snap = stateRef.current.lobbySnapshot;
+    if (stateRef.current.status === 'local_custom_lobby' && snap?.isLocalSolo) {
+      const localPlayer = snap.players.find((p) => p.id === snap.localPlayerId);
+      const nextState = dispatchAction({ type: 'START_SOLO_CUSTOM_MATCH' });
+      if (nextState.status !== 'offline_playing') return;
+      navigateToRoute(deriveActiveRoute(nextState));
+      const botsPerTeam = snap.botCount === 0 ? 0 : Math.max(1, Math.ceil(snap.botCount / 2));
+      engineRef.current?.startMatch(snap.mapId, true, {
+        killLimit: snap.killLimit,
+        timeLimitSec: snap.timeLimit,
+        botsPerTeam,
+        isCustomMatch: true,
+        playerName: localPlayer?.name ?? stateRef.current.settings.callsign,
+      });
+      return;
+    }
     networkRef.current?.startMatch();
-  }, []);
+  }, [dispatchAction]);
 
   const switchRoomTeam = useCallback(() => {
+    const snap = stateRef.current.lobbySnapshot;
+    if (stateRef.current.status === 'local_custom_lobby' && snap?.isLocalSolo) {
+      const localPlayer = snap.players.find((p) => p.id === snap.localPlayerId);
+      const nextTeam: TeamId = localPlayer?.team === 'blue' ? 'red' : 'blue';
+      const playerName = localPlayer?.name ?? stateRef.current.settings.callsign;
+      const nextSnapshot: LobbyRoomSnapshot = {
+        ...snap,
+        players: buildSoloLobbyPlayers(
+          nextTeam,
+          snap.botCount,
+          playerName,
+          localPlayer?.characterId ?? stateRef.current.settings.selectedCharacterId,
+          localPlayer?.weaponId ?? stateRef.current.settings.selectedGunId
+        ),
+      };
+      dispatchAction({ type: 'UPDATE_SOLO_CUSTOM_LOBBY', snapshot: nextSnapshot });
+      networkRef.current?.pushSystemNoticeToChat(
+        `${playerName} switched to ${nextTeam === 'blue' ? 'Blue Task Force' : 'Red Opposition'}.`
+      );
+      return;
+    }
     networkRef.current?.switchTeam();
-  }, []);
+  }, [dispatchAction]);
 
   const toggleRoomReady = useCallback(() => {
     networkRef.current?.toggleReady();
+  }, []);
+
+  const sendChatMessage = useCallback(
+    (text: string, channel?: ChatChannel) => {
+      const targetChannel = channel ?? chatChannel;
+      const snap = stateRef.current.lobbySnapshot;
+      const local = snap?.players.find((p) => p.id === snap.localPlayerId);
+      networkRef.current?.sendChatMessage(text, targetChannel, {
+        id: local?.id ?? 'player',
+        name: local?.name ?? stateRef.current.settings.callsign,
+        team: local?.team ?? 'blue',
+      });
+    },
+    [chatChannel]
+  );
+
+  const closeInMatchChat = useCallback((restorePointerLock: boolean) => {
+    engineRef.current?.closeChatInput(restorePointerLock);
   }, []);
 
   const derived = useMemo<MatchMachineDerived>(
@@ -582,11 +851,17 @@ export function useMatchMachine() {
       isMultiplayerHost:
         state.lobbySnapshot !== null &&
         state.lobbySnapshot.hostId === state.lobbySnapshot.localPlayerId,
+      isCustomMatch: Boolean(
+        state.isCustomMatch || isActiveMultiplayerStatus(state.status) || state.status === 'local_custom_lobby'
+      ),
+      chatMessages,
+      chatOpen,
+      chatChannel,
       postMatchStats: derivePostMatchStats(state.hud),
       initProgress,
       connectStage,
     }),
-    [connectStage, initProgress, state.hud, state.lobbySnapshot, state.status]
+    [chatChannel, chatMessages, chatOpen, connectStage, initProgress, state.hud, state.isCustomMatch, state.lobbySnapshot, state.status]
   );
 
   const actions = useMemo<MatchMachineActions>(
@@ -608,6 +883,7 @@ export function useMatchMachine() {
       previewShowcase,
       lookupRoom,
       createPrivateMatch,
+      createSoloCustomLobby,
       joinPrivateMatch,
       cancelMpConnect,
       leaveMultiplayer,
@@ -618,12 +894,17 @@ export function useMatchMachine() {
       startRoomMatch,
       switchRoomTeam,
       toggleRoomReady,
+      sendChatMessage,
+      setChatChannel,
+      closeInMatchChat,
     }),
     [
       backToMenu,
       balanceRoomTeams,
       cancelMpConnect,
+      closeInMatchChat,
       createPrivateMatch,
+      createSoloCustomLobby,
       deployMap,
       joinPrivateMatch,
       kickRoomPlayer,
@@ -641,6 +922,7 @@ export function useMatchMachine() {
       selectCharacter,
       selectGun,
       selectKnifeCharm,
+      sendChatMessage,
       startRoomMatch,
       switchRoomTeam,
       toggleRoomReady,

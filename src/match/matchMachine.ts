@@ -1,3 +1,4 @@
+import { ARENA_HALF_EXTENT } from '../game/minimap';
 import { GameSettings, HudState, MatchParticipant, WEAPONS } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 import { LobbyRoomSnapshot } from '../multiplayer/types';
@@ -8,6 +9,7 @@ export type MatchMachineStatus =
   | 'menu'
   | 'maps'
   | 'custom_menu'
+  | 'local_custom_lobby'
   | 'mp_connecting'
   | 'mp_lobby'
   | 'mp_playing'
@@ -34,15 +36,20 @@ export interface MatchMachineState {
   disconnectError: string | null;
   systemNotice: string | null;
   connectionEpoch: number;
+  isCustomMatch?: boolean;
 }
 
 export type MatchMachineAction =
   | { type: 'NAVIGATE_MENU' }
   | { type: 'OPEN_MAP_SELECT' }
   | { type: 'PREVIEW_MAP'; mapId: MapId }
-  | { type: 'START_OFFLINE_MATCH'; mapId: MapId; requestLock: boolean }
+  | { type: 'START_OFFLINE_MATCH'; mapId: MapId; requestLock: boolean; isCustomMatch?: boolean }
   | { type: 'RESTART_OFFLINE_MATCH' }
   | { type: 'OPEN_CUSTOM_MATCH'; joinCode?: string }
+  | { type: 'OPEN_SOLO_CUSTOM_LOBBY'; snapshot: LobbyRoomSnapshot }
+  | { type: 'UPDATE_SOLO_CUSTOM_LOBBY'; snapshot: LobbyRoomSnapshot }
+  | { type: 'START_SOLO_CUSTOM_MATCH' }
+  | { type: 'RETURN_SOLO_CUSTOM_LOBBY' }
   | { type: 'MP_CONNECT_START' }
   | { type: 'MP_CONNECT_SUCCESS'; epoch: number; snapshot: LobbyRoomSnapshot }
   | { type: 'MP_CONNECT_FAILURE'; epoch: number }
@@ -127,6 +134,15 @@ export const INITIAL_HUD: HudState = {
   killstreakBanner: null,
   scorePopups: [],
   radarBlips: [],
+  minimap: {
+    mapId: 'urban',
+    halfExtent: ARENA_HALF_EXTENT,
+    playerX: 0,
+    playerZ: -20,
+    playerYawRad: 0,
+    localTeam: 'blue',
+    actors: [],
+  },
   pings: [],
   xp: 0,
   sessionXpEarned: 0,
@@ -207,6 +223,10 @@ export function createInitialMatchState({
       rankLevel: rank.level,
       rankTitle: rank.title,
       rankProgressPct: rank.progressPct,
+      minimap: {
+        ...INITIAL_HUD.minimap,
+        mapId: selectedMapId,
+      },
       match: {
         ...INITIAL_HUD.match,
         mapId: selectedMapId,
@@ -217,6 +237,7 @@ export function createInitialMatchState({
     disconnectError: null,
     systemNotice: null,
     connectionEpoch: 0,
+    isCustomMatch: false,
   };
 }
 
@@ -249,6 +270,7 @@ export function deriveActiveRoute(state: MatchMachineState): AppRoute {
     case 'custom_menu':
     case 'mp_connecting':
       return { view: 'custom', joinCode: state.joinCode };
+    case 'local_custom_lobby':
     case 'mp_lobby':
     case 'mp_playing':
     case 'mp_ended':
@@ -364,6 +386,7 @@ export function matchReducer(
         lobbySnapshot: null,
         disconnectError: null,
         systemNotice: null,
+        isCustomMatch: false,
         connectionEpoch: leavingMp ? state.connectionEpoch + 1 : state.connectionEpoch,
         hud:
           state.hud.match.phase === 'menu'
@@ -403,14 +426,16 @@ export function matchReducer(
       if (isMultiplayerOrConnecting(state.status)) {
         return state;
       }
+      const preserveLobby = action.isCustomMatch ? state.lobbySnapshot : null;
       return {
         ...state,
         status: action.requestLock ? 'offline_playing' : 'offline_paused',
         selectedMapId: action.mapId,
         joinCode: undefined,
-        lobbySnapshot: null,
+        lobbySnapshot: preserveLobby,
         disconnectError: null,
         systemNotice: null,
+        isCustomMatch: Boolean(action.isCustomMatch),
       };
     }
 
@@ -437,6 +462,59 @@ export function matchReducer(
         lobbySnapshot: null,
         disconnectError: null,
         systemNotice: null,
+        isCustomMatch: false,
+      };
+    }
+
+    case 'OPEN_SOLO_CUSTOM_LOBBY': {
+      if (state.status !== 'custom_menu') {
+        return state;
+      }
+      return {
+        ...state,
+        status: 'local_custom_lobby',
+        selectedMapId: action.snapshot.mapId,
+        joinCode: undefined,
+        lobbySnapshot: action.snapshot,
+        disconnectError: null,
+        systemNotice: null,
+        isCustomMatch: true,
+      };
+    }
+
+    case 'UPDATE_SOLO_CUSTOM_LOBBY': {
+      if (state.status !== 'local_custom_lobby') {
+        return state;
+      }
+      return {
+        ...state,
+        selectedMapId: action.snapshot.mapId,
+        lobbySnapshot: action.snapshot,
+      };
+    }
+
+    case 'START_SOLO_CUSTOM_MATCH': {
+      if (state.status !== 'local_custom_lobby' || !state.lobbySnapshot) {
+        return state;
+      }
+      return {
+        ...state,
+        status: 'offline_playing',
+        selectedMapId: state.lobbySnapshot.mapId,
+        lobbySnapshot: { ...state.lobbySnapshot, phase: 'playing' },
+        isCustomMatch: true,
+      };
+    }
+
+    case 'RETURN_SOLO_CUSTOM_LOBBY': {
+      if (!state.lobbySnapshot?.isLocalSolo) {
+        return state;
+      }
+      return {
+        ...state,
+        status: 'local_custom_lobby',
+        lobbySnapshot: { ...state.lobbySnapshot, phase: 'lobby' },
+        isCustomMatch: true,
       };
     }
 
@@ -468,6 +546,7 @@ export function matchReducer(
         joinCode: undefined,
         lobbySnapshot: action.snapshot,
         disconnectError: null,
+        isCustomMatch: true,
       };
     }
 
@@ -508,11 +587,12 @@ export function matchReducer(
         joinCode: undefined,
         lobbySnapshot: action.snapshot,
         disconnectError: null,
+        isCustomMatch: true,
       };
     }
 
     case 'MP_SYSTEM_NOTICE': {
-      if (!isActiveMultiplayerStatus(state.status)) {
+      if (!isActiveMultiplayerStatus(state.status) && state.status !== 'local_custom_lobby') {
         return state;
       }
       return {
@@ -543,6 +623,7 @@ export function matchReducer(
         lobbySnapshot: null,
         systemNotice: null,
         disconnectError: action.reason,
+        isCustomMatch: false,
       };
     }
 
@@ -556,6 +637,7 @@ export function matchReducer(
         lobbySnapshot: null,
         disconnectError: null,
         systemNotice: null,
+        isCustomMatch: false,
         hud:
           state.hud.match.phase === 'menu'
             ? state.hud
@@ -591,6 +673,7 @@ export function matchReducer(
             lobbySnapshot: null,
             disconnectError: null,
             systemNotice: null,
+            isCustomMatch: false,
           };
         case 'maps':
           return {
@@ -601,6 +684,7 @@ export function matchReducer(
             lobbySnapshot: null,
             disconnectError: null,
             systemNotice: null,
+            isCustomMatch: false,
           };
         case 'play':
           return {
@@ -612,6 +696,7 @@ export function matchReducer(
             lobbySnapshot: null,
             disconnectError: null,
             systemNotice: null,
+            isCustomMatch: false,
           };
         case 'custom':
           return {
@@ -622,6 +707,7 @@ export function matchReducer(
             lobbySnapshot: null,
             disconnectError: null,
             systemNotice: null,
+            isCustomMatch: false,
           };
       }
     }

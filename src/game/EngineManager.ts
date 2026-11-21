@@ -52,6 +52,8 @@ import {
 } from './OperatorMeshBuilder';
 import { PingSystem, resolvePingRaycast } from './PingSystem';
 import { PlayerController } from './PlayerController';
+import { ARENA_HALF_EXTENT } from './minimap';
+import type { ChatChannel } from '../multiplayer/chat';
 import {
   CharacterId,
   DamageIndicator,
@@ -68,6 +70,8 @@ import {
   KnifeCharmId,
   MatchPhase,
   MatchSnapshot,
+  MinimapActor,
+  MinimapState,
   RadarBlip,
   ScorePopup,
   Stance,
@@ -123,6 +127,7 @@ export interface EngineCallbacks {
     targetId?: string;
   }) => void;
   onGunPersistedChange?: (gunId: GunId) => void;
+  onChatOpenChange?: (open: boolean, channel: ChatChannel) => void;
 }
 
 interface BarrageShell {
@@ -175,6 +180,8 @@ export class EngineManager {
   private lastMoveSendTime = 0;
   private lastPingPlacementTime = 0;
   private localPingSeq = 0;
+  private chatOpen = false;
+  private customChatEnabled = false;
 
   private elapsedTime = 0;
   private lastHudEmitTime = 0;
@@ -316,23 +323,40 @@ export class EngineManager {
       onPing: () => {
         this.placePing();
       },
+      onOpenChat: (channel) => {
+        this.openChatInput(channel);
+      },
       onPointerLockChange: (locked) => {
+        if (locked && this.chatOpen) {
+          this.chatOpen = false;
+          this.player.setChatInputOpen(false);
+          this.callbacks.onChatOpenChange?.(false, 'all');
+        }
         if (this.sessionMode === 'offline') {
           if (!locked && this.matchManager.getPhase() === 'playing') {
-            this.matchManager.setPhase('paused');
-            this.weapons.cancelTransientActions();
+            if (!this.chatOpen) {
+              this.matchManager.setPhase('paused');
+              this.weapons.cancelTransientActions();
+            }
           } else if (locked && this.matchManager.getPhase() === 'paused') {
             this.matchManager.setPhase('playing');
           }
         } else if (this.mpSnapshot?.phase === 'playing') {
-          this.mpPaused = !locked;
           if (!locked) {
-            this.weapons.cancelTransientActions();
+            if (!this.chatOpen) {
+              this.mpPaused = true;
+              this.weapons.cancelTransientActions();
+            }
+          } else {
+            this.mpPaused = false;
           }
         }
         this.emitHudState(true);
       },
       onFocusLost: () => {
+        if (this.chatOpen) {
+          this.closeChatInput(false);
+        }
         if (this.sessionMode === 'offline' && this.matchManager.getPhase() === 'playing') {
           this.matchManager.setPhase('paused');
           this.weapons.cancelTransientActions();
@@ -495,10 +519,50 @@ export class EngineManager {
     });
   }
 
+  public setCustomChatEnabled(enabled: boolean): void {
+    this.customChatEnabled = enabled;
+    this.player.setChatTriggersEnabled(enabled);
+    if (!enabled && this.chatOpen) {
+      this.closeChatInput(false);
+    }
+  }
+
+  public openChatInput(channel: ChatChannel = 'all'): void {
+    if (!this.customChatEnabled) return;
+    const phase = this.getCurrentMatchPhase();
+    if (phase !== 'playing' || !this.playerIsAlive) return;
+    this.chatOpen = true;
+    this.player.setChatInputOpen(true);
+    this.weapons.cancelTransientActions();
+    this.showScoreboard = false;
+    this.showOnboarding = false;
+    this.player.exitPointerLock();
+    this.callbacks.onChatOpenChange?.(true, channel);
+    this.emitHudState(true);
+  }
+
+  public closeChatInput(restorePointerLock: boolean): void {
+    const wasOpen = this.chatOpen;
+    this.chatOpen = false;
+    this.player.setChatInputOpen(false);
+    if (wasOpen) {
+      this.callbacks.onChatOpenChange?.(false, 'all');
+    }
+    if (restorePointerLock) {
+      const phase = this.getCurrentMatchPhase();
+      if (phase === 'playing' && this.playerIsAlive) {
+        this.player.requestPointerLock();
+      }
+    }
+    this.emitHudState(true);
+  }
+
   public previewMap(mapId: MapId): void {
     this.sessionMode = 'offline';
     this.mpSnapshot = null;
     this.mpPaused = false;
+    this.setCustomChatEnabled(false);
+    this.closeChatInput(false);
     this.playerHealth = this.playerMaxHealth;
     this.playerIsAlive = true;
     this.playerRespawnTimer = 0;
@@ -526,10 +590,23 @@ export class EngineManager {
     this.emitHudState(true);
   }
 
-  public startMatch(mapId: MapId, requestLock: boolean): void {
+  public startMatch(
+    mapId: MapId,
+    requestLock: boolean,
+    customOptions?: {
+      killLimit?: number;
+      timeLimitSec?: number;
+      botsPerTeam?: number;
+      isCustomMatch?: boolean;
+      playerName?: string;
+    }
+  ): void {
     this.sessionMode = 'offline';
     this.mpSnapshot = null;
     this.mpPaused = false;
+    const isCustom = Boolean(customOptions?.isCustomMatch);
+    this.setCustomChatEnabled(isCustom);
+    this.closeChatInput(false);
     this.resetCombatArcadeState(true);
     this.remoteRenderer.clear();
     this.pingSystem.clear();
@@ -547,8 +624,13 @@ export class EngineManager {
     this.matchManager.configureMatch(
       def.id,
       def.name,
-      this.settings.killLimit,
-      this.settings.botsPerTeam
+      customOptions?.killLimit ?? this.settings.killLimit,
+      customOptions?.botsPerTeam ?? this.settings.botsPerTeam,
+      {
+        timeLimitSec: customOptions?.timeLimitSec,
+        isCustomMatch: isCustom,
+        playerName: customOptions?.playerName ?? this.settings.callsign,
+      }
     );
 
     this.botManager.spawnBotsForMatch(
@@ -581,6 +663,8 @@ export class EngineManager {
 
   public startMultiplayerMatch(snapshot: LobbyRoomSnapshot, requestLock: boolean): void {
     this.sessionMode = 'multiplayer';
+    this.setCustomChatEnabled(true);
+    this.closeChatInput(false);
     this.botManager.clearBots();
     this.pingSystem.clear();
     this.resetCombatArcadeState(true);
@@ -625,6 +709,8 @@ export class EngineManager {
     this.mpSnapshot = snapshot;
 
     if (snapshot.phase === 'lobby') {
+      this.closeChatInput(false);
+      this.setCustomChatEnabled(true);
       if (this.mapManager.getCurrentMapId() !== snapshot.mapId) {
         const def = this.mapManager.loadMap(snapshot.mapId);
         this.applyMapColorGrading(def.exposure, def.contrast);
@@ -654,6 +740,7 @@ export class EngineManager {
     }
 
     if (snapshot.phase === 'playing') {
+      this.setCustomChatEnabled(true);
       if (this.sessionMode !== 'multiplayer' || this.mapManager.getCurrentMapId() !== snapshot.mapId) {
         this.startMultiplayerMatch(snapshot, true);
         return;
@@ -664,12 +751,16 @@ export class EngineManager {
         this.playerHealth = local.health;
         this.playerIsAlive = local.isAlive;
         this.playerRespawnTimer = local.respawnTimer;
+        if (!local.isAlive && this.chatOpen) {
+          this.closeChatInput(false);
+        }
         this.pingSystem.setLocalTeam(local.team);
         this.weapons.setMultiplayerContext(true, local.team, snapshot.friendlyFire);
       }
 
       this.remoteRenderer.syncPlayers(snapshot.players, snapshot.localPlayerId);
     } else if (snapshot.phase === 'ended') {
+      this.closeChatInput(false);
       this.mpPaused = false;
       this.pingSystem.clear();
       this.player.setCanControl(false);
@@ -780,6 +871,7 @@ export class EngineManager {
   }
 
   public resumeMatch(): void {
+    this.closeChatInput(false);
     if (this.sessionMode === 'multiplayer') {
       if (this.mpSnapshot?.phase !== 'playing') return;
       this.mpPaused = false;
@@ -799,10 +891,17 @@ export class EngineManager {
   public restartMatch(): void {
     if (this.sessionMode === 'multiplayer') return;
     const currentId = this.mapManager.getCurrentMapId() ?? 'urban';
-    this.startMatch(currentId, true);
+    const isCustom = this.matchManager.getIsCustomMatch();
+    const snap = this.matchManager.getSnapshot();
+    this.startMatch(currentId, true, isCustom ? {
+      killLimit: snap.killLimit,
+      isCustomMatch: true,
+    } : undefined);
   }
 
   public returnToMenu(): void {
+    this.setCustomChatEnabled(false);
+    this.closeChatInput(false);
     const currentId = this.mapManager.getCurrentMapId() ?? 'urban';
     this.previewMap(currentId);
   }
@@ -1253,6 +1352,7 @@ export class EngineManager {
   }
 
   private onPlayerEliminatedCleanup(attackerPos: Vector3 | null): void {
+    this.closeChatInput(false);
     this.currentStreak = 0;
     this.overdriveRemainingSec = 0;
     this.overdriveHealAccum = 0;
@@ -1598,6 +1698,7 @@ export class EngineManager {
     }
 
     if (this.matchManager.getPhase() === 'ended') {
+      this.closeChatInput(false);
       const snap = this.matchManager.getSnapshot();
       this.awardMatchCompletionXp(snap.winner === 'blue');
       this.player.setCanControl(false);
@@ -1739,6 +1840,7 @@ export class EngineManager {
   }
 
   private resetPlayerForLife(spawnPos: Vector3, yawRad: number): void {
+    this.closeChatInput(false);
     this.playerHealth = this.playerMaxHealth;
     this.playerIsAlive = true;
     this.playerRespawnTimer = 0;
@@ -1837,6 +1939,70 @@ export class EngineManager {
     }
 
     return blips;
+  }
+
+  private buildMinimapState(): MinimapState {
+    const mapId =
+      this.sessionMode === 'multiplayer' && this.mpSnapshot
+        ? this.mpSnapshot.mapId
+        : this.mapManager.getCurrentMapId() ?? 'urban';
+    const actorsSource =
+      this.sessionMode === 'multiplayer'
+        ? this.remoteRenderer.getRadarActors()
+        : this.botManager.getRadarActors();
+
+    const localTeam: TeamId =
+      this.sessionMode === 'multiplayer'
+        ? (this.mpSnapshot?.players.find((p) => p.id === this.mpSnapshot?.localPlayerId)?.team ?? 'blue')
+        : 'blue';
+
+    const pPos = this.player.collider.position;
+    const uavActive = this.uavRemainingSec > 0;
+    const actors: MinimapActor[] = [];
+
+    for (const actor of actorsSource) {
+      if (!actor.isAlive) continue;
+      const dist = Math.round(Math.hypot(actor.x - pPos.x, actor.z - pPos.z));
+      const isFriend = actor.team === localTeam;
+      if (!isFriend && !uavActive && dist > PROXIMITY_REVEAL_METERS) {
+        continue;
+      }
+      actors.push({
+        id: actor.id,
+        name: actor.name,
+        x: actor.x,
+        z: actor.z,
+        yawRad: actor.yawRad,
+        team: actor.team,
+        kind: isFriend ? 'teammate' : 'enemy',
+        distanceMeters: dist,
+      });
+    }
+
+    for (const ping of this.pingSystem.getActivePings()) {
+      const dist = Math.round(Math.hypot(ping.x - pPos.x, ping.z - pPos.z));
+      actors.push({
+        id: `ping_mm_${ping.id}`,
+        name: ping.senderName,
+        x: ping.x,
+        z: ping.z,
+        yawRad: 0,
+        team: ping.team,
+        kind: 'ping',
+        pingKind: ping.kind,
+        distanceMeters: dist,
+      });
+    }
+
+    return {
+      mapId,
+      halfExtent: ARENA_HALF_EXTENT,
+      playerX: pPos.x,
+      playerZ: pPos.z,
+      playerYawRad: this.player.getYawRad(),
+      localTeam,
+      actors,
+    };
   }
 
   private placePing(): void {
@@ -2035,6 +2201,7 @@ export class EngineManager {
       killstreakBanner: this.killstreakBanner,
       scorePopups: [...this.scorePopups],
       radarBlips: match.phase === 'playing' || match.phase === 'paused' ? this.buildRadarBlips() : [],
+      minimap: this.buildMinimapState(),
       pings:
         match.phase === 'playing' || match.phase === 'paused'
           ? this.pingSystem.getHudMarkers(

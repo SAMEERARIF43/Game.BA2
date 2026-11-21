@@ -11,6 +11,7 @@ interface CustomMatchMenuProps {
   errorBanner: string | null;
   onCallsignChange?: (callsign: string) => void;
   onCreateMatch: (options: CreatePrivateMatchOptions) => Promise<void>;
+  onCreateSoloCustom?: (options: CreatePrivateMatchOptions) => void;
   onJoinMatch: (roomCode: string, playerName: string, password?: string) => Promise<void>;
   onLookupRoom: (roomCode: string) => Promise<RoomLookupSummary>;
   onBack: () => void;
@@ -23,6 +24,7 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
   errorBanner,
   onCallsignChange,
   onCreateMatch,
+  onCreateSoloCustom,
   onJoinMatch,
   onLookupRoom,
   onBack,
@@ -94,28 +96,34 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
     return clean;
   };
 
+  const buildCreateOptions = (): CreatePrivateMatchOptions => ({
+    playerName: persistCallsign(playerName),
+    roomName: roomName.trim() || 'Strike Force Private',
+    mapId,
+    killLimit,
+    timeLimit,
+    respawnDelay: 3,
+    friendlyFire,
+    botCount,
+    password: createPassword.trim() || undefined,
+  });
+
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreateError(null);
     setCreating(true);
     try {
-      const cleanName = persistCallsign(playerName);
-      await onCreateMatch({
-        playerName: cleanName,
-        roomName: roomName.trim() || 'Strike Force Private',
-        mapId,
-        killLimit,
-        timeLimit,
-        respawnDelay: 3,
-        friendlyFire,
-        botCount,
-        password: createPassword.trim() || undefined,
-      });
+      await onCreateMatch(buildCreateOptions());
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : 'Could not create private match.');
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleCreateSoloClick = () => {
+    setCreateError(null);
+    onCreateSoloCustom?.(buildCreateOptions());
   };
 
   const handleJoinSubmit = async (e: React.FormEvent) => {
@@ -318,13 +326,26 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={creating}
-              className="mt-5 flex w-full cursor-pointer items-center justify-center gap-2 bg-amber-500 px-5 py-3 font-display text-xs font-bold tracking-wide text-slate-950 transition-colors hover:bg-amber-400 disabled:opacity-50"
-            >
-              {creating ? 'Creating Match Room...' : 'Create Private Match'}
-            </button>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+              <button
+                type="submit"
+                disabled={creating}
+                className="flex flex-1 cursor-pointer items-center justify-center gap-2 bg-amber-500 px-5 py-3 font-display text-xs font-bold tracking-wide text-slate-950 transition-colors hover:bg-amber-400 disabled:opacity-50"
+              >
+                {creating ? 'Creating Match Room...' : 'Create Private Match'}
+              </button>
+
+              {onCreateSoloCustom && (
+                <button
+                  type="button"
+                  disabled={creating}
+                  onClick={handleCreateSoloClick}
+                  className="flex cursor-pointer items-center justify-center gap-2 border border-white/15 bg-white/5 px-4 py-3 font-display text-xs font-semibold text-slate-200 transition-colors hover:bg-white/10 disabled:opacity-50 whitespace-nowrap"
+                >
+                  Launch Solo Custom Lobby (Offline)
+                </button>
+              )}
+            </div>
           </form>
 
           {/* Join Private Match Form */}

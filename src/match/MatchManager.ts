@@ -5,6 +5,12 @@ import {
   MatchSnapshot,
 } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
+import {
+  CHAT_HISTORY_LIMIT,
+  ChatChannel,
+  ChatMessage,
+  validateChatPayload,
+} from '../multiplayer/chat';
 
 export const DEFAULT_KILL_LIMIT = 30;
 export const MATCH_DURATION_SEC = 300; // 5 minutes
@@ -22,13 +28,76 @@ export class MatchManager {
   private participants = new Map<string, MatchParticipant>();
   private killFeed: KillFeedEntry[] = [];
   private killFeedSeq = 0;
+  private isCustomMatch = false;
+  private localChatHistory: ChatMessage[] = [];
+  private localChatSeq = 0;
 
   public setPhase(phase: MatchPhase): void {
     this.phase = phase;
   }
 
+  public setCustomMatch(custom: boolean): void {
+    this.isCustomMatch = custom;
+  }
+
+  public getIsCustomMatch(): boolean {
+    return this.isCustomMatch;
+  }
+
   public clearKillFeed(): void {
     this.killFeed = [];
+  }
+
+  public clearLocalChatMessages(): void {
+    this.localChatHistory = [];
+  }
+
+  public getLocalChatMessages(): ChatMessage[] {
+    return [...this.localChatHistory];
+  }
+
+  public addLocalChatMessage(
+    text: string,
+    channel: ChatChannel = 'all',
+    sender?: { id?: string; name?: string; team?: TeamId | 'system'; isSystem?: boolean }
+  ): ChatMessage | null {
+    if (sender?.isSystem) {
+      const clean = text.trim();
+      if (!clean) return null;
+      const sysMsg: ChatMessage = {
+        id: `offline_sys_${++this.localChatSeq}`,
+        senderId: 'system',
+        senderName: 'SYSTEM',
+        senderTeam: 'system',
+        channel: 'all',
+        text: clean,
+        timestamp: Date.now(),
+        isSystem: true,
+      };
+      this.localChatHistory = [
+        ...this.localChatHistory.slice(-(CHAT_HISTORY_LIMIT - 1)),
+        sysMsg,
+      ];
+      return sysMsg;
+    }
+
+    const validated = validateChatPayload({ text, channel });
+    if (!validated) return null;
+
+    const msg: ChatMessage = {
+      id: `offline_chat_${++this.localChatSeq}`,
+      senderId: sender?.id ?? 'player',
+      senderName: sender?.name?.trim() || 'You',
+      senderTeam: sender?.team ?? 'blue',
+      channel: validated.channel,
+      text: validated.text,
+      timestamp: Date.now(),
+    };
+    this.localChatHistory = [
+      ...this.localChatHistory.slice(-(CHAT_HISTORY_LIMIT - 1)),
+      msg,
+    ];
+    return msg;
   }
 
   public getPhase(): MatchPhase {
@@ -39,14 +108,20 @@ export class MatchManager {
     mapId: MapId,
     mapName: string,
     killLimit: number,
-    botsPerTeam: number
+    botsPerTeam: number,
+    options?: {
+      timeLimitSec?: number;
+      isCustomMatch?: boolean;
+      playerName?: string;
+    }
   ): void {
     this.mapId = mapId;
     this.mapName = mapName;
     this.killLimit = Math.max(5, Math.min(100, killLimit));
     this.blueScore = 0;
     this.redScore = 0;
-    this.timeRemainingSec = MATCH_DURATION_SEC;
+    this.timeRemainingSec = Math.max(60, Math.min(1200, options?.timeLimitSec ?? MATCH_DURATION_SEC));
+    this.isCustomMatch = Boolean(options?.isCustomMatch);
     this.winner = null;
     this.killFeed = [];
     this.participants.clear();
@@ -54,7 +129,7 @@ export class MatchManager {
     // Register local human player on Blue team
     this.participants.set('player', {
       id: 'player',
-      name: 'You',
+      name: options?.playerName?.trim() || 'You',
       team: 'blue',
       isPlayer: true,
       kills: 0,

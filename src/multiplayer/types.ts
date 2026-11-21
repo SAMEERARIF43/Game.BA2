@@ -1,5 +1,6 @@
 import { CharacterId, GunId, Stance, WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
+export type { ChatChannel, ChatMessage, ChatPayload } from './chat';
 
 export interface CreatePrivateMatchOptions {
   playerName: string;
@@ -65,6 +66,7 @@ export interface LobbyRoomSnapshot {
   winner: TeamId | 'draw' | '';
   players: LobbyPlayerInfo[];
   localPlayerId: string;
+  isLocalSolo?: boolean;
 }
 
 export interface RemoteFireEvent {
