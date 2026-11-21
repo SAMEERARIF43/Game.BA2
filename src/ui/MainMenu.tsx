@@ -28,6 +28,7 @@ import {
 import { MAP_LIST, MAP_REGISTRY } from '../maps/MapManager';
 import { MapId } from '../maps/types';
 import { getRankSummary } from '../settings/progressionStorage';
+import { DEFAULT_KEYBINDINGS, formatKeyCode } from '../settings/keybindings';
 import { toggleFullscreen } from '../utils/fullscreen';
 import { SettingsPanel } from './SettingsPanel';
 
@@ -770,64 +771,83 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   Choose 1 of 4 distinct operator archetypes (Assault, Vanguard, Breacher, Marksman) paired with their signature firearm or any of the 5 guns (Slot 1), plus your K-Bar Combat Knife (Slot 2) with a custom 3D charm. Guns lock while alive and swap before spawn or on death; your Knife stays ready at all times via [2] or quick-melee [V / F].
                 </p>
 
-                <div className="grid grid-cols-1 gap-x-6 gap-y-2 border border-white/10 bg-black/40 p-4 sm:grid-cols-2">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Move</span>
-                    <span className="font-mono-tabular text-white">W A S D</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Fire / Slash</span>
-                    <span className="font-mono-tabular text-white">Left Click</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Sprint</span>
-                    <span className="font-mono-tabular text-white">Shift</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Aim Down Sights / Red Dot</span>
-                    <span className="font-mono-tabular text-white">Right Click</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Jump</span>
-                    <span className="font-mono-tabular text-white">Space</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Reload</span>
-                    <span className="font-mono-tabular text-white">R</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Crouch</span>
-                    <span className="font-mono-tabular text-white">C / Ctrl</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Tactical Slide</span>
-                    <span className="font-mono-tabular text-amber-300">Sprint + C / Ctrl</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Gun / Knife</span>
-                    <span className="font-mono-tabular text-white">1 · 2 / Wheel</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Quick Melee Knife</span>
-                    <span className="font-mono-tabular text-amber-300">V or F</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Sniper Optic Zoom</span>
-                    <span className="font-mono-tabular text-amber-300">B (4X/6X/8X)</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Killstreaks</span>
-                    <span className="font-mono-tabular text-amber-300">F1 · F2 · F3</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Scoreboard</span>
-                    <span className="font-mono-tabular text-white">Hold Tab</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Pause / Fullscreen</span>
-                    <span className="font-mono-tabular text-white">Esc / F (Menu)</span>
-                  </div>
-                </div>
+                {(() => {
+                  const kb = settings.keybindings ?? DEFAULT_KEYBINDINGS;
+                  return (
+                    <div className="grid grid-cols-1 gap-x-6 gap-y-2 border border-white/10 bg-black/40 p-4 sm:grid-cols-2">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Move</span>
+                        <span className="font-mono-tabular text-white">
+                          {formatKeyCode(kb.moveForward)} {formatKeyCode(kb.moveLeft)} {formatKeyCode(kb.moveBackward)} {formatKeyCode(kb.moveRight)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Fire / Slash</span>
+                        <span className="font-mono-tabular text-white">Left Click</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Sprint</span>
+                        <span className="font-mono-tabular text-white">{formatKeyCode(kb.sprint)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Aim Down Sights / Red Dot</span>
+                        <span className="font-mono-tabular text-white">Right Click</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Jump</span>
+                        <span className="font-mono-tabular text-white">{formatKeyCode(kb.jump)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Reload</span>
+                        <span className="font-mono-tabular text-white">{formatKeyCode(kb.reload)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Crouch</span>
+                        <span className="font-mono-tabular text-white">
+                          {formatKeyCode(kb.crouchToggle)} / {formatKeyCode(kb.crouchHold)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Tactical Slide</span>
+                        <span className="font-mono-tabular text-amber-300">
+                          {formatKeyCode(kb.sprint)} + {formatKeyCode(kb.crouchToggle)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Gun / Knife</span>
+                        <span className="font-mono-tabular text-white">
+                          {formatKeyCode(kb.slotGun)} · {formatKeyCode(kb.slotKnife)} / Wheel
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Quick Melee Knife</span>
+                        <span className="font-mono-tabular text-amber-300">
+                          {formatKeyCode(kb.quickMelee)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Sniper Optic Zoom</span>
+                        <span className="font-mono-tabular text-amber-300">
+                          {formatKeyCode(kb.cycleOptic)} (4X/6X/8X)
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Killstreaks</span>
+                        <span className="font-mono-tabular text-amber-300">
+                          {formatKeyCode(kb.streakUav)} · {formatKeyCode(kb.streakBarrage)} · {formatKeyCode(kb.streakOverdrive)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Scoreboard</span>
+                        <span className="font-mono-tabular text-white">Hold {formatKeyCode(kb.scoreboard)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Pause / Fullscreen</span>
+                        <span className="font-mono-tabular text-white">Esc / F (Menu)</span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>

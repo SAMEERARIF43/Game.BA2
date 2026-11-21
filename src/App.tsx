@@ -3,26 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { EngineManager } from './game/EngineManager';
-import { CharacterId, GameSettings, GunId, HudState, KnifeCharmId, WEAPONS } from './game/types';
-import { MapId } from './maps/types';
-import { DEFAULT_KILL_LIMIT, MATCH_DURATION_SEC } from './match/MatchManager';
-import { NetworkManager } from './multiplayer/NetworkManager';
-import {
-  CreatePrivateMatchOptions,
-  LobbyRoomSnapshot,
-  RoomLookupSummary,
-} from './multiplayer/types';
-import {
-  getRankSummary,
-  loadProgression,
-} from './settings/progressionStorage';
-import {
-  loadPersistedSettings,
-  resetPersistedSettings,
-  savePersistedSettings,
-} from './settings/settingsStorage';
+import { useMatchMachine } from './hooks/useMatchMachine';
+import { isOfflineMatchStatus } from './match/matchMachine';
 import { CustomMatchMenu } from './ui/CustomMatchMenu';
 import { EndMatchScreen } from './ui/EndMatchScreen';
 import { GameHUD } from './ui/GameHUD';
@@ -30,445 +12,14 @@ import { LobbyScreen } from './ui/LobbyScreen';
 import { MainMenu } from './ui/MainMenu';
 import { MapSelector } from './ui/MapSelector';
 import { PauseMenu } from './ui/PauseMenu';
-import { toggleFullscreen } from './utils/fullscreen';
-import { AppRoute, navigateToRoute, parseRouteFromLocation } from './utils/router';
-
-const INITIAL_HUD: HudState = {
-  isPointerLocked: false,
-  health: 100,
-  maxHealth: 100,
-  isAlive: true,
-  respawnTimer: 0,
-  lastDamageTimestamp: 0,
-  damageIndicators: [],
-  lastKillerName: null,
-  lastKillerWeapon: null,
-  killerBanner: null,
-  stance: 'stand',
-  isGrounded: true,
-  isAds: false,
-  adsBlend: 0,
-  speed: 0,
-  headingDeg: 0,
-  activeWeapon: WEAPONS.ak47,
-  selectedCharacterId: 'assault',
-  equippedGunId: 'ak47',
-  queuedGunId: 'ak47',
-  knifeCharmId: 'tactical_tag',
-  isGunSwitchLocked: false,
-  gunLockMessage: null,
-  weaponSlots: [
-    { id: 'ak47', ammoInMag: WEAPONS.ak47.magSize, reserveAmmo: WEAPONS.ak47.reserveMax },
-    { id: 'knife', ammoInMag: 0, reserveAmmo: 0 },
-  ],
-  isReloading: false,
-  reloadProgress: 0,
-  crosshairSpreadPx: 14,
-  hitMarker: null,
-  shotsFired: 0,
-  shotsHit: 0,
-  headshots: 0,
-  eliminations: 0,
-  currentStreak: 0,
-  killstreaks: [
-    { id: 'uav', key: 'F1', name: 'UAV Sweep', requiredKills: 3, unlocked: false, active: false, remainingSec: 0 },
-    { id: 'airstrike', key: 'F2', name: 'Barrage', requiredKills: 5, unlocked: false, active: false, remainingSec: 0 },
-    { id: 'overdrive', key: 'F3', name: 'Overdrive', requiredKills: 7, unlocked: false, active: false, remainingSec: 0 },
-  ],
-  uavActive: false,
-  uavPulseProgress: 0,
-  overdriveActive: false,
-  overdriveRemainingSec: 0,
-  killstreakBanner: null,
-  scorePopups: [],
-  radarBlips: [],
-  xp: 0,
-  sessionXpEarned: 0,
-  rankLevel: 1,
-  rankTitle: 'Private',
-  rankProgressPct: 0,
-  rangeDistanceMeters: null,
-  targetingEnemy: false,
-  showScoreboard: false,
-  showOnboarding: false,
-  lowHealthPulse: false,
-  match: {
-    phase: 'menu',
-    mapId: 'urban',
-    mapName: 'Urban Strike',
-    blueScore: 0,
-    redScore: 0,
-    killLimit: DEFAULT_KILL_LIMIT,
-    timeRemainingSec: MATCH_DURATION_SEC,
-    winner: null,
-    participants: [],
-    killFeed: [],
-  },
-  scopeMagnification: 4,
-  fps: 0,
-};
 
 export default function App() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const engineRef = useRef<EngineManager | null>(null);
-  const networkRef = useRef<NetworkManager | null>(null);
-  const noticeTimerRef = useRef<number | null>(null);
+  const { canvasRef, state, derived, actions } = useMatchMachine();
+  const { status, selectedMapId, joinCode, settings, hud, contextLost, lobbySnapshot, disconnectError, systemNotice } =
+    state;
 
-  const [route, setRoute] = useState<AppRoute>(() => parseRouteFromLocation());
-  const [selectedMapId, setSelectedMapId] = useState<MapId>(() => {
-    const initial = parseRouteFromLocation();
-    return initial.view === 'play' ? initial.mapId : 'urban';
-  });
-  const [settings, setSettings] = useState<GameSettings>(() => loadPersistedSettings());
-  const [hud, setHud] = useState<HudState>(() => {
-    const rank = getRankSummary(loadProgression().xp);
-    const persisted = loadPersistedSettings();
-    const gun = WEAPONS[persisted.selectedGunId];
-    return {
-      ...INITIAL_HUD,
-      activeWeapon: gun,
-      selectedCharacterId: persisted.selectedCharacterId,
-      equippedGunId: persisted.selectedGunId,
-      queuedGunId: persisted.selectedGunId,
-      knifeCharmId: persisted.knifeCharmId,
-      weaponSlots: [
-        { id: persisted.selectedGunId, ammoInMag: gun.magSize, reserveAmmo: gun.reserveMax },
-        { id: 'knife', ammoInMag: 0, reserveAmmo: 0 },
-      ],
-      xp: rank.xp,
-      rankLevel: rank.level,
-      rankTitle: rank.title,
-      rankProgressPct: rank.progressPct,
-    };
-  });
-  const [contextLost, setContextLost] = useState(false);
-
-  const [lobbySnapshot, setLobbySnapshot] = useState<LobbyRoomSnapshot | null>(null);
-  const [disconnectError, setDisconnectError] = useState<string | null>(null);
-  const [systemNotice, setSystemNotice] = useState<string | null>(null);
-
-  const applyRouteToEngine = useCallback(
-    (nextRoute: AppRoute, requestLock: boolean) => {
-      const manager = engineRef.current;
-      if (!manager) return;
-
-      if (nextRoute.view === 'play') {
-        setSelectedMapId(nextRoute.mapId);
-        manager.startMatch(nextRoute.mapId, requestLock);
-      } else {
-        manager.previewMap(selectedMapId);
-      }
-    },
-    [selectedMapId]
-  );
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const network = new NetworkManager({
-      onStateUpdate: (snapshot) => {
-        setLobbySnapshot(snapshot);
-        setDisconnectError(null);
-        setSelectedMapId(snapshot.mapId);
-        engineRef.current?.syncMultiplayerState(snapshot);
-      },
-      onRemoteFire: (event) => {
-        engineRef.current?.handleRemoteFire(event);
-      },
-      onHitConfirm: (event) => {
-        engineRef.current?.handleNetworkHitConfirm(event);
-      },
-      onPlayerDamaged: (event) => {
-        engineRef.current?.handleNetworkDamaged(event);
-      },
-      onPlayerRespawn: (pos) => {
-        engineRef.current?.handleNetworkRespawn(pos);
-      },
-      onKillFeed: (event) => {
-        engineRef.current?.handleNetworkKillFeed(event);
-      },
-      onSystemNotice: (message) => {
-        setSystemNotice(message);
-        if (noticeTimerRef.current !== null) {
-          window.clearTimeout(noticeTimerRef.current);
-        }
-        noticeTimerRef.current = window.setTimeout(() => {
-          setSystemNotice(null);
-          noticeTimerRef.current = null;
-        }, 3500);
-      },
-      onDisconnected: (reason) => {
-        setLobbySnapshot(null);
-        setDisconnectError(reason);
-        const nextRoute: AppRoute = { view: 'custom' };
-        navigateToRoute(nextRoute);
-        setRoute(nextRoute);
-        engineRef.current?.returnToMenu();
-      },
-    });
-    networkRef.current = network;
-
-    const manager = new EngineManager(canvas, settings, {
-      onHudUpdate: (nextHud) => setHud(nextHud),
-      onContextLost: (lost) => setContextLost(lost),
-      onMultiplayerShot: (payload) => {
-        networkRef.current?.sendFire(payload);
-      },
-      onMultiplayerMove: (x, y, z, rotY, pitch, weaponId, characterId) => {
-        networkRef.current?.sendMove(x, y, z, rotY, pitch, weaponId, characterId);
-      },
-      onGunPersistedChange: (gunId) => {
-        networkRef.current?.selectLoadout(gunId);
-        setSettings((prev) => savePersistedSettings({ ...prev, selectedGunId: gunId }));
-      },
-    });
-
-    engineRef.current = manager;
-
-    // Handle initial direct URL route
-    const initialRoute = parseRouteFromLocation();
-    if (initialRoute.view === 'play') {
-      manager.startMatch(initialRoute.mapId, false);
-    }
-
-    return () => {
-      if (noticeTimerRef.current !== null) {
-        window.clearTimeout(noticeTimerRef.current);
-      }
-      void network.leaveRoom();
-      networkRef.current = null;
-      manager.dispose();
-      engineRef.current = null;
-    };
-    // Initialize engine and network once on mount; settings updates are pushed via updateSettings
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const onPopState = () => {
-      const next = parseRouteFromLocation();
-      if (networkRef.current?.isConnected() && next.view !== 'custom') {
-        void networkRef.current.leaveRoom();
-        setLobbySnapshot(null);
-      }
-      setRoute(next);
-      applyRouteToEngine(next, false);
-    };
-
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, [applyRouteToEngine]);
-
-  useEffect(() => {
-    engineRef.current?.setMenuShowcaseVisible(route.view === 'menu');
-    if (route.view !== 'menu') {
-      engineRef.current?.setMenuShowcaseFocus('gun', 0);
-    }
-  }, [route.view]);
-
-  useEffect(() => {
-    const onGlobalKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== 'KeyF' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
-      // Do not intercept KeyF during active gameplay where F triggers quick-melee knife
-      const mpInMatch =
-        route.view === 'custom' &&
-        lobbySnapshot !== null &&
-        (lobbySnapshot.phase === 'playing' || lobbySnapshot.phase === 'ended');
-      if (document.pointerLockElement || route.view === 'play' || mpInMatch) {
-        return;
-      }
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
-        return;
-      }
-      e.preventDefault();
-      void toggleFullscreen();
-    };
-
-    window.addEventListener('keydown', onGlobalKeyDown);
-    return () => window.removeEventListener('keydown', onGlobalKeyDown);
-  }, [lobbySnapshot, route.view]);
-
-  const handleUpdateSettings = useCallback((next: GameSettings) => {
-    const saved = savePersistedSettings(next);
-    setSettings(saved);
-    engineRef.current?.updateSettings(saved);
-  }, []);
-
-  const handleResetSettings = useCallback(() => {
-    const reset = resetPersistedSettings();
-    setSettings(reset);
-    engineRef.current?.updateSettings(reset);
-  }, []);
-
-  const handlePlayOfflineTdm = useCallback(() => {
-    const nextRoute: AppRoute = { view: 'play', mapId: selectedMapId };
-    navigateToRoute(nextRoute);
-    setRoute(nextRoute);
-    engineRef.current?.startMatch(selectedMapId, true);
-  }, [selectedMapId]);
-
-  const handleOpenCustomMatch = useCallback(() => {
-    setDisconnectError(null);
-    const nextRoute: AppRoute = { view: 'custom' };
-    navigateToRoute(nextRoute);
-    setRoute(nextRoute);
-  }, []);
-
-  const handleOpenMapSelect = useCallback(() => {
-    const nextRoute: AppRoute = { view: 'maps' };
-    navigateToRoute(nextRoute);
-    setRoute(nextRoute);
-  }, []);
-
-  const handlePreviewMap = useCallback((mapId: MapId) => {
-    setSelectedMapId(mapId);
-    engineRef.current?.previewMap(mapId);
-  }, []);
-
-  const handleDeployMap = useCallback((mapId: MapId) => {
-    setSelectedMapId(mapId);
-    const nextRoute: AppRoute = { view: 'play', mapId };
-    navigateToRoute(nextRoute);
-    setRoute(nextRoute);
-    engineRef.current?.startMatch(mapId, true);
-  }, []);
-
-  const handleBackToMenu = useCallback(() => {
-    setDisconnectError(null);
-    const nextRoute: AppRoute = { view: 'menu' };
-    navigateToRoute(nextRoute);
-    setRoute(nextRoute);
-    engineRef.current?.returnToMenu();
-  }, []);
-
-  const handleResumeMatch = useCallback(() => {
-    engineRef.current?.resumeMatch();
-  }, []);
-
-  const handleRestartMatch = useCallback(() => {
-    engineRef.current?.restartMatch();
-  }, []);
-
-  const handleSelectCharacter = useCallback(
-    (id: CharacterId, equipSignatureGun = true) => {
-      const outcome = engineRef.current?.selectCharacter(id, equipSignatureGun);
-      const nextGun =
-        equipSignatureGun && outcome?.signatureGunId ? outcome.signatureGunId : undefined;
-      networkRef.current?.selectLoadout(nextGun, id);
-      setSettings((prev) =>
-        savePersistedSettings({
-          ...prev,
-          selectedCharacterId: id,
-          selectedGunId: nextGun ?? prev.selectedGunId,
-        })
-      );
-    },
-    []
-  );
-
-  const handleSelectGun = useCallback(
-    (id: GunId) => {
-      engineRef.current?.selectGun(id);
-      networkRef.current?.selectLoadout(id);
-      setSettings((prev) => savePersistedSettings({ ...prev, selectedGunId: id }));
-    },
-    []
-  );
-
-  const handleSelectKnifeCharm = useCallback((id: KnifeCharmId) => {
-    engineRef.current?.selectKnifeCharm(id);
-    setSettings((prev) => savePersistedSettings({ ...prev, knifeCharmId: id }));
-  }, []);
-
-  const handlePreviewShowcase = useCallback((focus: 'gun' | 'knife', offsetX = 0) => {
-    engineRef.current?.setMenuShowcaseFocus(focus, offsetX);
-  }, []);
-
-  const handleLookupRoom = useCallback(
-    async (roomCode: string): Promise<RoomLookupSummary> => {
-      if (!networkRef.current) {
-        throw new Error('Network client not initialized.');
-      }
-      return networkRef.current.lookupRoom(roomCode);
-    },
-    []
-  );
-
-  const handleCreatePrivateMatch = useCallback(
-    async (options: CreatePrivateMatchOptions) => {
-      if (!networkRef.current) {
-        throw new Error('Network client not initialized.');
-      }
-      setDisconnectError(null);
-      const snapshot = await networkRef.current.createPrivateMatch({
-        ...options,
-        characterId: settings.selectedCharacterId,
-        weaponId: settings.selectedGunId,
-      });
-      setLobbySnapshot(snapshot);
-      setSelectedMapId(snapshot.mapId);
-      const nextRoute: AppRoute = { view: 'custom' };
-      navigateToRoute(nextRoute);
-      setRoute(nextRoute);
-      engineRef.current?.syncMultiplayerState(snapshot);
-    },
-    [settings.selectedCharacterId, settings.selectedGunId]
-  );
-
-  const handleJoinPrivateMatch = useCallback(
-    async (roomCode: string, playerName: string, password?: string) => {
-      if (!networkRef.current) {
-        throw new Error('Network client not initialized.');
-      }
-      setDisconnectError(null);
-      const snapshot = await networkRef.current.joinPrivateMatch(
-        roomCode,
-        playerName,
-        password,
-        settings.selectedCharacterId,
-        settings.selectedGunId
-      );
-      setLobbySnapshot(snapshot);
-      setSelectedMapId(snapshot.mapId);
-      const nextRoute: AppRoute = { view: 'custom' };
-      navigateToRoute(nextRoute);
-      setRoute(nextRoute);
-      engineRef.current?.syncMultiplayerState(snapshot);
-    },
-    [settings.selectedCharacterId, settings.selectedGunId]
-  );
-
-  const handleLeaveMultiplayer = useCallback(async () => {
-    await networkRef.current?.leaveRoom();
-    setLobbySnapshot(null);
-    setDisconnectError(null);
-    setSystemNotice(null);
-    const nextRoute: AppRoute = { view: 'menu' };
-    navigateToRoute(nextRoute);
-    setRoute(nextRoute);
-    engineRef.current?.returnToMenu();
-  }, []);
-
-  const handleReturnToLobby = useCallback(() => {
-    networkRef.current?.returnToLobby();
-  }, []);
-
-  const isMultiplayerInMatch =
-    route.view === 'custom' &&
-    lobbySnapshot !== null &&
-    (lobbySnapshot.phase === 'playing' || lobbySnapshot.phase === 'ended');
-  const localParticipant = hud.match.participants.find((participant) => participant.isPlayer);
-  const playerAccuracyPct =
-    hud.shotsFired > 0 ? Math.round((hud.shotsHit / hud.shotsFired) * 100) : 0;
-  const postMatchStats = {
-    kills: localParticipant?.kills ?? hud.eliminations,
-    deaths: localParticipant?.deaths ?? 0,
-    accuracyPct: playerAccuracyPct,
-    headshots: hud.headshots,
-  };
+  const isCustomMenuView = status === 'custom_menu' || status === 'mp_connecting';
+  const isOfflineMatchView = isOfflineMatchStatus(status);
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#0b0e13]">
@@ -491,7 +42,7 @@ export default function App() {
         </div>
       )}
 
-      {!contextLost && route.view === 'menu' && (
+      {!contextLost && status === 'menu' && (
         <MainMenu
           selectedMapId={selectedMapId}
           selectedCharacterId={hud.selectedCharacterId}
@@ -499,127 +50,135 @@ export default function App() {
           knifeCharmId={hud.knifeCharmId}
           settings={settings}
           xp={hud.xp}
-          onSelectCharacter={handleSelectCharacter}
-          onSelectGun={handleSelectGun}
-          onSelectKnifeCharm={handleSelectKnifeCharm}
-          onPreviewMap={handlePreviewMap}
-          onPreviewShowcase={handlePreviewShowcase}
-          onPlayOfflineTdm={handlePlayOfflineTdm}
-          onOpenCustomMatch={handleOpenCustomMatch}
-          onOpenMapSelect={handleOpenMapSelect}
-          onUpdateSettings={handleUpdateSettings}
-          onResetSettings={handleResetSettings}
+          onSelectCharacter={actions.selectCharacter}
+          onSelectGun={actions.selectGun}
+          onSelectKnifeCharm={actions.selectKnifeCharm}
+          onPreviewMap={actions.previewMap}
+          onPreviewShowcase={actions.previewShowcase}
+          onPlayOfflineTdm={actions.playOfflineTdm}
+          onOpenCustomMatch={actions.openCustomMatch}
+          onOpenMapSelect={actions.openMapSelect}
+          onUpdateSettings={actions.updateSettings}
+          onResetSettings={actions.resetSettings}
         />
       )}
 
-      {!contextLost && route.view === 'maps' && (
+      {!contextLost && status === 'maps' && (
         <MapSelector
           selectedMapId={selectedMapId}
-          onPreviewMap={handlePreviewMap}
-          onDeployMap={handleDeployMap}
-          onBack={handleBackToMenu}
+          onPreviewMap={actions.previewMap}
+          onDeployMap={actions.deployMap}
+          onBack={actions.backToMenu}
         />
       )}
 
-      {!contextLost && route.view === 'custom' && !lobbySnapshot && (
+      {!contextLost && isCustomMenuView && (
         <CustomMatchMenu
-          initialJoinCode={route.joinCode}
+          initialJoinCode={joinCode}
           initialMapId={selectedMapId}
           initialCallsign={settings.callsign}
           errorBanner={disconnectError}
-          onCallsignChange={(callsign) =>
-            handleUpdateSettings({ ...settings, callsign })
-          }
-          onCreateMatch={handleCreatePrivateMatch}
-          onJoinMatch={handleJoinPrivateMatch}
-          onLookupRoom={handleLookupRoom}
-          onBack={handleBackToMenu}
+          onCallsignChange={actions.updateCallsign}
+          onCreateMatch={actions.createPrivateMatch}
+          onJoinMatch={actions.joinPrivateMatch}
+          onLookupRoom={actions.lookupRoom}
+          onBack={actions.backToMenu}
         />
       )}
 
-      {!contextLost && route.view === 'custom' && lobbySnapshot?.phase === 'lobby' && (
+      {!contextLost && status === 'mp_lobby' && lobbySnapshot && (
         <LobbyScreen
           lobby={lobbySnapshot}
           systemNotice={systemNotice}
-          onUpdateConfig={(patch) => networkRef.current?.updateConfig(patch)}
-          onBalanceTeams={() => networkRef.current?.balanceTeams()}
-          onKickPlayer={(targetId) => networkRef.current?.kickPlayer(targetId)}
-          onStartMatch={() => networkRef.current?.startMatch()}
-          onSwitchTeam={() => networkRef.current?.switchTeam()}
-          onToggleReady={() => networkRef.current?.toggleReady()}
+          onUpdateConfig={actions.updateRoomConfig}
+          onBalanceTeams={actions.balanceRoomTeams}
+          onKickPlayer={actions.kickRoomPlayer}
+          onStartMatch={actions.startRoomMatch}
+          onSwitchTeam={actions.switchRoomTeam}
+          onToggleReady={actions.toggleRoomReady}
           onLeaveLobby={() => {
-            void handleLeaveMultiplayer();
+            void actions.leaveMultiplayer();
           }}
         />
       )}
 
-      {!contextLost && isMultiplayerInMatch && lobbySnapshot && (
+      {!contextLost && derived.isMultiplayerInMatch && lobbySnapshot && (
         <>
-          <GameHUD hud={hud} showFps={settings.showFps} onSelectGun={handleSelectGun} />
+          <GameHUD
+            hud={hud}
+            showFps={settings.showFps}
+            keybindings={settings.keybindings}
+            onSelectGun={actions.selectGun}
+          />
 
-          {hud.match.phase === 'paused' && (
+          {status === 'mp_playing' && hud.match.phase === 'paused' && (
             <PauseMenu
               hud={hud}
               settings={settings}
               isMultiplayer
-              onResume={handleResumeMatch}
-              onRestartMatch={handleRestartMatch}
+              onResume={actions.resumeMatch}
+              onRestartMatch={actions.restartMatch}
               onLeaveToMenu={() => {
-                void handleLeaveMultiplayer();
+                void actions.leaveMultiplayer();
               }}
-              onSelectCharacter={handleSelectCharacter}
-              onSelectGun={handleSelectGun}
-              onSelectKnifeCharm={handleSelectKnifeCharm}
-              onUpdateSettings={handleUpdateSettings}
-              onResetSettings={handleResetSettings}
+              onSelectCharacter={actions.selectCharacter}
+              onSelectGun={actions.selectGun}
+              onSelectKnifeCharm={actions.selectKnifeCharm}
+              onUpdateSettings={actions.updateSettings}
+              onResetSettings={actions.resetSettings}
             />
           )}
 
-          {hud.match.phase === 'ended' && (
+          {(status === 'mp_ended' || hud.match.phase === 'ended') && (
             <EndMatchScreen
               match={hud.match}
-              playerStats={postMatchStats}
+              playerStats={derived.postMatchStats}
               xp={hud.xp}
               sessionXpEarned={hud.sessionXpEarned}
               isMultiplayer
-              isHost={lobbySnapshot.hostId === lobbySnapshot.localPlayerId}
-              onPlayAgain={handleRestartMatch}
-              onReturnToLobby={handleReturnToLobby}
+              isHost={derived.isMultiplayerHost}
+              onPlayAgain={actions.restartMatch}
+              onReturnToLobby={actions.returnToLobby}
               onReturnToMenu={() => {
-                void handleLeaveMultiplayer();
+                void actions.leaveMultiplayer();
               }}
             />
           )}
         </>
       )}
 
-      {!contextLost && route.view === 'play' && (
+      {!contextLost && isOfflineMatchView && (
         <>
-          <GameHUD hud={hud} showFps={settings.showFps} onSelectGun={handleSelectGun} />
+          <GameHUD
+            hud={hud}
+            showFps={settings.showFps}
+            keybindings={settings.keybindings}
+            onSelectGun={actions.selectGun}
+          />
 
-          {hud.match.phase === 'paused' && (
+          {status === 'offline_paused' && (
             <PauseMenu
               hud={hud}
               settings={settings}
-              onResume={handleResumeMatch}
-              onRestartMatch={handleRestartMatch}
-              onLeaveToMenu={handleBackToMenu}
-              onSelectCharacter={handleSelectCharacter}
-              onSelectGun={handleSelectGun}
-              onSelectKnifeCharm={handleSelectKnifeCharm}
-              onUpdateSettings={handleUpdateSettings}
-              onResetSettings={handleResetSettings}
+              onResume={actions.resumeMatch}
+              onRestartMatch={actions.restartMatch}
+              onLeaveToMenu={actions.backToMenu}
+              onSelectCharacter={actions.selectCharacter}
+              onSelectGun={actions.selectGun}
+              onSelectKnifeCharm={actions.selectKnifeCharm}
+              onUpdateSettings={actions.updateSettings}
+              onResetSettings={actions.resetSettings}
             />
           )}
 
-          {hud.match.phase === 'ended' && (
+          {status === 'offline_ended' && (
             <EndMatchScreen
               match={hud.match}
-              playerStats={postMatchStats}
+              playerStats={derived.postMatchStats}
               xp={hud.xp}
               sessionXpEarned={hud.sessionXpEarned}
-              onPlayAgain={handleRestartMatch}
-              onReturnToMenu={handleBackToMenu}
+              onPlayAgain={actions.restartMatch}
+              onReturnToMenu={actions.backToMenu}
             />
           )}
         </>

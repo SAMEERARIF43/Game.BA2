@@ -2,18 +2,14 @@ import {
   AbstractMesh,
   BaseTexture,
   Color3,
-  DynamicTexture,
-  Engine,
   Material,
   Mesh,
   MeshBuilder,
   PBRMaterial,
   PointLight,
   Ray,
-  RawTexture,
   Scene,
   StandardMaterial,
-  Texture,
   TransformNode,
   UniversalCamera,
   Vector3,
@@ -26,6 +22,7 @@ import {
   normalizeKnifeCharmId,
 } from './loadoutRules';
 import { PlayerController } from './PlayerController';
+import { applyProceduralSurfaceToMaterial, SurfacePresetId } from './proceduralTextures';
 import {
   GUN_IDS,
   GraphicsQuality,
@@ -1366,207 +1363,196 @@ export class WeaponSystem {
     });
   }
 
-  private createWeaponNormalTex(
-    name: string,
-    kind: 'anodized' | 'brushed' | 'polymer' | 'scope' | 'wood'
-  ): RawTexture | null {
-    if (kind !== 'brushed' && kind !== 'polymer' && kind !== 'wood') {
-      return null;
-    }
-
-    const size = 64;
-    const heights = new Float32Array(size * size);
-    const strength = kind === 'brushed' ? 1.55 : kind === 'wood' ? 1.85 : 2.15;
-
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        if (kind === 'brushed') {
-          const streak = Math.sin(y * 1.9) * 0.4 + Math.cos(y * 3.7 + x * 0.18) * 0.2;
-          heights[y * size + x] = streak;
-        } else if (kind === 'wood') {
-          const grain =
-            Math.sin(y * 0.85 + Math.sin(x * 0.22) * 1.4) * 0.5 +
-            Math.sin(x * 0.4 + y * 1.5) * 0.18;
-          heights[y * size + x] = grain;
-        } else {
-          // Micro-knurled tactical polymer stippling
-          const dot =
-            Math.sin(x * 1.65) * Math.sin(y * 1.65) * 0.55 +
-            Math.cos((x + y) * 1.2) * 0.25;
-          heights[y * size + x] = dot;
-        }
-      }
-    }
-
-    const rgba = new Uint8Array(size * size * 4);
-    for (let y = 0; y < size; y++) {
-      const ym = (y - 1 + size) % size;
-      const yp = (y + 1) % size;
-      for (let x = 0; x < size; x++) {
-        const xm = (x - 1 + size) % size;
-        const xp = (x + 1) % size;
-        const hL = heights[y * size + xm];
-        const hR = heights[y * size + xp];
-        const hU = heights[ym * size + x];
-        const hD = heights[yp * size + x];
-        const dx = (hL - hR) * strength;
-        const dy = (hU - hD) * strength;
-        const dz = 1.0;
-        const inv = 1 / Math.hypot(dx, dy, dz);
-        const idx = (y * size + x) * 4;
-        rgba[idx] = Math.round((dx * inv * 0.5 + 0.5) * 255);
-        rgba[idx + 1] = Math.round((dy * inv * 0.5 + 0.5) * 255);
-        rgba[idx + 2] = Math.round((dz * inv * 0.5 + 0.5) * 255);
-        rgba[idx + 3] = 255;
-      }
-    }
-
-    const tex = new RawTexture(
-      rgba,
-      size,
-      size,
-      Engine.TEXTUREFORMAT_RGBA,
-      this.scene,
-      true,
-      false,
-      Texture.BILINEAR_SAMPLINGMODE,
-      Engine.TEXTURETYPE_UNSIGNED_BYTE
-    );
-    tex.wrapU = Texture.WRAP_ADDRESSMODE;
-    tex.wrapV = Texture.WRAP_ADDRESSMODE;
-    tex.uScale = 2.5;
-    tex.vScale = 2.5;
-    this.texturesToDispose.push(tex);
-    return tex;
-  }
-
   private createWeaponFinish(
     name: string,
-    albedoHex: string,
-    metallic: number,
-    roughness: number,
-    kind: 'anodized' | 'brushed' | 'polymer' | 'scope' | 'wood'
+    preset: SurfacePresetId,
+    options: {
+      baseHex: string;
+      accentHex: string;
+      uScale?: number;
+      vScale?: number;
+      bumpLevel?: number;
+      roughnessScale?: number;
+      metallicOverride?: number;
+      clearCoat?: number;
+      environmentIntensity?: number;
+    }
   ): PBRMaterial {
-    const tex = new DynamicTexture(`${name}_tex`, { width: 256, height: 256 }, this.scene, true);
-    const ctx = tex.getContext();
-    ctx.fillStyle = albedoHex;
-    ctx.fillRect(0, 0, 256, 256);
-
-    if (kind === 'brushed') {
-      for (let y = 0; y < 256; y++) {
-        const shade = (y % 3 === 0 ? 22 : 10) + ((y * 13) % 12);
-        ctx.fillStyle = `rgba(255,255,255,${0.02 + (shade % 7) * 0.005})`;
-        ctx.fillRect(0, y, 256, 1);
-        ctx.fillStyle = `rgba(0,0,0,${0.024 + (y % 5) * 0.005})`;
-        ctx.fillRect(0, y, 256, 1);
-      }
-    } else if (kind === 'wood') {
-      for (let y = 0; y < 256; y += 3) {
-        ctx.fillStyle = y % 6 === 0 ? 'rgba(38,16,5,0.28)' : 'rgba(255,205,150,0.08)';
-        ctx.fillRect(0, y, 256, 2);
-      }
-      for (let i = 0; i < 720; i++) {
-        ctx.fillStyle = 'rgba(20,8,2,0.14)';
-        ctx.fillRect(Math.random() * 256, Math.random() * 256, 14, 1.2);
-      }
-    } else if (kind === 'polymer') {
-      for (let i = 0; i < 3200; i++) {
-        ctx.fillStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.09)';
-        ctx.fillRect(Math.random() * 256, Math.random() * 256, 2.2, 2.2);
-      }
-    } else if (kind === 'anodized') {
-      for (let i = 0; i < 1100; i++) {
-        ctx.fillStyle = 'rgba(255,255,255,0.03)';
-        ctx.fillRect(Math.random() * 256, Math.random() * 256, 1.4, 1.4);
-      }
-    } else {
-      for (let x = 0; x < 256; x += 18) {
-        ctx.fillStyle = 'rgba(255,255,255,0.07)';
-        ctx.fillRect(x, 0, 4, 256);
-      }
-    }
-
-    tex.update();
-    tex.wrapU = Texture.WRAP_ADDRESSMODE;
-    tex.wrapV = Texture.WRAP_ADDRESSMODE;
-    this.texturesToDispose.push(tex);
-
-    const normalTex = this.createWeaponNormalTex(`${name}_nrm`, kind);
-
     const mat = new PBRMaterial(name, this.scene);
-    mat.albedoColor = Color3.White();
-    mat.albedoTexture = tex;
-    if (normalTex) {
-      mat.bumpTexture = normalTex;
-      mat.bumpTexture.level = kind === 'polymer' ? 0.52 : 0.42;
-    }
-    mat.metallic = metallic;
-    mat.roughness = roughness;
-    mat.environmentIntensity =
-      kind === 'polymer' || kind === 'wood' ? 0.92 : kind === 'anodized' ? 1.08 : 1.38;
+    const createdTextures = applyProceduralSurfaceToMaterial(this.scene, mat, `${name}_proc`, preset, {
+      size: 128,
+      baseHex: options.baseHex,
+      accentHex: options.accentHex,
+      uScale: options.uScale ?? 2,
+      vScale: options.vScale ?? 2,
+      bumpLevel: options.bumpLevel ?? 0.65,
+      roughnessScale: options.roughnessScale ?? 1.0,
+      metallicOverride: options.metallicOverride,
+      clearCoat: options.clearCoat,
+    });
+    this.texturesToDispose.push(...createdTextures);
+    mat.environmentIntensity = options.environmentIntensity ?? 1.25;
     this.materialsToDispose.push(mat);
     return mat;
   }
 
   private buildAllWeaponModels(): void {
-    const gunmetal = this.createWeaponFinish('anodizedRecvMat', '#1c2026', 0.78, 0.38, 'anodized');
-    const polymer = this.createWeaponFinish('polymerMat', '#171a1f', 0.08, 0.72, 'polymer');
-    const coyote = this.createWeaponFinish('coyoteMat', '#746046', 0.06, 0.68, 'polymer');
-    const walnut = this.createWeaponFinish('walnutMat', '#64381d', 0.04, 0.56, 'wood');
-    const steelSilver = this.createWeaponFinish('brushedGunmetalMat', '#798492', 0.95, 0.2, 'brushed');
-    const bladeEdge = this.createWeaponFinish('knifeEdgeMat', '#c2cedb', 0.98, 0.12, 'brushed');
-    const odGreen = this.createWeaponFinish('odGreenMat', '#354634', 0.08, 0.68, 'polymer');
-    const scopeTube = this.createWeaponFinish('scopeTubeMat', '#2a3039', 0.93, 0.17, 'scope');
+    const gunmetal = this.createWeaponFinish('anodizedRecvMat', 'anodizedMetal', {
+      baseHex: '#1f242c',
+      accentHex: '#12151b',
+      metallicOverride: 0.84,
+      roughnessScale: 0.92,
+      bumpLevel: 0.45,
+      environmentIntensity: 1.25,
+    });
+    const polymer = this.createWeaponFinish('polymerMat', 'knurledPolymer', {
+      baseHex: '#181c22',
+      accentHex: '#0e1014',
+      bumpLevel: 0.72,
+      environmentIntensity: 0.96,
+    });
+    const carbonFiber = this.createWeaponFinish('carbonFiberMat', 'carbonFiber', {
+      baseHex: '#282f3a',
+      accentHex: '#12161c',
+      uScale: 3,
+      vScale: 3,
+      bumpLevel: 0.62,
+      clearCoat: 0.52,
+      environmentIntensity: 1.38,
+    });
+    const coyote = this.createWeaponFinish('coyoteMat', 'tacticalFabric', {
+      baseHex: '#7a6347',
+      accentHex: '#503f2b',
+      bumpLevel: 0.65,
+      environmentIntensity: 0.95,
+    });
+    const walnut = this.createWeaponFinish('walnutMat', 'walnutWood', {
+      baseHex: '#6c3c1f',
+      accentHex: '#381b0b',
+      bumpLevel: 0.68,
+      clearCoat: 0.25,
+      environmentIntensity: 1.02,
+    });
+    const steelSilver = this.createWeaponFinish('brushedGunmetalMat', 'brushedMetal', {
+      baseHex: '#828d9c',
+      accentHex: '#525b68',
+      metallicOverride: 0.96,
+      roughnessScale: 0.85,
+      bumpLevel: 0.48,
+      environmentIntensity: 1.48,
+    });
+    const bladeEdge = this.createWeaponFinish('knifeEdgeMat', 'brushedMetal', {
+      baseHex: '#cfdbe8',
+      accentHex: '#9ba9b9',
+      metallicOverride: 0.98,
+      roughnessScale: 0.62,
+      bumpLevel: 0.34,
+      clearCoat: 0.48,
+      environmentIntensity: 1.6,
+    });
+    const odGreen = this.createWeaponFinish('odGreenMat', 'knurledPolymer', {
+      baseHex: '#374a35',
+      accentHex: '#212e20',
+      bumpLevel: 0.6,
+      environmentIntensity: 0.98,
+    });
+    const scopeTube = this.createWeaponFinish('scopeTubeMat', 'anodizedMetal', {
+      baseHex: '#282f3a',
+      accentHex: '#171b22',
+      metallicOverride: 0.92,
+      roughnessScale: 0.65,
+      bumpLevel: 0.35,
+      clearCoat: 0.45,
+      environmentIntensity: 1.45,
+    });
+    const shellCrimson = this.createWeaponFinish('shellCrimsonMat', 'anodizedMetal', {
+      baseHex: '#b91c1c',
+      accentHex: '#7f1d1d',
+      metallicOverride: 0.25,
+      roughnessScale: 1.0,
+      clearCoat: 0.35,
+      environmentIntensity: 1.1,
+    });
 
     const reticleRed = new StandardMaterial('reticleRedMat', this.scene);
     reticleRed.disableLighting = true;
-    reticleRed.emissiveColor = new Color3(2.15, 0.16, 0.14);
+    reticleRed.emissiveColor = new Color3(2.2, 0.16, 0.14);
 
     const tritiumGreen = new StandardMaterial('tritiumGreenMat', this.scene);
     tritiumGreen.disableLighting = true;
-    tritiumGreen.emissiveColor = new Color3(0.35, 1.75, 0.68);
+    tritiumGreen.emissiveColor = new Color3(0.35, 1.85, 0.72);
 
     const amberFiber = new StandardMaterial('amberFiberMat', this.scene);
     amberFiber.disableLighting = true;
-    amberFiber.emissiveColor = new Color3(1.85, 0.78, 0.16);
+    amberFiber.emissiveColor = new Color3(1.9, 0.82, 0.16);
+
+    const weaponLightLens = new StandardMaterial('weaponLightLensMat', this.scene);
+    weaponLightLens.disableLighting = true;
+    weaponLightLens.emissiveColor = new Color3(0.85, 0.94, 1.05);
 
     const holoGlass = new PBRMaterial('holoGlassMat', this.scene);
-    holoGlass.albedoColor = new Color3(0.14, 0.42, 0.54);
-    holoGlass.metallic = 0.06;
-    holoGlass.roughness = 0.06;
-    holoGlass.alpha = 0.3;
+    holoGlass.albedoColor = new Color3(0.16, 0.44, 0.56);
+    holoGlass.metallic = 0.08;
+    holoGlass.roughness = 0.04;
+    holoGlass.alpha = 0.28;
     holoGlass.transparencyMode = PBRMaterial.PBRMATERIAL_ALPHABLEND;
     holoGlass.backFaceCulling = false;
-    holoGlass.indexOfRefraction = 1.46;
+    holoGlass.indexOfRefraction = 1.5;
+    holoGlass.environmentIntensity = 1.65;
+    holoGlass.clearCoat.isEnabled = true;
+    holoGlass.clearCoat.intensity = 1.0;
+    holoGlass.clearCoat.roughness = 0.03;
 
     const scopeLens = new PBRMaterial('scopeLensMat', this.scene);
-    scopeLens.albedoColor = new Color3(0.05, 0.14, 0.12);
-    scopeLens.metallic = 0.08;
-    scopeLens.roughness = 0.04;
-    scopeLens.alpha = 0.44;
+    scopeLens.albedoColor = new Color3(0.05, 0.16, 0.13);
+    scopeLens.metallic = 0.1;
+    scopeLens.roughness = 0.03;
+    scopeLens.alpha = 0.42;
     scopeLens.transparencyMode = PBRMaterial.PBRMATERIAL_ALPHABLEND;
-    scopeLens.indexOfRefraction = 1.52;
-    scopeLens.environmentIntensity = 1.45;
+    scopeLens.indexOfRefraction = 1.54;
+    scopeLens.environmentIntensity = 1.65;
+    scopeLens.clearCoat.isEnabled = true;
+    scopeLens.clearCoat.intensity = 1.0;
+    scopeLens.clearCoat.roughness = 0.03;
     scopeLens.backFaceCulling = false;
 
     this.materialsToDispose.push(
       reticleRed,
       tritiumGreen,
       amberFiber,
+      weaponLightLens,
       holoGlass,
       scopeLens
     );
 
-    // 1. M870 Combat Shotgun
+    // 1. M870 Combat Shotgun (Heatshield, Side-Saddle Shells & Ribbed Pump)
     {
       const root = new TransformNode('vm_shotgun', this.scene);
       root.parent = this.weaponPivot;
 
       this.addPart(root, 'sg_recv', { width: 0.05, height: 0.068, depth: 0.23 }, new Vector3(0, 0, 0), gunmetal);
-      this.addPart(root, 'sg_eject_port', { width: 0.005, height: 0.022, depth: 0.065 }, new Vector3(0.025, 0.01, 0.02), steelSilver);
+      this.addPart(root, 'sg_eject_port', { width: 0.006, height: 0.022, depth: 0.068 }, new Vector3(0.025, 0.01, 0.02), steelSilver);
+      this.addPart(root, 'sg_trig_guard', { width: 0.012, height: 0.024, depth: 0.045 }, new Vector3(0, -0.042, -0.04), gunmetal);
       this.addCylinder(root, 'sg_barrel', 0.48, 0.028, new Vector3(0, 0.022, 0.35), Math.PI / 2, steelSilver);
       this.addCylinder(root, 'sg_mag_tube', 0.42, 0.024, new Vector3(0, -0.009, 0.32), Math.PI / 2, gunmetal);
-      this.addPart(root, 'sg_barrel_clamp', { width: 0.032, height: 0.042, depth: 0.02 }, new Vector3(0, 0.006, 0.49), gunmetal);
+      this.addPart(root, 'sg_barrel_clamp', { width: 0.034, height: 0.044, depth: 0.022 }, new Vector3(0, 0.006, 0.49), gunmetal);
+      // Perforated tactical barrel heatshield bands
+      for (let i = 0; i < 6; i++) {
+        this.addPart(
+          root,
+          `sg_heatshield_${i}`,
+          { width: 0.033, height: 0.014, depth: 0.022 },
+          new Vector3(0, 0.034, 0.16 + i * 0.042),
+          polymer
+        );
+      }
+      // Side-saddle receiver shell carrier (4 visible 12-gauge shells)
+      this.addPart(root, 'sg_saddle_plate', { width: 0.008, height: 0.034, depth: 0.125 }, new Vector3(-0.028, 0.004, -0.01), polymer);
+      for (let s = 0; s < 4; s++) {
+        const sz = -0.052 + s * 0.028;
+        this.addCylinder(root, `sg_saddle_shell_${s}`, 0.034, 0.014, new Vector3(-0.034, 0.012, sz), 0, shellCrimson);
+        this.addCylinder(root, `sg_saddle_brass_${s}`, 0.01, 0.015, new Vector3(-0.034, -0.008, sz), 0, this.brassMaterial);
+      }
       // Ribbed tactical pump forend
       this.addPart(root, 'sg_pump_core', { width: 0.048, height: 0.042, depth: 0.165 }, new Vector3(0, -0.012, 0.25), polymer);
       for (let i = 0; i < 5; i++) {
@@ -1611,28 +1597,40 @@ export class WeaponSystem {
       });
     }
 
-      // 2. AK-47 Heavy Rifle + Top-Rail Red Dot Reflex Sight
+    // 2. AK-47 Heavy Rifle + Stamped Ribbed Dust Cover + Top-Rail Red Dot Reflex Sight
     {
       const root = new TransformNode('vm_ak47', this.scene);
       root.parent = this.weaponPivot;
 
       this.addPart(root, 'ak_recv', { width: 0.046, height: 0.066, depth: 0.24 }, new Vector3(0, 0, 0), gunmetal);
       this.addPart(root, 'ak_dust_cover', { width: 0.042, height: 0.024, depth: 0.21 }, new Vector3(0, 0.038, -0.01), steelSilver);
+      for (let i = 0; i < 4; i++) {
+        this.addPart(
+          root,
+          `ak_cover_rib_${i}`,
+          { width: 0.044, height: 0.004, depth: 0.01 },
+          new Vector3(0, 0.051, -0.08 + i * 0.038),
+          gunmetal
+        );
+      }
       this.addPart(root, 'ak_bolt_handle', { width: 0.024, height: 0.01, depth: 0.028 }, new Vector3(0.03, 0.018, 0.03), steelSilver);
+      this.addCylinder(root, 'ak_bolt_knob', 0.014, 0.013, new Vector3(0.041, 0.018, 0.03), 0, gunmetal);
       this.addPart(root, 'ak_trig_guard', { width: 0.012, height: 0.024, depth: 0.044 }, new Vector3(0, -0.04, -0.04), gunmetal);
       // Iconic walnut handguard & full stock
       this.addPart(root, 'ak_handguard_l', { width: 0.042, height: 0.038, depth: 0.17 }, new Vector3(0, -0.004, 0.2), walnut);
       this.addPart(root, 'ak_handguard_u', { width: 0.036, height: 0.026, depth: 0.15 }, new Vector3(0, 0.025, 0.19), walnut);
+      this.addPart(root, 'ak_hg_ferrule', { width: 0.044, height: 0.04, depth: 0.018 }, new Vector3(0, 0.008, 0.282), gunmetal);
       this.addPart(root, 'ak_stock', { width: 0.04, height: 0.092, depth: 0.23 }, new Vector3(0, -0.022, -0.22), walnut, new Vector3(0.09, 0, 0));
       this.addPart(root, 'ak_buttplate', { width: 0.041, height: 0.095, depth: 0.012 }, new Vector3(0, -0.03, -0.338), gunmetal, new Vector3(0.09, 0, 0));
       this.addPart(root, 'ak_grip', { width: 0.03, height: 0.105, depth: 0.042 }, new Vector3(0, -0.078, -0.075), polymer, new Vector3(-0.34, 0, 0));
-      // Curved banana magazine (two angled segments + baseplate)
+      // Curved banana magazine (two angled segments + spine + baseplate)
       this.addPart(root, 'ak_mag_top', { width: 0.03, height: 0.085, depth: 0.062 }, new Vector3(0, -0.07, 0.065), coyote, new Vector3(0.14, 0, 0));
       this.addPart(root, 'ak_mag_bot', { width: 0.029, height: 0.09, depth: 0.06 }, new Vector3(0, -0.145, 0.09), coyote, new Vector3(0.42, 0, 0));
       this.addPart(root, 'ak_mag_plate', { width: 0.032, height: 0.008, depth: 0.064 }, new Vector3(0, -0.184, 0.108), gunmetal, new Vector3(0.42, 0, 0));
-      // Gas tube, barrel, front sight post & slant brake
+      // Gas tube, cleaning rod, barrel, front sight post & slant brake
       this.addCylinder(root, 'ak_gas_tube', 0.16, 0.018, new Vector3(0, 0.028, 0.24), Math.PI / 2, gunmetal);
       this.addCylinder(root, 'ak_barrel', 0.34, 0.021, new Vector3(0, 0.008, 0.38), Math.PI / 2, steelSilver);
+      this.addCylinder(root, 'ak_clean_rod', 0.24, 0.006, new Vector3(0, -0.008, 0.39), Math.PI / 2, steelSilver);
       this.addPart(root, 'ak_fsb', { width: 0.014, height: 0.036, depth: 0.022 }, new Vector3(0, 0.023, 0.48), gunmetal);
       this.addCylinder(root, 'ak_brake', 0.048, 0.027, new Vector3(0, 0.008, 0.56), Math.PI / 2, gunmetal);
       this.addPart(root, 'ak_sight_f_pin', { width: 0.003, height: 0.011, depth: 0.004 }, new Vector3(0, 0.045, 0.48), gunmetal);
@@ -1652,13 +1650,13 @@ export class WeaponSystem {
       }
 
       // Red Dot Reflex Sight mounted optically at (0, 0.080, 0.02)
-      this.addPart(root, 'ak_rds_base', { width: 0.034, height: 0.01, depth: 0.052 }, new Vector3(0, 0.063, 0.02), polymer);
+      this.addPart(root, 'ak_rds_base', { width: 0.034, height: 0.01, depth: 0.052 }, new Vector3(0, 0.063, 0.02), carbonFiber);
       this.addPart(root, 'ak_rds_clamp', { width: 0.008, height: 0.01, depth: 0.016 }, new Vector3(-0.019, 0.063, 0.02), steelSilver);
       this.addPart(root, 'ak_rds_hood_l', { width: 0.005, height: 0.028, depth: 0.038 }, new Vector3(-0.0145, 0.081, 0.02), gunmetal);
       this.addPart(root, 'ak_rds_hood_r', { width: 0.005, height: 0.028, depth: 0.038 }, new Vector3(0.0145, 0.081, 0.02), gunmetal);
       this.addPart(root, 'ak_rds_hood_top', { width: 0.034, height: 0.005, depth: 0.038 }, new Vector3(0, 0.095, 0.02), gunmetal);
-      this.addCylinder(root, 'ak_rds_turret_top', 0.005, 0.009, new Vector3(0, 0.099, 0.02), 0, steelSilver);
-      this.addCylinder(root, 'ak_rds_turret_side', 0.005, 0.009, new Vector3(0.018, 0.08, 0.02), Math.PI / 2, steelSilver);
+      this.addCylinder(root, 'ak_rds_turret_top', 0.005, 0.009, new Vector3(0, 0.099, 0.02), 0, this.brassMaterial);
+      this.addCylinder(root, 'ak_rds_turret_side', 0.005, 0.009, new Vector3(0.018, 0.08, 0.02), Math.PI / 2, this.brassMaterial);
       this.addPart(root, 'ak_rds_emitter', { width: 0.008, height: 0.005, depth: 0.012 }, new Vector3(0, 0.068, 0.005), polymer);
       this.addPart(root, 'ak_rds_glass', { width: 0.024, height: 0.022, depth: 0.0025 }, new Vector3(0, 0.08, 0.026), holoGlass);
 
@@ -1688,24 +1686,29 @@ export class WeaponSystem {
       });
     }
 
-    // 3. Vector-9 SMG
+    // 3. Vector-9 SMG (Carbon Shroud, Tactical Foregrip & Suppressor Collar)
     {
       const root = new TransformNode('vm_smg', this.scene);
       root.parent = this.weaponPivot;
 
-      this.addPart(root, 'smg_upper', { width: 0.044, height: 0.056, depth: 0.26 }, new Vector3(0, 0.014, 0.03), gunmetal);
+      this.addPart(root, 'smg_upper', { width: 0.044, height: 0.056, depth: 0.26 }, new Vector3(0, 0.014, 0.03), carbonFiber);
       this.addPart(root, 'smg_lower_shroud', { width: 0.042, height: 0.064, depth: 0.13 }, new Vector3(0, -0.024, 0.095), polymer);
       this.addPart(root, 'smg_rail_top', { width: 0.022, height: 0.007, depth: 0.22 }, new Vector3(0, 0.044, 0.03), steelSilver);
+      this.addPart(root, 'smg_charge_h', { width: 0.022, height: 0.009, depth: 0.018 }, new Vector3(-0.026, 0.026, 0.09), steelSilver);
+      this.addPart(root, 'smg_foregrip', { width: 0.024, height: 0.068, depth: 0.028 }, new Vector3(0, -0.068, 0.14), polymer, new Vector3(0.16, 0, 0));
       this.addCylinder(root, 'smg_barrel', 0.12, 0.02, new Vector3(0, 0.008, 0.21), Math.PI / 2, steelSilver);
-      this.addCylinder(root, 'smg_comp', 0.055, 0.03, new Vector3(0, 0.008, 0.27), Math.PI / 2, gunmetal);
+      this.addCylinder(root, 'smg_comp', 0.062, 0.032, new Vector3(0, 0.008, 0.27), Math.PI / 2, gunmetal);
+      this.addCylinder(root, 'smg_comp_ring', 0.014, 0.035, new Vector3(0, 0.008, 0.244), Math.PI / 2, steelSilver);
       this.addPart(root, 'smg_mag', { width: 0.026, height: 0.155, depth: 0.038 }, new Vector3(0, -0.105, 0.09), gunmetal, new Vector3(0.18, 0, 0));
+      this.addPart(root, 'smg_mag_base', { width: 0.03, height: 0.01, depth: 0.042 }, new Vector3(0, -0.18, 0.104), steelSilver, new Vector3(0.18, 0, 0));
       this.addPart(root, 'smg_grip', { width: 0.03, height: 0.092, depth: 0.04 }, new Vector3(0, -0.065, -0.055), polymer, new Vector3(-0.28, 0, 0));
-      this.addPart(root, 'smg_brace', { width: 0.022, height: 0.018, depth: 0.16 }, new Vector3(0, 0.01, -0.17), polymer);
+      this.addPart(root, 'smg_brace', { width: 0.022, height: 0.018, depth: 0.16 }, new Vector3(0, 0.01, -0.17), carbonFiber);
+      this.addPart(root, 'smg_brace_pad', { width: 0.026, height: 0.058, depth: 0.022 }, new Vector3(0, -0.005, -0.25), polymer);
       // Low-profile reflex optic
-      this.addPart(root, 'smg_opt_base', { width: 0.032, height: 0.01, depth: 0.046 }, new Vector3(0, 0.05, 0.02), polymer);
+      this.addPart(root, 'smg_opt_base', { width: 0.032, height: 0.01, depth: 0.046 }, new Vector3(0, 0.05, 0.02), gunmetal);
       this.addPart(root, 'smg_opt_l', { width: 0.005, height: 0.024, depth: 0.036 }, new Vector3(-0.013, 0.066, 0.02), polymer);
       this.addPart(root, 'smg_opt_r', { width: 0.005, height: 0.024, depth: 0.036 }, new Vector3(0.013, 0.066, 0.02), polymer);
-      this.addPart(root, 'smg_opt_top', { width: 0.032, height: 0.005, depth: 0.036 }, new Vector3(0, 0.08, 0.02), polymer);
+      this.addPart(root, 'smg_opt_top', { width: 0.032, height: 0.005, depth: 0.036 }, new Vector3(0, 0.08, 0.02), gunmetal);
       this.addPart(root, 'smg_opt_glass', { width: 0.022, height: 0.02, depth: 0.003 }, new Vector3(0, 0.066, 0.02), holoGlass);
 
       const dot = MeshBuilder.CreateSphere('smg_tritium', { diameter: 0.004 }, this.scene);
@@ -1734,28 +1737,39 @@ export class WeaponSystem {
       });
     }
 
-    // 4. AWP-50 Sniper
+    // 4. AWP-50 Sniper (Bipod, Knurled Bolt, Baffled Brake & Dual-Turret Carbon Scope)
     {
       const root = new TransformNode('vm_sniper', this.scene);
       root.parent = this.weaponPivot;
 
       this.addPart(root, 'snp_chassis', { width: 0.052, height: 0.066, depth: 0.42 }, new Vector3(0, -0.004, 0.02), odGreen);
       this.addPart(root, 'snp_recv', { width: 0.046, height: 0.044, depth: 0.24 }, new Vector3(0, 0.026, 0.02), gunmetal);
+      this.addPart(root, 'snp_bolt_arm', { width: 0.028, height: 0.009, depth: 0.01 }, new Vector3(0.032, 0.022, -0.02), steelSilver, new Vector3(0, 0, -0.35));
+      this.addCylinder(root, 'snp_bolt_knob', 0.016, 0.018, new Vector3(0.046, 0.015, -0.02), 0, gunmetal);
       this.addCylinder(root, 'snp_barrel', 0.56, 0.032, new Vector3(0, 0.016, 0.44), Math.PI / 2, steelSilver);
-      this.addCylinder(root, 'snp_brake', 0.11, 0.044, new Vector3(0, 0.016, 0.75), Math.PI / 2, gunmetal);
+      this.addCylinder(root, 'snp_brake', 0.11, 0.046, new Vector3(0, 0.016, 0.75), Math.PI / 2, gunmetal);
+      for (const bz of [0.71, 0.75, 0.79]) {
+        this.addPart(root, `snp_brake_ring_${bz}`, { width: 0.05, height: 0.05, depth: 0.009 }, new Vector3(0, 0.016, bz), steelSilver);
+      }
+      // Folded tactical bipod
+      this.addPart(root, 'snp_bipod_mount', { width: 0.036, height: 0.018, depth: 0.045 }, new Vector3(0, -0.04, 0.22), gunmetal);
+      this.addCylinder(root, 'snp_bipod_l', 0.15, 0.012, new Vector3(-0.028, -0.048, 0.3), Math.PI / 2, carbonFiber);
+      this.addCylinder(root, 'snp_bipod_r', 0.15, 0.012, new Vector3(0.028, -0.048, 0.3), Math.PI / 2, carbonFiber);
+
       this.addPart(root, 'snp_mag', { width: 0.036, height: 0.11, depth: 0.09 }, new Vector3(0, -0.075, 0.1), gunmetal, new Vector3(0.12, 0, 0));
       this.addPart(root, 'snp_grip', { width: 0.032, height: 0.095, depth: 0.044 }, new Vector3(0, -0.072, -0.1), odGreen, new Vector3(-0.28, 0, 0));
       this.addPart(root, 'snp_stock', { width: 0.044, height: 0.115, depth: 0.27 }, new Vector3(0, -0.018, -0.31), odGreen);
-      this.addPart(root, 'snp_cheek', { width: 0.046, height: 0.026, depth: 0.13 }, new Vector3(0, 0.046, -0.27), polymer);
+      this.addPart(root, 'snp_cheek', { width: 0.046, height: 0.026, depth: 0.13 }, new Vector3(0, 0.046, -0.27), carbonFiber);
 
       this.addPart(root, 'snp_scope_base', { width: 0.036, height: 0.02, depth: 0.16 }, new Vector3(0, 0.054, 0.04), polymer);
       this.addPart(root, 'snp_scope_rings', { width: 0.042, height: 0.028, depth: 0.09 }, new Vector3(0, 0.074, 0.04), gunmetal);
-      this.addCylinder(root, 'snp_scope_tube', 0.168, 0.034, new Vector3(0, 0.092, 0.04), Math.PI / 2, scopeTube);
+      this.addCylinder(root, 'snp_scope_tube', 0.168, 0.034, new Vector3(0, 0.092, 0.04), Math.PI / 2, carbonFiber);
       this.addCylinder(root, 'snp_scope_obj', 0.038, 0.054, new Vector3(0, 0.092, 0.146), Math.PI / 2, scopeTube);
       this.addCylinder(root, 'snp_scope_obj_lip', 0.01, 0.06, new Vector3(0, 0.092, 0.168), Math.PI / 2, gunmetal);
       this.addCylinder(root, 'snp_scope_oc', 0.034, 0.048, new Vector3(0, 0.092, -0.066), Math.PI / 2, scopeTube);
       this.addCylinder(root, 'snp_scope_oc_lip', 0.01, 0.052, new Vector3(0, 0.092, -0.088), Math.PI / 2, gunmetal);
       this.addCylinder(root, 'snp_scope_turret', 0.026, 0.02, new Vector3(0, 0.118, 0.04), 0, steelSilver);
+      this.addCylinder(root, 'snp_scope_windage', 0.022, 0.018, new Vector3(0.022, 0.092, 0.04), 0, steelSilver);
       this.addCylinder(root, 'snp_lens_f', 0.006, 0.048, new Vector3(0, 0.092, 0.172), Math.PI / 2, scopeLens);
       this.addCylinder(root, 'snp_lens_r', 0.005, 0.042, new Vector3(0, 0.092, -0.094), Math.PI / 2, scopeLens);
 
@@ -1777,27 +1791,48 @@ export class WeaponSystem {
       });
     }
 
-    // 5. USP-45 Tactical Pistol
+    // 5. USP-45 Tactical Pistol (Slide Serrations, Underbarrel Tactical Light & 3-Dot Tritium)
     {
       const root = new TransformNode('vm_pistol', this.scene);
       root.parent = this.weaponPivot;
 
       this.addPart(root, 'p_frame', { width: 0.032, height: 0.026, depth: 0.185 }, new Vector3(0, -0.01, 0.04), polymer);
       this.addPart(root, 'p_slide', { width: 0.034, height: 0.032, depth: 0.205 }, new Vector3(0, 0.018, 0.03), steelSilver);
+      for (let i = 0; i < 5; i++) {
+        this.addPart(
+          root,
+          `p_serr_${i}`,
+          { width: 0.036, height: 0.02, depth: 0.004 },
+          new Vector3(0, 0.016, -0.052 + i * 0.01),
+          gunmetal
+        );
+      }
       this.addPart(root, 'p_eject_port', { width: 0.022, height: 0.008, depth: 0.038 }, new Vector3(0.008, 0.032, 0.032), gunmetal);
       this.addPart(root, 'p_trig_guard', { width: 0.012, height: 0.022, depth: 0.044 }, new Vector3(0, -0.028, 0.024), polymer);
+      this.addPart(root, 'p_trigger', { width: 0.006, height: 0.016, depth: 0.008 }, new Vector3(0, -0.024, 0.022), steelSilver, new Vector3(0.32, 0, 0));
+      // Underbarrel tactical weapon light
+      this.addPart(root, 'p_light_body', { width: 0.026, height: 0.024, depth: 0.068 }, new Vector3(0, -0.034, 0.092), gunmetal);
+      this.addCylinder(root, 'p_light_bezel', 0.018, 0.026, new Vector3(0, -0.034, 0.13), Math.PI / 2, steelSilver);
+      this.addCylinder(root, 'p_light_lens', 0.004, 0.02, new Vector3(0, -0.034, 0.14), Math.PI / 2, weaponLightLens);
+
       this.addPart(root, 'p_grip', { width: 0.03, height: 0.1, depth: 0.046 }, new Vector3(0, -0.062, -0.03), gunmetal, new Vector3(-0.26, 0, 0));
       this.addPart(root, 'p_sight_r1', { width: 0.007, height: 0.009, depth: 0.01 }, new Vector3(-0.008, 0.038, -0.055), gunmetal);
       this.addPart(root, 'p_sight_r2', { width: 0.007, height: 0.009, depth: 0.01 }, new Vector3(0.008, 0.038, -0.055), gunmetal);
       this.addPart(root, 'p_sight_f', { width: 0.005, height: 0.01, depth: 0.01 }, new Vector3(0, 0.038, 0.115), gunmetal);
 
-      const dot = MeshBuilder.CreateSphere('p_tritium', { diameter: 0.0035 }, this.scene);
-      dot.position = new Vector3(0, 0.042, 0.115);
-      dot.parent = root;
-      dot.material = tritiumGreen;
-      dot.isPickable = false;
-      dot.checkCollisions = false;
-      dot.renderingGroupId = 1;
+      for (const [name, pos] of [
+        ['p_tritium_f', new Vector3(0, 0.042, 0.115)],
+        ['p_tritium_rl', new Vector3(-0.008, 0.04, -0.056)],
+        ['p_tritium_rr', new Vector3(0.008, 0.04, -0.056)],
+      ] as const) {
+        const dot = MeshBuilder.CreateSphere(name, { diameter: 0.0032 }, this.scene);
+        dot.position.copyFrom(pos);
+        dot.parent = root;
+        dot.material = tritiumGreen;
+        dot.isPickable = false;
+        dot.checkCollisions = false;
+        dot.renderingGroupId = 1;
+      }
 
       const ejectionPort = new TransformNode('p_eject', this.scene);
       ejectionPort.parent = root;
@@ -1817,7 +1852,7 @@ export class WeaponSystem {
       });
     }
 
-    // 6. K-Bar Combat Knife + 3D Weapon Charm Mount
+    // 6. K-Bar Combat Knife (Fuller, Serrations, Brass Bolster) + 3D Weapon Charm Mount
     {
       const root = new TransformNode('vm_knife', this.scene);
       root.parent = this.weaponPivot;
@@ -1827,7 +1862,7 @@ export class WeaponSystem {
       gripHolder.parent = root;
       gripHolder.rotation.set(0.46, -0.22, 0.18);
 
-      // Ribbed leather/polymer handle
+      // Ribbed leather/polymer handle + brass/steel bolster
       this.addCylinder(gripHolder, 'kn_handle', 0.115, 0.026, new Vector3(0, -0.035, 0), 0, polymer);
       for (let i = 0; i < 4; i++) {
         this.addCylinder(
@@ -1840,6 +1875,7 @@ export class WeaponSystem {
           coyote
         );
       }
+      this.addCylinder(gripHolder, 'kn_bolster', 0.014, 0.029, new Vector3(0, 0.02, 0), 0, this.brassMaterial);
       // Steel pommel cap & charm lanyard loop
       this.addCylinder(gripHolder, 'kn_pommel', 0.016, 0.032, new Vector3(0, -0.098, 0), 0, steelSilver);
       this.addPart(gripHolder, 'kn_charm_lug', { width: 0.008, height: 0.012, depth: 0.012 }, new Vector3(0.016, -0.098, -0.004), bladeEdge);
@@ -1847,8 +1883,18 @@ export class WeaponSystem {
       // Steel crossguard
       this.addPart(gripHolder, 'kn_guard', { width: 0.018, height: 0.01, depth: 0.056 }, new Vector3(0, 0.028, 0.004), gunmetal);
 
-      // Tactical Tanto / Clip-point blade: dark spine + bright honed cutting bevel
+      // Tactical Tanto / Clip-point blade: dark spine + fuller groove + serrated teeth + bright honed cutting bevel
       this.addPart(gripHolder, 'kn_blade_spine', { width: 0.006, height: 0.165, depth: 0.024 }, new Vector3(0, 0.114, -0.002), gunmetal);
+      this.addPart(gripHolder, 'kn_blade_fuller', { width: 0.0075, height: 0.105, depth: 0.005 }, new Vector3(0, 0.105, -0.002), carbonFiber);
+      for (let t = 0; t < 4; t++) {
+        this.addPart(
+          gripHolder,
+          `kn_blade_serr_${t}`,
+          { width: 0.005, height: 0.007, depth: 0.006 },
+          new Vector3(0, 0.048 + t * 0.012, -0.015),
+          steelSilver
+        );
+      }
       this.addPart(gripHolder, 'kn_blade_edge', { width: 0.003, height: 0.162, depth: 0.012 }, new Vector3(0, 0.112, 0.013), bladeEdge);
       this.addPart(
         gripHolder,
@@ -1898,7 +1944,10 @@ export class WeaponSystem {
       if (cfg.emissiveHex) {
         mat.emissiveColor = Color3.FromHexString(cfg.emissiveHex);
       }
-      mat.environmentIntensity = 1.3;
+      mat.clearCoat.isEnabled = true;
+      mat.clearCoat.intensity = 0.65;
+      mat.clearCoat.roughness = 0.12;
+      mat.environmentIntensity = 1.45;
       this.materialsToDispose.push(mat);
       return mat;
     };
@@ -1910,6 +1959,7 @@ export class WeaponSystem {
       const mat = createCharmMat('tactical_tag');
       this.addCylinder(root, 'ch_tag_chain', 0.018, 0.003, new Vector3(0, -0.009, 0), 0, steelSilver);
       this.addPart(root, 'ch_tag_plate', { width: 0.02, height: 0.032, depth: 0.0035 }, new Vector3(0, -0.031, 0), mat);
+      this.addPart(root, 'ch_tag_stripe', { width: 0.015, height: 0.004, depth: 0.0045 }, new Vector3(0, -0.028, 0), steelSilver);
       this.addPart(root, 'ch_tag_rim', { width: 0.022, height: 0.006, depth: 0.0045 }, new Vector3(0, -0.018, 0), gunmetal);
       this.charmRoots.set('tactical_tag', root);
     }
@@ -1920,7 +1970,7 @@ export class WeaponSystem {
       root.parent = charmPivot;
       const mat = createCharmMat('crimson_fang');
       this.addCylinder(root, 'ch_fang_ring', 0.015, 0.003, new Vector3(0, -0.007, 0), 0, steelSilver);
-      this.addCylinder(root, 'ch_fang_cap', 0.008, 0.014, new Vector3(0, -0.018, 0), 0, gunmetal);
+      this.addCylinder(root, 'ch_fang_cap', 0.009, 0.015, new Vector3(0, -0.018, 0), 0, gunmetal);
       this.addPart(
         root,
         'ch_fang_body',
@@ -1939,6 +1989,7 @@ export class WeaponSystem {
       const mat = createCharmMat('gold_bullet');
       this.addCylinder(root, 'ch_bul_ring', 0.014, 0.003, new Vector3(0, -0.007, 0), 0, mat);
       this.addCylinder(root, 'ch_bul_case', 0.026, 0.012, new Vector3(0, -0.025, 0), 0, mat);
+      this.addCylinder(root, 'ch_bul_rim', 0.004, 0.014, new Vector3(0, -0.013, 0), 0, steelSilver);
       const tip = MeshBuilder.CreateCylinder(
         'ch_bul_tip',
         { height: 0.016, diameterTop: 0.002, diameterBottom: 0.011, tessellation: 12 },
@@ -1961,6 +2012,7 @@ export class WeaponSystem {
       const mat = createCharmMat('cyber_core');
       this.addCylinder(root, 'ch_cyb_ring', 0.014, 0.003, new Vector3(0, -0.007, 0), 0, steelSilver);
       this.addPart(root, 'ch_cyb_cage', { width: 0.02, height: 0.024, depth: 0.02 }, new Vector3(0, -0.026, 0), gunmetal);
+      this.addPart(root, 'ch_cyb_band', { width: 0.022, height: 0.005, depth: 0.022 }, new Vector3(0, -0.026, 0), steelSilver);
       const core = MeshBuilder.CreatePolyhedron('ch_cyb_crystal', { type: 1, size: 0.013 }, this.scene);
       core.parent = root;
       core.position.set(0, -0.026, 0);

@@ -70,6 +70,7 @@ import {
   ScorePopup,
   WeaponId,
 } from './types';
+import { DEFAULT_KEYBINDINGS, formatKeyCode } from '../settings/keybindings';
 import { WeaponSystem } from './WeaponSystem';
 
 export interface EngineCallbacks {
@@ -312,6 +313,7 @@ export class EngineManager {
     this.player.setInvertY(initialSettings.invertY);
     this.player.setBaseFov(initialSettings.fovDeg);
     this.player.setScreenShakeScale(initialSettings.screenShakeScale);
+    this.player.setKeybindings(initialSettings.keybindings ?? DEFAULT_KEYBINDINGS);
 
     this.botManager = new BotManager(this.scene, this.matchManager, {
       getPlayerTarget: () => ({
@@ -432,7 +434,8 @@ export class EngineManager {
     this.weapons.setViewModelVisible(false);
     this.botManager.clearBots();
     this.matchManager.setPhase('menu');
-    this.mapManager.loadMap(mapId);
+    const def = this.mapManager.loadMap(mapId);
+    this.applyMapColorGrading(def.exposure, def.contrast);
     this.audio.setAmbientEnvironment('menu');
     this.updateMenuShowcaseVisuals();
     this.emitHudState(true);
@@ -451,6 +454,7 @@ export class EngineManager {
         ? this.mapManager.getCurrentDefinition()
         : this.mapManager.loadMap(mapId);
 
+    this.applyMapColorGrading(def.exposure, def.contrast);
     this.audio.setAmbientEnvironment(def.id);
 
     this.matchManager.configureMatch(
@@ -496,7 +500,8 @@ export class EngineManager {
     this.mpPaused = !requestLock;
 
     if (this.mapManager.getCurrentMapId() !== snapshot.mapId) {
-      this.mapManager.loadMap(snapshot.mapId);
+      const def = this.mapManager.loadMap(snapshot.mapId);
+      this.applyMapColorGrading(def.exposure, def.contrast);
     }
     this.audio.setAmbientEnvironment(snapshot.mapId);
 
@@ -532,7 +537,8 @@ export class EngineManager {
 
     if (snapshot.phase === 'lobby') {
       if (this.mapManager.getCurrentMapId() !== snapshot.mapId) {
-        this.mapManager.loadMap(snapshot.mapId);
+        const def = this.mapManager.loadMap(snapshot.mapId);
+        this.applyMapColorGrading(def.exposure, def.contrast);
       }
       this.audio.setAmbientEnvironment('menu');
       this.mpPaused = false;
@@ -689,6 +695,7 @@ export class EngineManager {
     this.player.setInvertY(settings.invertY);
     this.player.setBaseFov(settings.fovDeg);
     this.player.setScreenShakeScale(settings.screenShakeScale);
+    this.player.setKeybindings(settings.keybindings ?? DEFAULT_KEYBINDINGS);
     this.audio.setVolumes(settings.volume, settings.sfxVolume, settings.musicVolume, settings.muted);
     this.applyGraphicsQuality(settings.graphicsQuality);
     if (settings.knifeCharmId !== this.weapons.getKnifeCharmId()) {
@@ -700,6 +707,7 @@ export class EngineManager {
       this.rebuildMenuShowcaseRig();
     }
     this.updateMenuShowcaseVisuals();
+    this.emitHudState(true);
   }
 
   public setMenuShowcaseVisible(visible: boolean): void {
@@ -845,18 +853,28 @@ export class EngineManager {
 
     if (!fromStreak) {
       this.currentStreak += 1;
+      const kb = this.settings.keybindings ?? DEFAULT_KEYBINDINGS;
       if (this.currentStreak === 3 && !this.unlockedStreaks.uav) {
         this.unlockedStreaks.uav = true;
         this.audio.playKillstreakReady();
-        this.pushKillstreakBanner('[F1] UAV SWEEP READY', 'Enemy positions will appear on your radar');
+        this.pushKillstreakBanner(
+          `[${formatKeyCode(kb.streakUav)}] UAV SWEEP READY`,
+          'Enemy positions will appear on your radar'
+        );
       } else if (this.currentStreak === 5 && !this.unlockedStreaks.airstrike) {
         this.unlockedStreaks.airstrike = true;
         this.audio.playKillstreakReady();
-        this.pushKillstreakBanner('[F2] PRECISION BARRAGE READY', 'Ordnance support is standing by');
+        this.pushKillstreakBanner(
+          `[${formatKeyCode(kb.streakBarrage)}] PRECISION BARRAGE READY`,
+          'Ordnance support is standing by'
+        );
       } else if (this.currentStreak === 7 && !this.unlockedStreaks.overdrive) {
         this.unlockedStreaks.overdrive = true;
         this.audio.playKillstreakReady();
-        this.pushKillstreakBanner('[F3] TACTICAL OVERDRIVE READY', 'Speed, reload and armor regen boosted');
+        this.pushKillstreakBanner(
+          `[${formatKeyCode(kb.streakOverdrive)}] TACTICAL OVERDRIVE READY`,
+          'Speed, reload and armor regen boosted'
+        );
       }
     }
 
@@ -1162,11 +1180,17 @@ export class EngineManager {
     pipeline.imageProcessingEnabled = true;
     pipeline.imageProcessing.toneMappingEnabled = true;
     pipeline.imageProcessing.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
-    pipeline.imageProcessing.exposure = 1.1;
-    pipeline.imageProcessing.contrast = 1.14;
-    pipeline.imageProcessing.vignetteColor = new Color4(0, 0, 0, 0);
+    pipeline.imageProcessing.exposure = 1.12;
+    pipeline.imageProcessing.contrast = 1.18;
+    pipeline.imageProcessing.vignetteColor = new Color4(0.01, 0.015, 0.025, 0);
     pipeline.sharpenEnabled = false;
     this.renderPipeline = pipeline;
+  }
+
+  private applyMapColorGrading(exposure = 1.12, contrast = 1.18): void {
+    if (!this.renderPipeline) return;
+    this.renderPipeline.imageProcessing.exposure = exposure;
+    this.renderPipeline.imageProcessing.contrast = contrast;
   }
 
   private ensureGlowLayer(kernelSize: number, intensity: number): void {
@@ -1181,9 +1205,9 @@ export class EngineManager {
           result.set(0, 0, 0, 0);
           return;
         }
-        const std = mesh.material as StandardMaterial | undefined;
-        if (std && std.emissiveColor) {
-          const e = std.emissiveColor;
+        const mat = mesh.material as { emissiveColor?: Color3 } | undefined;
+        if (mat && mat.emissiveColor) {
+          const e = mat.emissiveColor;
           result.set(e.r, e.g, e.b, 1);
           return;
         }
@@ -1211,6 +1235,7 @@ export class EngineManager {
         this.renderPipeline.samples = 1;
         this.renderPipeline.fxaaEnabled = false;
         this.renderPipeline.bloomEnabled = false;
+        this.renderPipeline.sharpenEnabled = false;
         this.renderPipeline.chromaticAberrationEnabled = false;
         this.renderPipeline.imageProcessing.vignetteEnabled = false;
       }
@@ -1219,9 +1244,10 @@ export class EngineManager {
       this.scene.shadowsEnabled = true;
       this.sunLight.shadowEnabled = true;
       this.player.camera.maxZ = 250;
-      this.ensureGlowLayer(24, 0.55);
+      this.ensureGlowLayer(24, 0.58);
       if (this.shadowGenerator) {
-        this.shadowGenerator.usePercentageCloserFiltering = false;
+        this.shadowGenerator.usePercentageCloserFiltering = true;
+        this.shadowGenerator.filteringQuality = ShadowGenerator.QUALITY_LOW;
         const shadowMap = this.shadowGenerator.getShadowMap();
         if (shadowMap) shadowMap.refreshRate = 2;
       }
@@ -1230,12 +1256,13 @@ export class EngineManager {
         this.renderPipeline.fxaaEnabled = true;
         this.renderPipeline.bloomEnabled = true;
         this.renderPipeline.bloomThreshold = 0.78;
-        this.renderPipeline.bloomWeight = 0.22;
+        this.renderPipeline.bloomWeight = 0.24;
         this.renderPipeline.bloomKernel = 48;
         this.renderPipeline.bloomScale = 0.5;
+        this.renderPipeline.sharpenEnabled = false;
         this.renderPipeline.chromaticAberrationEnabled = false;
         this.renderPipeline.imageProcessing.vignetteEnabled = true;
-        this.renderPipeline.imageProcessing.vignetteWeight = 1.1;
+        this.renderPipeline.imageProcessing.vignetteWeight = 1.05;
         this.renderPipeline.imageProcessing.vignetteStretch = 0.5;
       }
     } else {
@@ -1243,9 +1270,10 @@ export class EngineManager {
       this.scene.shadowsEnabled = true;
       this.sunLight.shadowEnabled = true;
       this.player.camera.maxZ = 300;
-      this.ensureGlowLayer(36, 0.75);
+      this.ensureGlowLayer(38, 0.8);
       if (this.shadowGenerator) {
         this.shadowGenerator.usePercentageCloserFiltering = true;
+        this.shadowGenerator.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
         const shadowMap = this.shadowGenerator.getShadowMap();
         if (shadowMap) shadowMap.refreshRate = 1;
       }
@@ -1253,15 +1281,18 @@ export class EngineManager {
         this.renderPipeline.samples = 2;
         this.renderPipeline.fxaaEnabled = true;
         this.renderPipeline.bloomEnabled = true;
-        this.renderPipeline.bloomThreshold = 0.72;
+        this.renderPipeline.bloomThreshold = 0.74;
         this.renderPipeline.bloomWeight = 0.3;
         this.renderPipeline.bloomKernel = 64;
         this.renderPipeline.bloomScale = 0.5;
+        this.renderPipeline.sharpenEnabled = true;
+        this.renderPipeline.sharpen.edgeAmount = 0.18;
+        this.renderPipeline.sharpen.colorAmount = 1.0;
         this.renderPipeline.chromaticAberrationEnabled = true;
-        this.renderPipeline.chromaticAberration.aberrationAmount = 7;
-        this.renderPipeline.chromaticAberration.radialIntensity = 0.6;
+        this.renderPipeline.chromaticAberration.aberrationAmount = 6;
+        this.renderPipeline.chromaticAberration.radialIntensity = 0.55;
         this.renderPipeline.imageProcessing.vignetteEnabled = true;
-        this.renderPipeline.imageProcessing.vignetteWeight = 1.35;
+        this.renderPipeline.imageProcessing.vignetteWeight = 1.25;
         this.renderPipeline.imageProcessing.vignetteStretch = 0.45;
       }
     }
@@ -1584,22 +1615,26 @@ export class EngineManager {
 
   private setupLighting(): void {
     this.hemiLight = new HemisphericLight('hemiLight', new Vector3(0.15, 1, 0.2), this.scene);
-    this.hemiLight.intensity = 0.52;
-    this.hemiLight.diffuse = new Color3(0.82, 0.88, 0.96);
-    this.hemiLight.groundColor = new Color3(0.16, 0.17, 0.2);
+    this.hemiLight.intensity = 0.54;
+    this.hemiLight.diffuse = new Color3(0.84, 0.9, 0.98);
+    this.hemiLight.groundColor = new Color3(0.18, 0.19, 0.22);
 
     this.sunLight = new DirectionalLight('sunLight', new Vector3(-0.48, -0.82, -0.32), this.scene);
     this.sunLight.position = new Vector3(24, 38, 18);
-    this.sunLight.intensity = 1.48;
-    this.sunLight.diffuse = new Color3(1.0, 0.94, 0.84);
+    this.sunLight.intensity = 1.56;
+    this.sunLight.diffuse = new Color3(1.0, 0.94, 0.85);
+    this.sunLight.shadowMinZ = 2;
+    this.sunLight.shadowMaxZ = 120;
 
-    this.shadowGenerator = new ShadowGenerator(1024, this.sunLight);
+    this.shadowGenerator = new ShadowGenerator(2048, this.sunLight);
     this.shadowGenerator.usePercentageCloserFiltering = true;
-    this.shadowGenerator.bias = 0.0008;
+    this.shadowGenerator.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
+    this.shadowGenerator.bias = 0.0006;
+    this.shadowGenerator.normalBias = 0.015;
 
     const rim = new DirectionalLight('rimLight', new Vector3(0.5, -0.4, 0.6), this.scene);
-    rim.intensity = 0.3;
-    rim.diffuse = new Color3(0.55, 0.72, 0.95);
+    rim.intensity = 0.34;
+    rim.diffuse = new Color3(0.58, 0.76, 0.98);
   }
 
   private buildRadarBlips(): RadarBlip[] {
@@ -1708,10 +1743,11 @@ export class EngineManager {
         : this.matchManager.getSnapshot();
 
     const rank = getRankSummary(this.xpTotal);
+    const kb = this.settings.keybindings ?? DEFAULT_KEYBINDINGS;
     const killstreaks: KillstreakSlotState[] = [
       {
         id: 'uav',
-        key: 'F1',
+        key: formatKeyCode(kb.streakUav),
         name: 'UAV Sweep',
         requiredKills: 3,
         unlocked: this.unlockedStreaks.uav,
@@ -1720,7 +1756,7 @@ export class EngineManager {
       },
       {
         id: 'airstrike',
-        key: 'F2',
+        key: formatKeyCode(kb.streakBarrage),
         name: 'Barrage',
         requiredKills: 5,
         unlocked: this.unlockedStreaks.airstrike,
@@ -1729,7 +1765,7 @@ export class EngineManager {
       },
       {
         id: 'overdrive',
-        key: 'F3',
+        key: formatKeyCode(kb.streakOverdrive),
         name: 'Overdrive',
         requiredKills: 7,
         unlocked: this.unlockedStreaks.overdrive,

@@ -22,6 +22,8 @@ export interface MapDefinition {
   ambientIntensity: number;
   ambientGroundHex: string;
   accentHex: string;
+  exposure?: number;
+  contrast?: number;
   blueSpawns: Vector3[];
   redSpawns: Vector3[];
   waypoints: Vector3[];

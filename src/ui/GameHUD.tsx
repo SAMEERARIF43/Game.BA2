@@ -1,11 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { GUN_IDS, GunId, HudState, KNIFE_CHARMS, WEAPONS } from '../game/types';
+import {
+  DEFAULT_KEYBINDINGS,
+  formatKeyCode,
+  KeybindingsConfig,
+} from '../settings/keybindings';
 import { formatMatchTime, ScoreboardOverlay } from './ScoreboardOverlay';
 
 interface GameHUDProps {
   hud: HudState;
   showFps?: boolean;
+  keybindings?: KeybindingsConfig;
   onSelectGun?: (id: GunId) => void;
 }
 
@@ -15,7 +21,12 @@ function getCardinalLabel(deg: number): string {
   return dirs[idx];
 }
 
-export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false, onSelectGun }) => {
+export const GameHUD: React.FC<GameHUDProps> = ({
+  hud,
+  showFps = false,
+  keybindings = DEFAULT_KEYBINDINGS,
+  onSelectGun,
+}) => {
   const [onboardingVisible, setOnboardingVisible] = useState(false);
   const [onboardingDismissed, setOnboardingDismissed] = useState(false);
 
@@ -834,7 +845,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false, onSelect
                     : 'border-white/10 text-slate-400'
                 }`}
               >
-                [1] {WEAPONS[hud.equippedGunId].shortName}
+                [{formatKeyCode(keybindings.slotGun)}] {WEAPONS[hud.equippedGunId].shortName}
               </div>
               <div
                 className={`border px-2 py-0.5 font-mono-tabular ${
@@ -843,7 +854,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false, onSelect
                     : 'border-white/10 text-slate-400'
                 }`}
               >
-                [2] Knife · [V/F]
+                [{formatKeyCode(keybindings.slotKnife)}] Knife · [{formatKeyCode(keybindings.quickMelee)}]
               </div>
             </div>
 
@@ -886,10 +897,19 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false, onSelect
             </div>
             <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-4">
               {[
-                { key: '1 / 2', label: 'Gun & Knife' },
-                { key: 'V / F', label: 'Quick Knife' },
-                { key: 'Shift+C', label: 'Slide' },
-                { key: 'F1-F3', label: 'Streaks' },
+                {
+                  key: `${formatKeyCode(keybindings.slotGun)} / ${formatKeyCode(keybindings.slotKnife)}`,
+                  label: 'Gun & Knife',
+                },
+                { key: formatKeyCode(keybindings.quickMelee), label: 'Quick Knife' },
+                {
+                  key: `${formatKeyCode(keybindings.sprint)}+${formatKeyCode(keybindings.crouchToggle)}`,
+                  label: 'Slide',
+                },
+                {
+                  key: `${formatKeyCode(keybindings.streakUav)}/${formatKeyCode(keybindings.streakBarrage)}/${formatKeyCode(keybindings.streakOverdrive)}`,
+                  label: 'Streaks',
+                },
               ].map((hint) => (
                 <div
                   key={hint.key}

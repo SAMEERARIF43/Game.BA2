@@ -7,6 +7,11 @@ import {
   UniversalCamera,
   Vector3,
 } from '@babylonjs/core';
+import {
+  DEFAULT_KEYBINDINGS,
+  KeybindingsConfig,
+  validateKeybindings,
+} from '../settings/keybindings';
 import { AudioEngine } from './AudioEngine';
 import { Stance } from './types';
 
@@ -67,6 +72,8 @@ export class PlayerController {
   private callbacks: PlayerInputCallbacks;
 
   private keys = new Set<string>();
+  private keybindings: KeybindingsConfig = { ...DEFAULT_KEYBINDINGS };
+  private boundCodes = new Set<string>(Object.values(DEFAULT_KEYBINDINGS));
   private yaw = 0;
   private pitch = 0;
   private recoilPitch = 0;
@@ -633,6 +640,11 @@ export class PlayerController {
     this.baseFovRad = (clamped * Math.PI) / 180;
   }
 
+  public setKeybindings(next: KeybindingsConfig): void {
+    this.keybindings = validateKeybindings(next);
+    this.boundCodes = new Set(Object.values(this.keybindings));
+  }
+
   public addRecoil(pitchKick: number, yawKick: number): void {
     this.recoilPitch += pitchKick;
     this.recoilYaw += yawKick;
@@ -706,10 +718,10 @@ export class PlayerController {
     let forwardInput = 0;
     let strafeInput = 0;
     if (activeInput) {
-      if (this.keys.has('KeyW')) forwardInput += 1;
-      if (this.keys.has('KeyS')) forwardInput -= 1;
-      if (this.keys.has('KeyD')) strafeInput += 1;
-      if (this.keys.has('KeyA')) strafeInput -= 1;
+      if (this.keys.has(this.keybindings.moveForward)) forwardInput += 1;
+      if (this.keys.has(this.keybindings.moveBackward)) forwardInput -= 1;
+      if (this.keys.has(this.keybindings.moveRight)) strafeInput += 1;
+      if (this.keys.has(this.keybindings.moveLeft)) strafeInput -= 1;
     }
 
     this.forwardDir.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
@@ -754,7 +766,7 @@ export class PlayerController {
           this.audio.playJump();
           this.endSlide(false);
         } else if (this.slideTimer <= 0) {
-          this.endSlide(this.keys.has('ControlLeft'));
+          this.endSlide(this.keys.has(this.keybindings.crouchHold));
         }
       }
     }
@@ -776,7 +788,8 @@ export class PlayerController {
       this.velocity.x += (this.steeredDir.x * slideSpeed - this.velocity.x) * blend;
       this.velocity.z += (this.steeredDir.z * slideSpeed - this.velocity.z) * blend;
     } else {
-      const wantCrouch = activeInput && (this.keys.has('ControlLeft') || this.crouchToggled);
+      const wantCrouch =
+        activeInput && (this.keys.has(this.keybindings.crouchHold) || this.crouchToggled);
       if (!wantCrouch && this.isCrouching) {
         if (this.canStandUp()) {
           this.isCrouching = false;
@@ -952,10 +965,10 @@ export class PlayerController {
 
     this.forwardDir.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     this.rightDir.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-    this.forwardDir.x += this.rightDir.x * (this.keys.has('KeyD') ? 0.28 : 0);
-    this.forwardDir.z += this.rightDir.z * (this.keys.has('KeyD') ? 0.28 : 0);
-    this.forwardDir.x -= this.rightDir.x * (this.keys.has('KeyA') ? 0.28 : 0);
-    this.forwardDir.z -= this.rightDir.z * (this.keys.has('KeyA') ? 0.28 : 0);
+    this.forwardDir.x += this.rightDir.x * (this.keys.has(this.keybindings.moveRight) ? 0.28 : 0);
+    this.forwardDir.z += this.rightDir.z * (this.keys.has(this.keybindings.moveRight) ? 0.28 : 0);
+    this.forwardDir.x -= this.rightDir.x * (this.keys.has(this.keybindings.moveLeft) ? 0.28 : 0);
+    this.forwardDir.z -= this.rightDir.z * (this.keys.has(this.keybindings.moveLeft) ? 0.28 : 0);
     if (this.forwardDir.lengthSquared() > 0.0001) {
       this.forwardDir.normalize();
     }
@@ -981,13 +994,40 @@ export class PlayerController {
     }
   }
 
+  private isSprintHeld(): boolean {
+    return (
+      this.keys.has(this.keybindings.sprint) ||
+      (this.keybindings.sprint === 'ShiftLeft' &&
+        !this.boundCodes.has('ShiftRight') &&
+        this.keys.has('ShiftRight'))
+    );
+  }
+
+  private isSprintKey(code: string): boolean {
+    return (
+      code === this.keybindings.sprint ||
+      (this.keybindings.sprint === 'ShiftLeft' &&
+        !this.boundCodes.has('ShiftRight') &&
+        code === 'ShiftRight')
+    );
+  }
+
+  private isQuickMeleeKey(code: string): boolean {
+    return (
+      code === this.keybindings.quickMelee ||
+      (this.keybindings.quickMelee === 'KeyV' &&
+        !this.boundCodes.has('KeyF') &&
+        code === 'KeyF')
+    );
+  }
+
   private isSprinting(): boolean {
     return (
       this.isPointerLocked &&
       this.canControl &&
       !this.isDead &&
-      (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) &&
-      this.keys.has('KeyW')
+      this.isSprintHeld() &&
+      this.keys.has(this.keybindings.moveForward)
     );
   }
 
@@ -1038,7 +1078,14 @@ export class PlayerController {
   private onKeyDown = (e: KeyboardEvent): void => {
     if (!this.isPointerLocked || !this.canControl) return;
 
+    const kb = this.keybindings;
+
     if (
+      e.code === kb.jump ||
+      e.code === kb.scoreboard ||
+      e.code === kb.streakUav ||
+      e.code === kb.streakBarrage ||
+      e.code === kb.streakOverdrive ||
       e.code === 'Space' ||
       e.code === 'Tab' ||
       e.code === 'F1' ||
@@ -1050,11 +1097,11 @@ export class PlayerController {
 
     this.keys.add(e.code);
 
-    if (e.code === 'Space' && !e.repeat) {
+    if (e.code === kb.jump && !e.repeat) {
       this.jumpBufferTimer = JUMP_BUFFER_SEC;
     }
 
-    if (e.code === 'Tab' && !e.repeat) {
+    if (e.code === kb.scoreboard && !e.repeat) {
       this.callbacks.onScoreboardChange(true);
       return;
     }
@@ -1070,39 +1117,35 @@ export class PlayerController {
       return;
     }
 
-    if ((e.code === 'KeyC' || e.code === 'ControlLeft') && !e.repeat) {
+    if ((e.code === kb.crouchToggle || e.code === kb.crouchHold) && !e.repeat) {
       const slid = this.tryStartSlide();
-      if (!slid && e.code === 'KeyC' && !this.isSliding) {
+      if (!slid && e.code === kb.crouchToggle && !this.isSliding) {
         this.crouchToggled = !this.crouchToggled;
       }
-    } else if (
-      (e.code === 'ShiftLeft' || e.code === 'ShiftRight') &&
-      this.crouchToggled &&
-      this.canStandUp()
-    ) {
+    } else if (this.isSprintKey(e.code) && this.crouchToggled && this.canStandUp()) {
       this.crouchToggled = false;
-    } else if (e.code === 'KeyR' && !e.repeat) {
+    } else if (e.code === kb.reload && !e.repeat) {
       this.callbacks.onReload();
-    } else if (e.code === 'Digit1' && !e.repeat) {
+    } else if (e.code === kb.slotGun && !e.repeat) {
       this.callbacks.onSelectSlot(1);
-    } else if (e.code === 'Digit2' && !e.repeat) {
+    } else if (e.code === kb.slotKnife && !e.repeat) {
       this.callbacks.onSelectSlot(2);
-    } else if ((e.code === 'KeyV' || e.code === 'KeyF') && !e.repeat) {
+    } else if (this.isQuickMeleeKey(e.code) && !e.repeat) {
       this.callbacks.onQuickMelee?.();
-    } else if (e.code === 'F1' && !e.repeat) {
+    } else if (e.code === kb.streakUav && !e.repeat) {
       this.callbacks.onActivateKillstreak?.(4);
-    } else if (e.code === 'F2' && !e.repeat) {
+    } else if (e.code === kb.streakBarrage && !e.repeat) {
       this.callbacks.onActivateKillstreak?.(5);
-    } else if (e.code === 'F3' && !e.repeat) {
+    } else if (e.code === kb.streakOverdrive && !e.repeat) {
       this.callbacks.onActivateKillstreak?.(6);
-    } else if (e.code === 'KeyB' && !e.repeat) {
+    } else if (e.code === kb.cycleOptic && !e.repeat) {
       this.callbacks.onCycleScopeMagnification?.();
     }
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
     this.keys.delete(e.code);
-    if (e.code === 'Tab') {
+    if (e.code === this.keybindings.scoreboard) {
       this.callbacks.onScoreboardChange(false);
     }
   };

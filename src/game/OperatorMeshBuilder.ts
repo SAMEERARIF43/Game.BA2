@@ -1,4 +1,5 @@
 import {
+  BaseTexture,
   Color3,
   Material,
   Mesh,
@@ -19,6 +20,7 @@ import {
 } from './types';
 import { normalizeCharacterId } from './loadoutRules';
 import { TeamId } from '../maps/types';
+import { applyProceduralSurfaceToMaterial } from './proceduralTextures';
 
 export interface OperatorPalette {
   gearMat: PBRMaterial;
@@ -88,81 +90,162 @@ export function createOperatorPalette(
 ): OperatorPalette {
   const isBlue = team === 'blue';
   const materials: Material[] = [];
+  const textures: BaseTexture[] = [];
 
   const track = <T extends Material>(m: T): T => {
     materials.push(m);
     return m;
   };
 
+  const trackTex = (list: BaseTexture[]): void => {
+    textures.push(...list);
+  };
+
   const gearMat = track(new PBRMaterial(`${prefix}_gear`, scene));
-  gearMat.albedoColor = Color3.FromHexString('#1a1f28');
-  gearMat.metallic = 0.08;
-  gearMat.roughness = 0.78;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, gearMat, `${prefix}_gearTex`, 'tacticalFabric', {
+      size: 64,
+      baseHex: '#202631',
+      accentHex: '#13171e',
+      uScale: 2,
+      vScale: 2,
+      bumpLevel: 0.72,
+    })
+  );
 
   const plateMat = track(new PBRMaterial(`${prefix}_plate`, scene));
-  plateMat.albedoColor = Color3.FromHexString('#252c38');
-  plateMat.metallic = 0.24;
-  plateMat.roughness = 0.5;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, plateMat, `${prefix}_plateTex`, 'kevlarPlate', {
+      size: 64,
+      baseHex: '#2d3544',
+      accentHex: '#1a2029',
+      uScale: 2,
+      vScale: 2,
+      bumpLevel: 0.8,
+    })
+  );
 
   const gunMat = track(new PBRMaterial(`${prefix}_gun`, scene));
-  gunMat.albedoColor = Color3.FromHexString('#1e232b');
-  gunMat.metallic = 0.86;
-  gunMat.roughness = 0.32;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, gunMat, `${prefix}_gunTex`, 'anodizedMetal', {
+      size: 64,
+      baseHex: '#20252f',
+      accentHex: '#13161c',
+      uScale: 2,
+      vScale: 2,
+      bumpLevel: 0.5,
+      metallicOverride: 0.86,
+      roughnessScale: 0.9,
+    })
+  );
 
   const gunLightMat = track(new PBRMaterial(`${prefix}_gunLight`, scene));
-  gunLightMat.albedoColor = Color3.FromHexString('#74808e');
-  gunLightMat.metallic = 0.94;
-  gunLightMat.roughness = 0.22;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, gunLightMat, `${prefix}_gunLightTex`, 'brushedMetal', {
+      size: 64,
+      baseHex: '#84909f',
+      accentHex: '#535d6a',
+      uScale: 2,
+      vScale: 2,
+      bumpLevel: 0.45,
+      metallicOverride: 0.94,
+    })
+  );
 
   const woodMat = track(new PBRMaterial(`${prefix}_wood`, scene));
-  woodMat.albedoColor = Color3.FromHexString('#6a3c20');
-  woodMat.metallic = 0.04;
-  woodMat.roughness = 0.56;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, woodMat, `${prefix}_woodTex`, 'walnutWood', {
+      size: 64,
+      baseHex: '#704123',
+      accentHex: '#3f210e',
+      uScale: 2,
+      vScale: 2,
+      bumpLevel: 0.65,
+    })
+  );
 
   const odMat = track(new PBRMaterial(`${prefix}_od`, scene));
-  odMat.albedoColor = Color3.FromHexString('#334334');
-  odMat.metallic = 0.1;
-  odMat.roughness = 0.68;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, odMat, `${prefix}_odTex`, 'tacticalFabric', {
+      size: 64,
+      baseHex: '#374a38',
+      accentHex: '#222f23',
+      uScale: 2,
+      vScale: 2,
+      bumpLevel: 0.72,
+    })
+  );
 
   const bladeMat = track(new PBRMaterial(`${prefix}_blade`, scene));
-  bladeMat.albedoColor = Color3.FromHexString('#c6d1de');
-  bladeMat.metallic = 0.98;
-  bladeMat.roughness = 0.14;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, bladeMat, `${prefix}_bladeTex`, 'brushedMetal', {
+      size: 64,
+      baseHex: '#d2deea',
+      accentHex: '#9ba8b8',
+      uScale: 2,
+      vScale: 2,
+      bumpLevel: 0.35,
+      metallicOverride: 0.98,
+      roughnessScale: 0.65,
+      clearCoat: 0.45,
+    })
+  );
 
   const skinLightMat = track(new PBRMaterial(`${prefix}_skinLight`, scene));
   skinLightMat.albedoColor = Color3.FromHexString('#d6a88a');
   skinLightMat.metallic = 0.02;
-  skinLightMat.roughness = 0.76;
+  skinLightMat.roughness = 0.68;
 
   const skinTanMat = track(new PBRMaterial(`${prefix}_skinTan`, scene));
   skinTanMat.albedoColor = Color3.FromHexString('#b98362');
   skinTanMat.metallic = 0.02;
-  skinTanMat.roughness = 0.78;
+  skinTanMat.roughness = 0.7;
 
   const hairDarkMat = track(new PBRMaterial(`${prefix}_hairDark`, scene));
   hairDarkMat.albedoColor = Color3.FromHexString('#17191e');
-  hairDarkMat.metallic = 0.06;
-  hairDarkMat.roughness = 0.74;
+  hairDarkMat.metallic = 0.08;
+  hairDarkMat.roughness = 0.66;
 
   const hairAuburnMat = track(new PBRMaterial(`${prefix}_hairAuburn`, scene));
-  hairAuburnMat.albedoColor = Color3.FromHexString('#3b231b');
-  hairAuburnMat.metallic = 0.08;
-  hairAuburnMat.roughness = 0.62;
+  hairAuburnMat.albedoColor = Color3.FromHexString('#42261c');
+  hairAuburnMat.metallic = 0.1;
+  hairAuburnMat.roughness = 0.54;
 
   const hoodClothMat = track(new PBRMaterial(`${prefix}_hoodCloth`, scene));
-  hoodClothMat.albedoColor = Color3.FromHexString('#28332c');
-  hoodClothMat.metallic = 0.05;
-  hoodClothMat.roughness = 0.88;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, hoodClothMat, `${prefix}_hoodTex`, 'tacticalFabric', {
+      size: 64,
+      baseHex: '#2b3930',
+      accentHex: '#19221c',
+      uScale: 2,
+      vScale: 2,
+      bumpLevel: 0.8,
+    })
+  );
 
   const heavyArmorMat = track(new PBRMaterial(`${prefix}_heavyArmor`, scene));
-  heavyArmorMat.albedoColor = Color3.FromHexString('#2c323c');
-  heavyArmorMat.metallic = 0.42;
-  heavyArmorMat.roughness = 0.42;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, heavyArmorMat, `${prefix}_heavyTex`, 'kevlarPlate', {
+      size: 64,
+      baseHex: '#333b48',
+      accentHex: '#1d222b',
+      uScale: 2,
+      vScale: 2,
+      bumpLevel: 0.9,
+      metallicOverride: 0.46,
+    })
+  );
 
   const shellAccentMat = track(new PBRMaterial(`${prefix}_shellAccent`, scene));
-  shellAccentMat.albedoColor = Color3.FromHexString('#c2410c');
-  shellAccentMat.metallic = 0.48;
-  shellAccentMat.roughness = 0.34;
+  trackTex(
+    applyProceduralSurfaceToMaterial(scene, shellAccentMat, `${prefix}_shellTex`, 'anodizedMetal', {
+      size: 64,
+      baseHex: '#cf4812',
+      accentHex: '#8a2b07',
+      metallicOverride: 0.5,
+      clearCoat: 0.35,
+    })
+  );
 
   const visorMat = track(new StandardMaterial(`${prefix}_visor`, scene));
   visorMat.disableLighting = true;
@@ -185,10 +268,13 @@ export function createOperatorPalette(
   redDotMat.emissiveColor = new Color3(1.9, 0.18, 0.15);
 
   const scopeLensMat = track(new PBRMaterial(`${prefix}_lens`, scene));
-  scopeLensMat.albedoColor = new Color3(0.08, 0.24, 0.3);
-  scopeLensMat.metallic = 0.15;
-  scopeLensMat.roughness = 0.08;
-  scopeLensMat.environmentIntensity = 1.4;
+  scopeLensMat.albedoColor = new Color3(0.08, 0.26, 0.34);
+  scopeLensMat.metallic = 0.18;
+  scopeLensMat.roughness = 0.05;
+  scopeLensMat.environmentIntensity = 1.55;
+  scopeLensMat.clearCoat.isEnabled = true;
+  scopeLensMat.clearCoat.intensity = 1.0;
+  scopeLensMat.clearCoat.roughness = 0.04;
 
   return {
     gearMat,
@@ -215,6 +301,10 @@ export function createOperatorPalette(
         m.dispose();
       }
       materials.length = 0;
+      for (const t of textures) {
+        t.dispose();
+      }
+      textures.length = 0;
     },
   };
 }
@@ -253,20 +343,34 @@ export function buildOperatorRig(
   pivot.parent = root;
 
   const bodyMat = new PBRMaterial(`op_bodyMat_${id}`, scene);
-  bodyMat.albedoColor = Color3.FromHexString(isBlue ? '#1e429f' : '#991b1b');
+  const bodyTex = applyProceduralSurfaceToMaterial(scene, bodyMat, `op_bodyTex_${id}`, 'tacticalFabric', {
+    size: 64,
+    baseHex: isBlue ? '#224ab5' : '#aa2222',
+    accentHex: isBlue ? '#132a6b' : '#631212',
+    uScale: 2,
+    vScale: 2,
+    bumpLevel: 0.65,
+  });
   bodyMat.emissiveColor = isBlue
     ? new Color3(0.02, 0.06, 0.14)
     : new Color3(0.14, 0.03, 0.03);
-  bodyMat.metallic = 0.22;
-  bodyMat.roughness = 0.58;
+  bodyMat.onDisposeObservable.add(() => {
+    for (const t of bodyTex) t.dispose();
+  });
 
   const headMat = new PBRMaterial(`op_headMat_${id}`, scene);
-  headMat.albedoColor = Color3.FromHexString(isBlue ? '#2e6de4' : '#d63333');
+  const headTex = applyProceduralSurfaceToMaterial(scene, headMat, `op_headTex_${id}`, 'kevlarPlate', {
+    size: 64,
+    baseHex: isBlue ? '#2e6de4' : '#d63333',
+    accentHex: isBlue ? '#1c4494' : '#8a1b1b',
+    bumpLevel: 0.45,
+  });
   headMat.emissiveColor = isBlue
     ? new Color3(0.04, 0.1, 0.24)
     : new Color3(0.22, 0.05, 0.04);
-  headMat.metallic = 0.3;
-  headMat.roughness = 0.44;
+  headMat.onDisposeObservable.add(() => {
+    for (const t of headTex) t.dispose();
+  });
 
   const addDecorBox = (
     parent: TransformNode,
@@ -478,7 +582,7 @@ export function buildOperatorRig(
     palette.beaconMat
   );
 
-  // Chest Mag Pouches / Shell Bandolier
+  // Chest Mag Pouches / Shell Bandolier + Brass/Flap Detailing
   if (characterId === 'breacher') {
     for (let sx = -0.14; sx <= 0.141; sx += 0.056) {
       addDecorCyl(
@@ -489,7 +593,23 @@ export function buildOperatorRig(
         new Vector3(sx, 0.31, vestDepth * 0.5 + 0.045),
         palette.shellAccentMat
       );
+      addDecorCyl(
+        upperBodyPivot,
+        `op_shellBrass_${id}_${sx.toFixed(2)}`,
+        0.02,
+        0.03,
+        new Vector3(sx, 0.275, vestDepth * 0.5 + 0.045),
+        palette.gunLightMat
+      );
     }
+    addDecorBox(
+      upperBodyPivot,
+      `op_pelvisPlate_${id}`,
+      { width: 0.34, height: 0.16, depth: 0.055 },
+      new Vector3(0, 0.09, vestDepth * 0.5 + 0.025),
+      palette.heavyArmorMat,
+      new Vector3(-0.08, 0, 0)
+    );
   } else if (characterId === 'vanguard') {
     for (const mx of [-0.09, 0.09]) {
       addDecorBox(
@@ -500,6 +620,14 @@ export function buildOperatorRig(
         palette.plateMat,
         new Vector3(0, 0, mx < 0 ? 0.14 : -0.14)
       );
+      addDecorBox(
+        upperBodyPivot,
+        `op_harness_${id}_${mx}`,
+        { width: 0.042, height: 0.28, depth: 0.022 },
+        new Vector3(mx * 1.15, 0.52, vestDepth * 0.5 + 0.022),
+        palette.gearMat,
+        new Vector3(0, 0, mx < 0 ? -0.22 : 0.22)
+      );
     }
   } else {
     for (const mx of [-0.11, 0, 0.11]) {
@@ -509,6 +637,13 @@ export function buildOperatorRig(
         { width: 0.082, height: 0.135, depth: 0.05 },
         new Vector3(mx, 0.28, vestDepth * 0.5 + 0.025),
         palette.plateMat
+      );
+      addDecorBox(
+        upperBodyPivot,
+        `op_pouchFlap_${id}_${mx}`,
+        { width: 0.078, height: 0.036, depth: 0.056 },
+        new Vector3(mx, 0.335, vestDepth * 0.5 + 0.028),
+        palette.gearMat
       );
     }
   }
@@ -535,7 +670,7 @@ export function buildOperatorRig(
 
   // Archetype-specific upper body & silhouette additions
   if (characterId === 'assault') {
-    // Tactical scarf collar + comms whip antenna
+    // Tactical scarf collar + comms whip antenna + shoulder mic clip
     addDecorBox(
       upperBodyPivot,
       `op_scarf_${id}`,
@@ -551,8 +686,15 @@ export function buildOperatorRig(
       new Vector3(-0.14, 0.73, -0.19),
       palette.gunMat
     );
+    addDecorBox(
+      upperBodyPivot,
+      `op_micClip_${id}`,
+      { width: 0.05, height: 0.07, depth: 0.035 },
+      new Vector3(-0.15, 0.57, vestDepth * 0.5 + 0.038),
+      palette.gunLightMat
+    );
   } else if (characterId === 'vanguard') {
-    // Light agility collar strap + sleek twin radio fins
+    // Light agility collar strap + sleek forearm tac-pad
     addDecorBox(
       upperBodyPivot,
       `op_vCollar_${id}`,
@@ -560,8 +702,16 @@ export function buildOperatorRig(
       new Vector3(0, 0.7, 0),
       palette.gearMat
     );
+    addDecorBox(
+      upperBodyPivot,
+      `op_wristPad_${id}`,
+      { width: 0.075, height: 0.038, depth: 0.11 },
+      new Vector3(-0.04, 0.52, 0.34),
+      palette.visorMat,
+      new Vector3(0.06, 0.78, 0)
+    );
   } else if (characterId === 'breacher') {
-    // High heavy ballistic blast collar + breaching battering cylinder on back
+    // High heavy ballistic blast collar + breaching battering cylinder on back + armor rivets
     addDecorBox(
       upperBodyPivot,
       `op_gorget_${id}`,
@@ -578,8 +728,17 @@ export function buildOperatorRig(
       palette.gunMat,
       new Vector3(0, 0, -0.22)
     );
+    addDecorCyl(
+      upperBodyPivot,
+      `op_ramHead_${id}`,
+      0.1,
+      0.11,
+      new Vector3(0.09, 0.68, -0.28),
+      palette.gunLightMat,
+      new Vector3(0, 0, -0.22)
+    );
   } else if (characterId === 'marksman') {
-    // Draped shoulder cowl + twin articulated stealth recon coat-tail panels + spotter optic pack
+    // Draped shoulder cowl + ghillie shoulder strips + articulated recon coat-tail panels + spotter optic pack
     addDecorBox(
       upperBodyPivot,
       `op_cowlMantle_${id}`,
@@ -587,6 +746,16 @@ export function buildOperatorRig(
       new Vector3(0, 0.695, -0.02),
       palette.hoodClothMat
     );
+    for (const gx of [-0.18, 0.18]) {
+      addDecorBox(
+        upperBodyPivot,
+        `op_ghillieStrip_${id}_${gx}`,
+        { width: 0.14, height: 0.035, depth: 0.38 },
+        new Vector3(gx, 0.72, -0.04),
+        palette.odMat,
+        new Vector3(0.08, 0, gx < 0 ? 0.18 : -0.18)
+      );
+    }
     for (const side of [-1, 1] as const) {
       addDecorBox(
         upperBodyPivot,
@@ -1007,6 +1176,7 @@ export function buildOperatorRig(
       addDecorBox(wg, `w_${id}_ak_stk`, { width: 0.055, height: 0.11, depth: 0.26 }, new Vector3(0, -0.025, -0.26), palette.woodMat, new Vector3(0.08, 0, 0));
       addDecorBox(wg, `w_${id}_ak_mag`, { width: 0.04, height: 0.18, depth: 0.08 }, new Vector3(0, -0.12, 0.08), palette.plateMat, new Vector3(0.28, 0, 0));
       addDecorCyl(wg, `w_${id}_ak_brl`, 0.32, 0.028, new Vector3(0, 0.016, 0.44), palette.gunLightMat, new Vector3(Math.PI * 0.5, 0, 0));
+      addDecorCyl(wg, `w_${id}_ak_brk`, 0.055, 0.036, new Vector3(0, 0.016, 0.6), palette.gunMat, new Vector3(Math.PI * 0.5, 0, 0));
       // Top Red Dot Sight
       addDecorBox(wg, `w_${id}_ak_rdsBase`, { width: 0.044, height: 0.024, depth: 0.09 }, new Vector3(0, 0.075, 0.01), palette.gunMat);
       addDecorBox(wg, `w_${id}_ak_rdsHood`, { width: 0.048, height: 0.04, depth: 0.06 }, new Vector3(0, 0.098, 0.01), palette.plateMat);
@@ -1014,28 +1184,32 @@ export function buildOperatorRig(
     } else if (wId === 'smg') {
       addDecorBox(wg, `w_${id}_smg_up`, { width: 0.062, height: 0.082, depth: 0.32 }, new Vector3(0, 0.01, 0.02), palette.gunMat);
       addDecorBox(wg, `w_${id}_smg_shroud`, { width: 0.058, height: 0.08, depth: 0.15 }, new Vector3(0, -0.03, 0.1), palette.plateMat);
+      addDecorBox(wg, `w_${id}_smg_fgrip`, { width: 0.034, height: 0.085, depth: 0.038 }, new Vector3(0, -0.09, 0.19), palette.gearMat);
       addDecorBox(wg, `w_${id}_smg_mag`, { width: 0.036, height: 0.19, depth: 0.048 }, new Vector3(0, -0.12, 0.09), palette.gunMat, new Vector3(0.18, 0, 0));
       addDecorBox(wg, `w_${id}_smg_brace`, { width: 0.034, height: 0.04, depth: 0.2 }, new Vector3(0, 0.005, -0.2), palette.plateMat);
-      addDecorCyl(wg, `w_${id}_smg_comp`, 0.14, 0.034, new Vector3(0, 0.01, 0.26), palette.gunLightMat, new Vector3(Math.PI * 0.5, 0, 0));
+      addDecorCyl(wg, `w_${id}_smg_comp`, 0.15, 0.038, new Vector3(0, 0.01, 0.26), palette.gunLightMat, new Vector3(Math.PI * 0.5, 0, 0));
       addDecorBox(wg, `w_${id}_smg_opt`, { width: 0.042, height: 0.038, depth: 0.055 }, new Vector3(0, 0.068, 0.02), palette.plateMat);
     } else if (wId === 'shotgun') {
       addDecorBox(wg, `w_${id}_sg_recv`, { width: 0.066, height: 0.092, depth: 0.3 }, new Vector3(0, 0, 0), palette.gunMat);
       addDecorCyl(wg, `w_${id}_sg_brl`, 0.56, 0.036, new Vector3(0, 0.026, 0.36), palette.gunLightMat, new Vector3(Math.PI * 0.5, 0, 0));
       addDecorCyl(wg, `w_${id}_sg_tube`, 0.48, 0.03, new Vector3(0, -0.01, 0.32), palette.gunMat, new Vector3(Math.PI * 0.5, 0, 0));
       addDecorBox(wg, `w_${id}_sg_pump`, { width: 0.064, height: 0.055, depth: 0.2 }, new Vector3(0, -0.014, 0.26), palette.plateMat);
+      addDecorBox(wg, `w_${id}_sg_caddy`, { width: 0.014, height: 0.048, depth: 0.16 }, new Vector3(-0.038, 0.008, 0), palette.shellAccentMat);
       addDecorBox(wg, `w_${id}_sg_stk`, { width: 0.056, height: 0.11, depth: 0.26 }, new Vector3(0, -0.02, -0.24), palette.gearMat, new Vector3(0.08, 0, 0));
     } else if (wId === 'sniper') {
       addDecorBox(wg, `w_${id}_snp_ch`, { width: 0.07, height: 0.088, depth: 0.48 }, new Vector3(0, -0.005, 0.02), palette.odMat);
       addDecorCyl(wg, `w_${id}_snp_brl`, 0.62, 0.038, new Vector3(0, 0.02, 0.48), palette.gunLightMat, new Vector3(Math.PI * 0.5, 0, 0));
-      addDecorCyl(wg, `w_${id}_snp_brk`, 0.11, 0.054, new Vector3(0, 0.02, 0.8), palette.gunMat, new Vector3(Math.PI * 0.5, 0, 0));
+      addDecorCyl(wg, `w_${id}_snp_brk`, 0.11, 0.056, new Vector3(0, 0.02, 0.8), palette.gunMat, new Vector3(Math.PI * 0.5, 0, 0));
       addDecorBox(wg, `w_${id}_snp_stk`, { width: 0.06, height: 0.13, depth: 0.3 }, new Vector3(0, -0.02, -0.32), palette.odMat);
       addDecorBox(wg, `w_${id}_snp_mag`, { width: 0.044, height: 0.12, depth: 0.11 }, new Vector3(0, -0.09, 0.1), palette.gunMat);
       addDecorCyl(wg, `w_${id}_snp_scp`, 0.26, 0.046, new Vector3(0, 0.095, 0.04), palette.gunMat, new Vector3(Math.PI * 0.5, 0, 0));
+      addDecorCyl(wg, `w_${id}_snp_tur`, 0.028, 0.028, new Vector3(0, 0.122, 0.04), palette.gunLightMat);
       addDecorCyl(wg, `w_${id}_snp_obj`, 0.045, 0.066, new Vector3(0, 0.095, 0.17), palette.gunLightMat, new Vector3(Math.PI * 0.5, 0, 0));
       addDecorCyl(wg, `w_${id}_snp_lens`, 0.01, 0.056, new Vector3(0, 0.095, 0.194), palette.scopeLensMat, new Vector3(Math.PI * 0.5, 0, 0));
     } else if (wId === 'pistol') {
       addDecorBox(wg, `w_${id}_p_frm`, { width: 0.046, height: 0.04, depth: 0.23 }, new Vector3(0, -0.01, 0.04), palette.plateMat);
       addDecorBox(wg, `w_${id}_p_sld`, { width: 0.048, height: 0.044, depth: 0.25 }, new Vector3(0, 0.028, 0.03), palette.gunLightMat);
+      addDecorBox(wg, `w_${id}_p_lgt`, { width: 0.036, height: 0.034, depth: 0.078 }, new Vector3(0, -0.036, 0.12), palette.gunMat);
       addDecorBox(wg, `w_${id}_p_grp`, { width: 0.044, height: 0.12, depth: 0.062 }, new Vector3(0, -0.075, -0.04), palette.gunMat, new Vector3(-0.24, 0, 0));
     } else {
       // K-Bar Combat Knife + 3D Charm Mount

@@ -19,6 +19,11 @@ import {
   Vector3,
 } from '@babylonjs/core';
 import { BuiltMapResources, MapDefinition } from './types';
+import {
+  applyProceduralSurfaceToMaterial,
+  SurfacePresetId,
+  SurfaceTextureOptions,
+} from '../game/proceduralTextures';
 
 function hash2D(x: number, y: number): number {
   const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
@@ -212,48 +217,55 @@ export class MapBuildContext {
     const sunCol = Color3.FromHexString(def.sunColorHex);
     const sunTo = def.sunDirection.clone().scale(-1).normalize();
 
-    // 1. Procedural Sky Dome with gradient + subtle sun corona
+    // 1. High-resolution Procedural Sky Dome with atmospheric scattering, layered clouds & sun corona
     const skyTex = this.trackTexture(
-      new DynamicTexture('skyDomeTex', { width: 512, height: 256 }, this.scene, false)
+      new DynamicTexture('skyDomeTex', { width: 1024, height: 512 }, this.scene, false)
     );
     const sctx = skyTex.getContext() as unknown as CanvasRenderingContext2D;
-    const grad = sctx.createLinearGradient(0, 0, 0, 256);
+    const grad = sctx.createLinearGradient(0, 0, 0, 512);
     grad.addColorStop(0.0, def.skyZenithHex);
-    grad.addColorStop(0.42, def.skyHorizonHex);
+    grad.addColorStop(0.32, def.skyHex);
+    grad.addColorStop(0.46, def.skyHorizonHex);
     grad.addColorStop(0.54, def.fogHex);
     grad.addColorStop(1.0, def.ambientGroundHex);
     sctx.fillStyle = grad;
-    sctx.fillRect(0, 0, 512, 256);
+    sctx.fillRect(0, 0, 1024, 512);
 
-    // Subtle atmospheric cloud wisps
-    for (let i = 0; i < 42; i++) {
-      const cx = hash2D(i * 3.1, 7.2) * 512;
-      const cy = 24 + hash2D(i * 1.9, 13.7) * 78;
-      const rw = 28 + hash2D(i, 2.3) * 65;
-      const rh = 6 + hash2D(i, 9.1) * 12;
-      sctx.fillStyle = 'rgba(255, 255, 255, 0.045)';
+    // Layered atmospheric cirrus / cumulus wisps
+    for (let i = 0; i < 64; i++) {
+      const cx = hash2D(i * 3.1, 7.2) * 1024;
+      const cy = 36 + hash2D(i * 1.9, 13.7) * 168;
+      const rw = 48 + hash2D(i, 2.3) * 130;
+      const rh = 8 + hash2D(i, 9.1) * 20;
+      const alpha = 0.025 + hash2D(i, 5.4) * 0.045;
+      sctx.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(3)})`;
       sctx.beginPath();
       sctx.ellipse(cx, cy, rw, rh, 0, 0, Math.PI * 2);
       sctx.fill();
     }
 
-    // Directional sun glow aligned roughly with azimuth
+    // Subtle distant horizon skyline / ridge silhouette haze
+    sctx.fillStyle = 'rgba(10, 14, 20, 0.14)';
+    for (let x = 0; x < 1024; x += 24) {
+      const h = 10 + hash2D(x * 0.17, 4.9) * 24;
+      sctx.fillRect(x, 260 - h, 25, h);
+    }
+
+    // Directional sun glow aligned with sun azimuth + outer Mie scattering halo
     const sunAzimuth = Math.atan2(sunTo.x, sunTo.z);
     const sunU = (((sunAzimuth / (Math.PI * 2)) % 1) + 1) % 1;
-    const sunY = Math.max(20, Math.min(115, 118 - sunTo.y * 85));
-    const sx = sunU * 512;
-    const sunGrad = sctx.createRadialGradient(sx, sunY, 2, sx, sunY, 64);
-    sunGrad.addColorStop(
-      0,
-      `rgba(${Math.round(sunCol.r * 255)}, ${Math.round(sunCol.g * 255)}, ${Math.round(sunCol.b * 255)}, 0.85)`
-    );
-    sunGrad.addColorStop(
-      0.3,
-      `rgba(${Math.round(sunCol.r * 255)}, ${Math.round(sunCol.g * 255)}, ${Math.round(sunCol.b * 255)}, 0.25)`
-    );
+    const sunY = Math.max(36, Math.min(230, 236 - sunTo.y * 170));
+    const sx = sunU * 1024;
+    const rCol = Math.round(sunCol.r * 255);
+    const gCol = Math.round(sunCol.g * 255);
+    const bCol = Math.round(sunCol.b * 255);
+    const sunGrad = sctx.createRadialGradient(sx, sunY, 3, sx, sunY, 150);
+    sunGrad.addColorStop(0, `rgba(255, 252, 245, 0.96)`);
+    sunGrad.addColorStop(0.12, `rgba(${rCol}, ${gCol}, ${bCol}, 0.72)`);
+    sunGrad.addColorStop(0.38, `rgba(${rCol}, ${gCol}, ${bCol}, 0.24)`);
     sunGrad.addColorStop(1, 'rgba(255,255,255,0)');
     sctx.fillStyle = sunGrad;
-    sctx.fillRect(0, 0, 512, 256);
+    sctx.fillRect(0, 0, 1024, 512);
 
     skyTex.update();
 
@@ -265,7 +277,7 @@ export class MapBuildContext {
 
     const skyDome = MeshBuilder.CreateSphere(
       'skyDome',
-      { diameter: 240, segments: 18, sideOrientation: Mesh.BACKSIDE },
+      { diameter: 240, segments: 20, sideOrientation: Mesh.BACKSIDE },
       this.scene
     );
     skyDome.material = skyMat;
@@ -275,8 +287,8 @@ export class MapBuildContext {
     skyDome.applyFog = false;
     this.trackNode(skyDome);
 
-    // 2. Procedural IBL Environment Cube Texture (6 RGBA faces for PBR reflections)
-    const size = 48;
+    // 2. High-detail 64x64 Procedural IBL Environment Cube Texture for crisp PBR metallic reflections
+    const size = 64;
     const faces: Uint8Array[] = [];
     const faceDirs = [
       (u: number, v: number) => new Vector3(1, -v, -u), // +X
@@ -286,6 +298,7 @@ export class MapBuildContext {
       (u: number, v: number) => new Vector3(u, -v, 1), // +Z
       (u: number, v: number) => new Vector3(-u, -v, -1), // -Z
     ];
+    const fillDir = new Vector3(-sunTo.x, 0.45, -sunTo.z).normalize();
 
     for (let f = 0; f < 6; f++) {
       const buf = new Uint8Array(size * size * 4);
@@ -300,23 +313,26 @@ export class MapBuildContext {
           let g: number;
           let b: number;
           if (d.y >= 0) {
-            const t = Math.pow(d.y, 0.52);
-            r = horizon.r + (zenith.r - horizon.r) * t;
-            g = horizon.g + (zenith.g - horizon.g) * t;
-            b = horizon.b + (zenith.b - horizon.b) * t;
+            const t = Math.pow(d.y, 0.48);
+            const horizonBoost = Math.pow(1 - d.y, 5) * 0.14;
+            r = horizon.r + (zenith.r - horizon.r) * t + horizonBoost * sunCol.r;
+            g = horizon.g + (zenith.g - horizon.g) * t + horizonBoost * sunCol.g;
+            b = horizon.b + (zenith.b - horizon.b) * t + horizonBoost * sunCol.b;
           } else {
-            const t = Math.min(1, Math.pow(-d.y, 0.5));
-            r = horizon.r * 0.8 + (ground.r - horizon.r * 0.8) * t;
-            g = horizon.g * 0.8 + (ground.g - horizon.g * 0.8) * t;
-            b = horizon.b * 0.8 + (ground.b - horizon.b * 0.8) * t;
+            const t = Math.min(1, Math.pow(-d.y, 0.48));
+            r = horizon.r * 0.72 + (ground.r - horizon.r * 0.72) * t;
+            g = horizon.g * 0.72 + (ground.g - horizon.g * 0.72) * t;
+            b = horizon.b * 0.72 + (ground.b - horizon.b * 0.72) * t;
           }
 
-          // Directional sun specular highlight lobe in IBL
+          // Sharp primary sun specular lobe + broad atmospheric scatter + cool counter-sky bounce
           const sunDot = Math.max(0, Vector3.Dot(d, sunTo));
-          const sunLobe = Math.pow(sunDot, 16) * 1.28;
-          r = Math.min(1, r + sunCol.r * sunLobe);
-          g = Math.min(1, g + sunCol.g * sunLobe);
-          b = Math.min(1, b + sunCol.b * sunLobe);
+          const sunLobe = Math.pow(sunDot, 22) * 1.45 + Math.pow(sunDot, 4) * 0.22;
+          const fillDot = Math.max(0, Vector3.Dot(d, fillDir));
+          const fillLobe = Math.pow(fillDot, 5) * 0.18;
+          r = Math.min(1, r + sunCol.r * sunLobe + zenith.r * fillLobe);
+          g = Math.min(1, g + sunCol.g * sunLobe + zenith.g * fillLobe);
+          b = Math.min(1, b + sunCol.b * sunLobe + zenith.b * fillLobe);
 
           const idx = (y * size + x) * 4;
           buf[idx] = Math.round(r * 255);
@@ -341,7 +357,7 @@ export class MapBuildContext {
       )
     );
     this.scene.environmentTexture = envCube;
-    this.scene.environmentIntensity = 1.12;
+    this.scene.environmentIntensity = 1.24;
   }
 
   public createNormalTexture(
@@ -417,6 +433,29 @@ export class MapBuildContext {
     mat.albedoColor = Color3.FromHexString(hex);
     mat.metallic = metallic;
     mat.roughness = roughness;
+    return this.trackMaterial(mat);
+  }
+
+  public createProceduralMaterial(
+    name: string,
+    kind: SurfacePresetId,
+    options: SurfaceTextureOptions & {
+      bumpLevel?: number;
+      clearCoat?: number;
+      environmentIntensity?: number;
+    } = {}
+  ): PBRMaterial {
+    const mat = new PBRMaterial(name, this.scene);
+    const textures = applyProceduralSurfaceToMaterial(this.scene, mat, name, kind, {
+      size: options.size ?? 128,
+      ...options,
+    });
+    for (const tex of textures) {
+      this.trackTexture(tex);
+    }
+    if (options.environmentIntensity !== undefined) {
+      mat.environmentIntensity = options.environmentIntensity;
+    }
     return this.trackMaterial(mat);
   }
 
@@ -853,6 +892,13 @@ export class MapBuildContext {
       rot,
       collisions: false,
       castShadow: false,
+      pickable: false,
+    });
+    this.createBox(`${name}_c1_base`, new Vector3(pos.x, 0.06, pos.z), new Vector3(1.56, 0.12, 1.56), trimMat, {
+      rot,
+      collisions: false,
+      castShadow: false,
+      pickable: false,
     });
     this.createBox(
       `${name}_c2`,
@@ -868,5 +914,114 @@ export class MapBuildContext {
       trimMat,
       { rot: new Vector3(0, yawRad - 0.25, 0) }
     );
+  }
+
+  public buildPipeRun(
+    name: string,
+    start: Vector3,
+    end: Vector3,
+    diameter: number,
+    pipeMat: Material,
+    collarMat: Material
+  ): void {
+    const delta = end.subtract(start);
+    const len = delta.length();
+    if (len < 0.1) return;
+    const mid = start.add(delta.scale(0.5));
+    const yaw = Math.atan2(delta.x, delta.z);
+    const horiz = Math.hypot(delta.x, delta.z);
+    const pitch = Math.atan2(delta.y, horiz);
+
+    const pipe = MeshBuilder.CreateCylinder(
+      name,
+      { height: len, diameter, tessellation: 12 },
+      this.scene
+    );
+    pipe.position.copyFrom(mid);
+    pipe.rotation.set(Math.PI * 0.5 - pitch, yaw, 0);
+    pipe.material = pipeMat;
+    pipe.checkCollisions = false;
+    pipe.isPickable = false;
+    pipe.receiveShadows = true;
+    this.trackNode(pipe);
+
+    for (const frac of [0.22, 0.5, 0.78]) {
+      const cPos = start.add(delta.scale(frac));
+      const collar = MeshBuilder.CreateCylinder(
+        `${name}_collar_${frac}`,
+        { height: 0.14, diameter: diameter * 1.24, tessellation: 12 },
+        this.scene
+      );
+      collar.position.copyFrom(cPos);
+      collar.rotation.set(Math.PI * 0.5 - pitch, yaw, 0);
+      collar.material = collarMat;
+      collar.checkCollisions = false;
+      collar.isPickable = false;
+      this.trackNode(collar);
+    }
+  }
+
+  public buildBarrelCluster(
+    name: string,
+    pos: Vector3,
+    drumMat: Material,
+    bandMat: Material
+  ): void {
+    const offsets: Array<[number, number, number]> = [
+      [0, 0, 1.0],
+      [0.72, 0.34, 1.0],
+      [-0.25, 0.76, 0.94],
+    ];
+    offsets.forEach(([ox, oz, scale], i) => {
+      const h = 1.02 * scale;
+      const d = 0.62 * scale;
+      const drum = MeshBuilder.CreateCylinder(
+        `${name}_d_${i}`,
+        { height: h, diameter: d, tessellation: 14 },
+        this.scene
+      );
+      drum.position.set(pos.x + ox, pos.y + h * 0.5, pos.z + oz);
+      drum.material = drumMat;
+      drum.checkCollisions = false;
+      drum.isPickable = false;
+      drum.receiveShadows = true;
+      if (this.shadowGenerator) this.shadowGenerator.addShadowCaster(drum);
+      this.trackNode(drum);
+
+      for (const ry of [-0.24 * h, 0.24 * h]) {
+        const rib = MeshBuilder.CreateCylinder(
+          `${name}_rib_${i}_${ry}`,
+          { height: 0.05, diameter: d * 1.04, tessellation: 14 },
+          this.scene
+        );
+        rib.position.set(pos.x + ox, pos.y + h * 0.5 + ry, pos.z + oz);
+        rib.material = bandMat;
+        rib.checkCollisions = false;
+        rib.isPickable = false;
+        this.trackNode(rib);
+      }
+    });
+  }
+
+  public buildVentUnit(
+    name: string,
+    pos: Vector3,
+    bodyMat: Material,
+    grilleMat: Material
+  ): void {
+    this.createBox(`${name}_box`, new Vector3(pos.x, pos.y + 0.35, pos.z), new Vector3(1.1, 0.7, 1.0), bodyMat, {
+      collisions: false,
+      pickable: false,
+    });
+    const fan = MeshBuilder.CreateCylinder(
+      `${name}_fan`,
+      { height: 0.14, diameter: 0.66, tessellation: 14 },
+      this.scene
+    );
+    fan.position.set(pos.x, pos.y + 0.74, pos.z);
+    fan.material = grilleMat;
+    fan.checkCollisions = false;
+    fan.isPickable = false;
+    this.trackNode(fan);
   }
 }

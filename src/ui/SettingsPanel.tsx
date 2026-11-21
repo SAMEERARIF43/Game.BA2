@@ -1,6 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { Maximize2, Minimize2, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+import { Keyboard, Maximize2, Minimize2, RotateCcw, Volume2, VolumeX } from 'lucide-react';
 import { GameSettings, GraphicsQuality } from '../game/types';
+import {
+  DEFAULT_KEYBINDINGS,
+  formatKeyCode,
+  isValidKeyCode,
+  KEYBIND_CATEGORIES,
+  KEYBIND_DEFINITIONS,
+  KeybindAction,
+  rebindKey,
+  RESERVED_KEY_CODES,
+} from '../settings/keybindings';
 import {
   isFullscreenActive,
   isFullscreenSupported,
@@ -14,7 +24,7 @@ interface SettingsPanelProps {
   onResetSettings?: () => void;
 }
 
-type SettingsTab = 'controls' | 'graphics' | 'audio' | 'match';
+type SettingsTab = 'aim' | 'controls' | 'graphics' | 'audio' | 'match';
 
 const QUALITY_OPTIONS: { id: GraphicsQuality; label: string; detail: string }[] = [
   { id: 'LOW', label: 'LOW', detail: 'Shadows off · reduced FX' },
@@ -24,7 +34,8 @@ const QUALITY_OPTIONS: { id: GraphicsQuality; label: string; detail: string }[] 
 
 const RANGE_CLASS = 'mt-2 w-full cursor-pointer accent-amber-400';
 const LABEL_CLASS = 'text-xs text-slate-300';
-const FOCUS_CLASS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b]';
+const FOCUS_CLASS =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e131b]';
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   settings,
@@ -34,9 +45,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('controls');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => isFullscreenActive());
+  const [listeningAction, setListeningAction] = useState<KeybindAction | null>(null);
+  const [bindNotice, setBindNotice] = useState<string | null>(null);
   const fullscreenSupported = isFullscreenSupported();
+  const keybindings = settings.keybindings ?? DEFAULT_KEYBINDINGS;
+
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'controls', label: 'Controls' },
+    { id: 'aim', label: 'Aim & Mouse' },
     { id: 'graphics', label: 'Graphics' },
     { id: 'audio', label: 'Audio' },
     ...(!inMatch ? [{ id: 'match' as const, label: 'Match' }] : []),
@@ -52,15 +68,73 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    if (activeTab !== 'controls' && listeningAction !== null) {
+      setListeningAction(null);
+    }
+  }, [activeTab, listeningAction]);
+
+  useEffect(() => {
+    if (!listeningAction) return;
+
+    const onCaptureKey = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.code === 'Escape') {
+        setListeningAction(null);
+        setBindNotice('Rebind cancelled.');
+        return;
+      }
+
+      if (RESERVED_KEY_CODES.has(event.code) || !isValidKeyCode(event.code)) {
+        setListeningAction(null);
+        setBindNotice(`${formatKeyCode(event.code)} is a reserved system key.`);
+        return;
+      }
+
+      const { keybindings: nextBindings, swappedWith } = rebindKey(
+        keybindings,
+        listeningAction,
+        event.code
+      );
+      onUpdateSettings({
+        ...settings,
+        keybindings: nextBindings,
+      });
+
+      const currentDef = KEYBIND_DEFINITIONS.find((d) => d.action === listeningAction);
+      if (swappedWith) {
+        const swappedDef = KEYBIND_DEFINITIONS.find((d) => d.action === swappedWith);
+        setBindNotice(
+          `Bound [${formatKeyCode(event.code)}] to ${currentDef?.label ?? listeningAction} (swapped with ${swappedDef?.label ?? swappedWith}).`
+        );
+      } else {
+        setBindNotice(
+          `Bound [${formatKeyCode(event.code)}] to ${currentDef?.label ?? listeningAction}.`
+        );
+      }
+      setListeningAction(null);
+    };
+
+    window.addEventListener('keydown', onCaptureKey, { capture: true });
+    return () => window.removeEventListener('keydown', onCaptureKey, { capture: true });
+  }, [keybindings, listeningAction, onUpdateSettings, settings]);
+
   const handleToggleFullscreen = () => {
     void toggleFullscreen().then((active) => setIsFullscreen(active));
   };
 
-  const renderToggle = (
-    label: string,
-    checked: boolean,
-    onChange: () => void
-  ) => (
+  const handleResetKeybindings = () => {
+    setListeningAction(null);
+    onUpdateSettings({
+      ...settings,
+      keybindings: { ...DEFAULT_KEYBINDINGS },
+    });
+    setBindNotice('Keybindings restored to defaults.');
+  };
+
+  const renderToggle = (label: string, checked: boolean, onChange: () => void) => (
     <button
       type="button"
       role="switch"
@@ -114,7 +188,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     <div className="space-y-4">
       <div
         className={`grid gap-1 border-b border-white/10 pb-3 ${
-          inMatch ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'
+          inMatch ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-5'
         }`}
         role="tablist"
         aria-label="Settings categories"
@@ -162,6 +236,86 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         className="max-h-[min(56vh,480px)] space-y-3 overflow-y-auto pr-1"
       >
         {activeTab === 'controls' && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border border-white/10 bg-black/30 px-3 py-2">
+              <div className="flex items-center gap-2 text-xs text-slate-300">
+                <Keyboard className="h-3.5 w-3.5 text-amber-400" />
+                <span>
+                  {listeningAction
+                    ? 'Press any key to assign · [Esc] to cancel'
+                    : 'Click any binding to assign a new key (duplicates swap automatically)'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleResetKeybindings}
+                className={`cursor-pointer border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-slate-300 transition-colors hover:bg-white/10 hover:text-white ${FOCUS_CLASS}`}
+              >
+                Reset Keys
+              </button>
+            </div>
+
+            {bindNotice && (
+              <div
+                className="border border-amber-400/35 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-200"
+                role="status"
+              >
+                {bindNotice}
+              </div>
+            )}
+
+            {KEYBIND_CATEGORIES.map((category) => {
+              const items = KEYBIND_DEFINITIONS.filter((d) => d.category === category.id);
+              return (
+                <div key={category.id} className="space-y-1.5">
+                  <div className="font-display text-[11px] font-bold tracking-wider text-slate-400 uppercase">
+                    {category.title}
+                  </div>
+                  <div className="space-y-1">
+                    {items.map((def) => {
+                      const isListening = listeningAction === def.action;
+                      const currentCode = keybindings[def.action] ?? DEFAULT_KEYBINDINGS[def.action];
+                      const isModified = currentCode !== DEFAULT_KEYBINDINGS[def.action];
+                      return (
+                        <div
+                          key={def.action}
+                          className="flex items-center justify-between gap-3 border border-white/10 bg-black/25 px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-slate-100">{def.label}</div>
+                            <div className="text-[10px] text-slate-400">{def.description}</div>
+                          </div>
+                          <button
+                            type="button"
+                            aria-label={`Rebind ${def.label}, current key ${formatKeyCode(currentCode)}`}
+                            aria-pressed={isListening}
+                            onClick={() => {
+                              setBindNotice(null);
+                              setListeningAction((prev) =>
+                                prev === def.action ? null : def.action
+                              );
+                            }}
+                            className={`min-w-[92px] shrink-0 cursor-pointer border px-2.5 py-1.5 font-mono-tabular text-xs font-bold transition-colors ${FOCUS_CLASS} ${
+                              isListening
+                                ? 'animate-pulse border-amber-400 bg-amber-400/20 text-amber-200'
+                                : isModified
+                                  ? 'border-sky-400/60 bg-sky-500/15 text-sky-200 hover:border-sky-300'
+                                  : 'border-white/15 bg-white/5 text-white hover:border-amber-400/60 hover:text-amber-200'
+                            }`}
+                          >
+                            {isListening ? 'PRESS KEY...' : formatKeyCode(currentCode)}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {activeTab === 'aim' && (
           <>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {renderSlider(
@@ -381,7 +535,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         <div className="flex justify-end border-t border-white/10 pt-3">
           <button
             type="button"
-            onClick={onResetSettings}
+            onClick={() => {
+              setListeningAction(null);
+              setBindNotice(null);
+              onResetSettings();
+            }}
             className={`inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-white/10 hover:text-white ${FOCUS_CLASS}`}
           >
             <RotateCcw className="h-3.5 w-3.5" />

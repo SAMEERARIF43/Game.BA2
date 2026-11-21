@@ -1,4 +1,5 @@
 import { MapId, TeamId } from '../maps/types';
+import { KeybindingsConfig } from '../settings/keybindings';
 
 export type GunId = 'shotgun' | 'ak47' | 'smg' | 'sniper' | 'pistol';
 
@@ -489,4 +490,5 @@ export interface GameSettings {
   selectedCharacterId: CharacterId;
   selectedGunId: GunId;
   knifeCharmId: KnifeCharmId;
+  keybindings: KeybindingsConfig;
 }

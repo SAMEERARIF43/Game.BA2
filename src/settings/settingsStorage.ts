@@ -4,6 +4,7 @@ import {
   normalizeKnifeCharmId,
 } from '../game/loadoutRules';
 import { GameSettings, GraphicsQuality } from '../game/types';
+import { DEFAULT_KEYBINDINGS, validateKeybindings } from './keybindings';
 
 export const SETTINGS_STORAGE_KEY = 'strike_force_profile_v1';
 const LEGACY_CALLSIGN_KEY = 'sf_callsign';
@@ -28,6 +29,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   selectedCharacterId: 'assault',
   selectedGunId: 'ak47',
   knifeCharmId: 'tactical_tag',
+  keybindings: { ...DEFAULT_KEYBINDINGS },
 };
 
 function clampNumber(val: unknown, min: number, max: number, fallback: number): number {
@@ -77,6 +79,7 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     ),
     selectedGunId: normalizeGunId(obj.selectedGunId, fallback.selectedGunId ?? 'ak47'),
     knifeCharmId: normalizeKnifeCharmId(obj.knifeCharmId, fallback.knifeCharmId ?? 'tactical_tag'),
+    keybindings: validateKeybindings(obj.keybindings, fallback.keybindings ?? DEFAULT_KEYBINDINGS),
   };
 }
 
@@ -124,6 +127,9 @@ export function savePersistedSettings(settings: GameSettings): GameSettings {
 }
 
 export function resetPersistedSettings(): GameSettings {
-  const reset: GameSettings = { ...DEFAULT_SETTINGS };
+  const reset: GameSettings = {
+    ...DEFAULT_SETTINGS,
+    keybindings: { ...DEFAULT_KEYBINDINGS },
+  };
   return savePersistedSettings(reset);
 }

@@ -1,4 +1,4 @@
-import { Color3, DynamicTexture, Material, MeshBuilder, PBRMaterial, Vector3 } from '@babylonjs/core';
+import { Material, MeshBuilder, Vector3 } from '@babylonjs/core';
 import { MapBuildContext } from './mapHelpers';
 import { MapDefinition } from './types';
 
@@ -20,6 +20,8 @@ export const FOREST_MAP_DEF: MapDefinition = {
   ambientIntensity: 0.58,
   ambientGroundHex: '#233321',
   accentHex: '#10b981',
+  exposure: 1.1,
+  contrast: 1.18,
   blueSpawns: [
     new Vector3(-21, 1.0, -21),
     new Vector3(-11, 1.0, -23),
@@ -57,64 +59,67 @@ export const FOREST_MAP_DEF: MapDefinition = {
 };
 
 export function buildForestMap(ctx: MapBuildContext): void {
-  const groundTex = ctx.trackTexture(
-    new DynamicTexture('forestGroundTex', { width: 512, height: 512 }, ctx.scene, true)
-  );
-  const gctx = groundTex.getContext();
-  gctx.fillStyle = '#33442e';
-  gctx.fillRect(0, 0, 512, 512);
-  for (let i = 0; i < 7000; i++) {
-    const roll = Math.random();
-    gctx.fillStyle =
-      roll > 0.65
-        ? 'rgba(84, 114, 64, 0.38)'
-        : roll > 0.3
-          ? 'rgba(62, 49, 34, 0.32)'
-          : 'rgba(20, 32, 22, 0.32)';
-    gctx.fillRect(Math.random() * 512, Math.random() * 512, 3, 3);
-  }
-  groundTex.update();
-  groundTex.uScale = 12;
-  groundTex.vScale = 12;
-
-  const groundBump = ctx.createNormalTexture(
-    'forestGroundNrm',
-    128,
-    (u, v) => Math.sin(u * 26) * Math.cos(v * 26) * 0.22 + Math.sin((u + v) * 52) * 0.12,
-    2.2,
-    12,
-    12
-  );
-
-  const groundMat = ctx.trackMaterial(new PBRMaterial('forestGroundMat', ctx.scene));
-  groundMat.albedoColor = Color3.White();
-  groundMat.albedoTexture = groundTex;
-  groundMat.bumpTexture = groundBump;
-  groundMat.metallic = 0.0;
-  groundMat.roughness = 0.92;
-
-  const barkMat = ctx.createGridTextureMaterial('forestBark', '#533b29', '#322216', 2, 4, true, {
-    metallic: 0.0,
-    roughness: 0.92,
-    bumpStrength: 3.0,
+  const groundMat = ctx.createProceduralMaterial('forestGroundMat', 'meadow', {
+    size: 256,
+    baseHex: '#374a30',
+    accentHex: '#23301d',
+    uScale: 12,
+    vScale: 12,
+    bumpLevel: 0.95,
   });
-  const pineMat = ctx.createGridTextureMaterial('forestPine', '#254a32', '#173120', 3, 3, true, {
-    metallic: 0.0,
-    roughness: 0.86,
+  const barkMat = ctx.createProceduralMaterial('forestBark', 'bark', {
+    size: 128,
+    baseHex: '#563c28',
+    accentHex: '#2d1e13',
+    uScale: 2,
+    vScale: 4,
+    bumpLevel: 1.05,
   });
-  const rockMat = ctx.createGridTextureMaterial('forestRock', '#60676b', '#3e4448', 2, 2, true, {
-    metallic: 0.04,
-    roughness: 0.84,
-    bumpStrength: 2.8,
+  const pineMat = ctx.createProceduralMaterial('forestPine', 'meadow', {
+    size: 128,
+    baseHex: '#264d34',
+    accentHex: '#152e1e',
+    uScale: 3,
+    vScale: 3,
+    bumpLevel: 0.85,
   });
-  const cabinWoodMat = ctx.createGridTextureMaterial('forestCabinWood', '#755336', '#4a321e', 3, 2, true, {
-    metallic: 0.02,
-    roughness: 0.8,
+  const rockMat = ctx.createProceduralMaterial('forestRock', 'rock', {
+    size: 128,
+    baseHex: '#62696d',
+    accentHex: '#3d4347',
+    uScale: 2,
+    vScale: 2,
+    bumpLevel: 1.0,
   });
-  const roofMat = ctx.createFlatMaterial('forestRoof', '#2a322d', 0.14, 0.74);
-  const perimeterMat = ctx.createGridTextureMaterial('forestFence', '#46392b', '#2b2219', 4, 2, true, {
-    metallic: 0.02,
-    roughness: 0.88,
+  const cabinWoodMat = ctx.createProceduralMaterial('forestCabinWood', 'timber', {
+    size: 128,
+    baseHex: '#775537',
+    accentHex: '#4a321e',
+    uScale: 3,
+    vScale: 2,
+    bumpLevel: 0.9,
+  });
+  const roofMat = ctx.createProceduralMaterial('forestRoof', 'anodizedMetal', {
+    size: 128,
+    baseHex: '#2d3731',
+    accentHex: '#1b221e',
+    metallicOverride: 0.48,
+    uScale: 3,
+    vScale: 3,
+  });
+  const perimeterMat = ctx.createProceduralMaterial('forestFence', 'timber', {
+    size: 128,
+    baseHex: '#483a2c',
+    accentHex: '#2a2017',
+    uScale: 4,
+    vScale: 2,
+  });
+  const crateSupplyMat = ctx.createProceduralMaterial('forestCrate', 'crate', {
+    size: 128,
+    baseHex: '#634f35',
+    accentHex: '#3c2e1c',
+    uScale: 2,
+    vScale: 2,
   });
   const lanternGlow = ctx.createEmissiveMaterial('forestLanternGlow', '#ffbb55', 2.2);
 
@@ -124,9 +129,21 @@ export function buildForestMap(ctx: MapBuildContext): void {
   });
   ctx.createPerimeterWalls(29, 4.5, perimeterMat);
 
-  // Two Tactical Wooden Cabins with pitched gable roofs & warm entrance lanterns
-  buildWoodenCabin(ctx, 'cabin_w', new Vector3(-13.5, 0, 0), cabinWoodMat, roofMat, lanternGlow);
-  buildWoodenCabin(ctx, 'cabin_e', new Vector3(13.5, 0, 0), cabinWoodMat, roofMat, lanternGlow);
+  // Two Tactical Wooden Cabins with pitched gable roofs, stone chimneys, porch steps & entrance lanterns
+  buildWoodenCabin(ctx, 'cabin_w', new Vector3(-13.5, 0, 0), cabinWoodMat, roofMat, rockMat, lanternGlow);
+  buildWoodenCabin(ctx, 'cabin_e', new Vector3(13.5, 0, 0), cabinWoodMat, roofMat, rockMat, lanternGlow);
+
+  // Supply barrels & crates beside cabins (purely visual non-colliding barrels / standard crate clusters)
+  ctx.buildBarrelCluster('forest_drums_w', new Vector3(-16.8, 0, 4.2), roofMat, cabinWoodMat);
+  ctx.buildBarrelCluster('forest_drums_e', new Vector3(16.8, 0, -4.2), roofMat, cabinWoodMat);
+  ctx.createBox('forest_woodpile_w', new Vector3(-16.6, 0.25, -4.1), new Vector3(1.1, 0.5, 0.9), crateSupplyMat, {
+    collisions: false,
+    pickable: false,
+  });
+  ctx.createBox('forest_woodpile_e', new Vector3(16.6, 0.25, 4.1), new Vector3(1.1, 0.5, 0.9), crateSupplyMat, {
+    collisions: false,
+    pickable: false,
+  });
 
   // Center Granite Rock Outcrop & Sniper Cover Boulders
   buildRockCluster(ctx, 'rock_center', new Vector3(0, 0, 0), rockMat, 1.25);
@@ -225,6 +242,7 @@ function buildPineTree(
     cone.rotation.y = t.rot;
     cone.material = pineMat;
     cone.checkCollisions = false;
+    cone.isPickable = false;
     cone.receiveShadows = true;
     if (ctx.shadowGenerator) ctx.shadowGenerator.addShadowCaster(cone);
     ctx.trackNode(cone);
@@ -257,7 +275,7 @@ function buildRockCluster(
     new Vector3(origin.x - 0.6 * scale, 1.35 * scale, origin.z + 0.5 * scale),
     new Vector3(1.4 * scale, 0.9 * scale, 1.3 * scale),
     mat,
-    { rot: new Vector3(0.14, -0.2, 0.12), collisions: false }
+    { rot: new Vector3(0.14, -0.2, 0.12), collisions: false, pickable: false }
   );
 }
 
@@ -267,6 +285,7 @@ function buildWoodenCabin(
   origin: Vector3,
   woodMat: Material,
   roofMat: Material,
+  rockMat: Material,
   lanternMat: Material
 ): void {
   const w = 5.4;
@@ -276,6 +295,7 @@ function buildWoodenCabin(
   ctx.createBox(`${prefix}_roof`, new Vector3(origin.x, h + 0.15, origin.z), new Vector3(w + 0.7, 0.28, d + 0.7), roofMat);
   ctx.createBox(`${prefix}_ridge`, new Vector3(origin.x, h + 0.55, origin.z), new Vector3(w * 0.55, 0.52, d + 0.5), roofMat, {
     collisions: false,
+    pickable: false,
   });
   ctx.createBox(`${prefix}_wall_w`, new Vector3(origin.x - w / 2 + 0.15, h / 2, origin.z), new Vector3(0.3, h, d), woodMat);
   ctx.createBox(`${prefix}_wall_e`, new Vector3(origin.x + w / 2 - 0.15, h / 2, origin.z), new Vector3(0.3, h, d), woodMat);
@@ -285,13 +305,35 @@ function buildWoodenCabin(
   ctx.createBox(`${prefix}_s_l`, new Vector3(origin.x - 1.7, h / 2, origin.z - d / 2 + 0.15), new Vector3(2.0, h, 0.3), woodMat);
   ctx.createBox(`${prefix}_s_r`, new Vector3(origin.x + 1.7, h / 2, origin.z - d / 2 + 0.15), new Vector3(2.0, h, 0.3), woodMat);
 
+  // Stone chimney, window shutters & timber porch lintels (non-colliding, non-pickable)
+  ctx.createBox(`${prefix}_chimney`, new Vector3(origin.x + 1.65, h + 1.05, origin.z - 1.4), new Vector3(0.68, 1.5, 0.68), rockMat, {
+    collisions: false,
+    pickable: false,
+  });
+  ctx.createBox(`${prefix}_chimney_cap`, new Vector3(origin.x + 1.65, h + 1.84, origin.z - 1.4), new Vector3(0.82, 0.12, 0.82), roofMat, {
+    collisions: false,
+    pickable: false,
+  });
+  for (const dz of [-1.4, 1.4]) {
+    ctx.createBox(`${prefix}_shutter_w_${dz}`, new Vector3(origin.x - w / 2 - 0.04, 1.65, origin.z + dz), new Vector3(0.1, 0.9, 1.1), roofMat, {
+      collisions: false,
+      pickable: false,
+    });
+    ctx.createBox(`${prefix}_shutter_e_${dz}`, new Vector3(origin.x + w / 2 + 0.04, 1.65, origin.z + dz), new Vector3(0.1, 0.9, 1.1), roofMat, {
+      collisions: false,
+      pickable: false,
+    });
+  }
+
   // Warm entrance lanterns beside doorways
   ctx.createBox(`${prefix}_lan_n`, new Vector3(origin.x + 1.0, 2.25, origin.z + d / 2 + 0.08), new Vector3(0.18, 0.24, 0.18), lanternMat, {
     collisions: false,
     castShadow: false,
+    pickable: false,
   });
   ctx.createBox(`${prefix}_lan_s`, new Vector3(origin.x - 1.0, 2.25, origin.z - d / 2 - 0.08), new Vector3(0.18, 0.24, 0.18), lanternMat, {
     collisions: false,
     castShadow: false,
+    pickable: false,
   });
 }
