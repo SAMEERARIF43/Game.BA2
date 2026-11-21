@@ -321,48 +321,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </>
             )}
 
-            {hud.hitMarker && (
-              <div
-                key={hud.hitMarker.id}
-                className="absolute inset-0 flex items-center justify-center pointer-events-none"
-              >
-                {hud.hitMarker.killed ? (
-                  <div className="relative flex scale-125 animate-[hitmarker-pop_140ms_ease-out] items-center justify-center">
-                    <span className="absolute h-[3px] w-6 rotate-45 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.9)]" />
-                    <span className="absolute h-[3px] w-6 -rotate-45 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.9)]" />
-                    <span className="absolute h-2 w-2 rounded-full bg-red-400 shadow-[0_0_6px_rgba(239,68,68,1)]" />
-                  </div>
-                ) : (
-                  <>
-                    <span
-                      className="absolute h-[2px] w-4 rotate-45"
-                      style={{
-                        backgroundColor:
-                          hud.hitMarker.zone === 'head' ? '#f59e0b' : '#ffffff',
-                      }}
-                    />
-                    <span
-                      className="absolute h-[2px] w-4 -rotate-45"
-                      style={{
-                        backgroundColor:
-                          hud.hitMarker.zone === 'head' ? '#f59e0b' : '#ffffff',
-                      }}
-                    />
-                    <span
-                      className="absolute h-1 w-1 rounded-full animate-[hitmarker-pop_140ms_ease-out]"
-                      style={{
-                        backgroundColor: hud.hitMarker.zone === 'head' ? '#f59e0b' : '#ffffff',
-                        boxShadow:
-                          hud.hitMarker.zone === 'head'
-                            ? '0 0 8px rgba(245,158,11,0.9)'
-                            : '0 0 6px rgba(255,255,255,0.8)',
-                      }}
-                    />
-                  </>
-                )}
-              </div>
-            )}
-
             <div className="absolute top-8 flex flex-col items-center gap-1 whitespace-nowrap">
               {hud.isReloading && (
                 <div className="flex flex-col items-center gap-1 border border-white/10 bg-black/60 px-2.5 py-1">
@@ -388,6 +346,61 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Directional Hitmarker Pulse (visible across hipfire, Red Dot ADS, and Sniper Scope) */}
+      {hud.isPointerLocked && hud.isAlive && !hud.showScoreboard && hud.hitMarker && (
+        <div
+          key={hud.hitMarker.id}
+          className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+        >
+          {(() => {
+            const isKill = hud.hitMarker.killed;
+            const isHead = hud.hitMarker.zone === 'head';
+            const tickColor = isKill ? '#ef4444' : isHead ? '#fbbf24' : '#f8fafc';
+            const glowColor = isKill
+              ? 'rgba(239, 68, 68, 0.92)'
+              : isHead
+                ? 'rgba(251, 191, 36, 0.88)'
+                : 'rgba(248, 250, 252, 0.72)';
+            const tickLength = isKill ? 12 : isHead ? 10 : 8;
+            const tickThickness = isKill ? 2.5 : 2;
+            const gapOffset = isKill ? 8 : 6;
+            const animClass = isKill
+              ? 'animate-[hitmarker-kill-pop_165ms_ease-out]'
+              : 'animate-[hitmarker-pop_140ms_ease-out]';
+            const armAngles = [-45, 45, 135, -135];
+
+            return (
+              <div className={`relative flex items-center justify-center ${animClass}`}>
+                {armAngles.map((deg) => (
+                  <span
+                    key={deg}
+                    className="absolute block rounded-full"
+                    style={{
+                      width: `${tickThickness}px`,
+                      height: `${tickLength}px`,
+                      backgroundColor: tickColor,
+                      boxShadow: `0 0 ${isKill ? 9 : 6}px ${glowColor}`,
+                      transform: `rotate(${deg}deg) translateY(-${gapOffset + tickLength / 2}px)`,
+                    }}
+                  />
+                ))}
+                {(isKill || isHead) && (
+                  <span
+                    className="absolute rounded-full"
+                    style={{
+                      width: isKill ? '5px' : '4px',
+                      height: isKill ? '5px' : '4px',
+                      backgroundColor: isHead ? '#fbbf24' : '#fca5a5',
+                      boxShadow: `0 0 8px ${glowColor}`,
+                    }}
+                  />
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 

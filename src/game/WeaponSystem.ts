@@ -2,6 +2,7 @@ import {
   AbstractMesh,
   BaseTexture,
   Color3,
+  Constants,
   Material,
   Mesh,
   MeshBuilder,
@@ -17,6 +18,13 @@ import {
 import { BotManager } from '../bots/BotManager';
 import { TeamId } from '../maps/types';
 import { AudioEngine } from './AudioEngine';
+import {
+  CasingKind,
+  PooledTracerRingBuffer,
+  computeAdsAttenuatedScale,
+  getVfxQualityBudget,
+  getWeaponFeelProfile,
+} from './combatVfx';
 import {
   normalizeGunId,
   normalizeKnifeCharmId,
@@ -37,17 +45,45 @@ import {
   WeaponRuntimeState,
 } from './types';
 
-interface TransientTracer {
+const CASING_POOL_CAPACITY = 24;
+const IMPACT_POOL_CAPACITY = 64;
+const DUST_POOL_CAPACITY = 24;
+const DECAL_POOL_CAPACITY = 48;
+const KNIFE_TRAIL_CAPACITY = 6;
+
+type ImpactKind = 'environment' | 'character' | 'knife_env' | 'knife_character';
+
+interface PooledCasingSlot {
   mesh: Mesh;
+  active: boolean;
+  vel: Vector3;
+  spin: Vector3;
+  life: number;
+  maxLife: number;
+  floorY: number;
+}
+
+interface PooledImpactSlot {
+  mesh: Mesh;
+  active: boolean;
+  vel: Vector3;
+  life: number;
+  maxLife: number;
+  gravity: number;
+  baseScale: number;
+}
+
+interface PooledDustSlot {
+  mesh: Mesh;
+  active: boolean;
+  vel: Vector3;
   life: number;
   maxLife: number;
 }
 
-interface EjectedCasing {
+interface PooledDecalSlot {
   mesh: Mesh;
-  vel: Vector3;
-  spin: Vector3;
-  life: number;
+  active: boolean;
 }
 
 interface WeaponModelRig {
@@ -86,11 +122,16 @@ export class WeaponSystem {
   private charmPivot: TransformNode | null = null;
   private charmRoots = new Map<KnifeCharmId, TransformNode>();
 
-  private muzzleFlashMesh: Mesh;
+  private muzzleFlashRoot: TransformNode;
+  private muzzleFlashMeshes: Mesh[] = [];
+  private muzzleFlashMat!: StandardMaterial;
+  private muzzleFlashTimer = 0;
+  private muzzleFlashMaxTimer = 0.045;
+  private muzzleFlashBaseScale = 1;
   private muzzleLight: PointLight;
+  private muzzleLightPeak = 0;
   private vmFillLight: PointLight;
   private vmRimLight: PointLight;
-  private muzzleFlashTimer = 0;
 
   private readonly rangeRay = new Ray(Vector3.Zero(), new Vector3(0, 0, 1), 160);
   private readonly forwardAxis = new Vector3(0, 0, 1);
@@ -128,6 +169,14 @@ export class WeaponSystem {
   private spreadBloom = 0;
   private kickBackZ = 0;
   private kickRotX = 0;
+  private kickYaw = 0;
+  private kickRoll = 0;
+  private smgJitterDir = 1;
+  private vmLandDip = 0;
+  private cycleImpulseTimer = 0;
+  private cycleImpulseWeapon: WeaponId | null = null;
+  private pendingCasingTimer = 0;
+  private pendingCasingWeapon: WeaponId | null = null;
   private bobTimer = 0;
   private swayRoll = 0;
   private swayPitch = 0;
@@ -139,17 +188,30 @@ export class WeaponSystem {
   private viewModelVisible = false;
 
   private graphicsQuality: GraphicsQuality = 'HIGH';
-  private tracers: TransientTracer[] = [];
-  private casings: EjectedCasing[] = [];
-  private impacts: { mesh: Mesh; vel: Vector3; life: number; maxLife: number }[] = [];
-  private bulletDecals: Mesh[] = [];
+  private vfxPoolRoot: TransformNode;
+  private tracerPool: PooledTracerRingBuffer;
+  private casingPool: PooledCasingSlot[] = [];
+  private casingCursor = 0;
+  private impactPool: PooledImpactSlot[] = [];
+  private impactCursor = 0;
+  private dustPool: PooledDustSlot[] = [];
+  private dustCursor = 0;
+  private decalPool: PooledDecalSlot[] = [];
+  private decalCursor = 0;
+  private knifeTrailMeshes: Mesh[] = [];
+
   private decalMaterial: StandardMaterial;
   private tracerMaterial: StandardMaterial;
   private tracerSuppMaterial: StandardMaterial;
   private brassMaterial: PBRMaterial;
+  private shotgunHullMaterial: PBRMaterial;
   private impactMatTarget: StandardMaterial;
+  private impactMatHeadshot: StandardMaterial;
   private impactMatSparkA: StandardMaterial;
   private impactMatSparkB: StandardMaterial;
+  private impactMatKnifeClang: StandardMaterial;
+  private dustMaterial: StandardMaterial;
+  private knifeTrailMaterial: StandardMaterial;
   private materialsToDispose: Material[] = [];
   private texturesToDispose: BaseTexture[] = [];
 
@@ -206,11 +268,15 @@ export class WeaponSystem {
     this.weaponPivot = new TransformNode('weaponPivot', this.scene);
     this.weaponPivot.parent = this.camera;
 
-    this.muzzleFlashMesh = this.createMuzzleFlash();
+    this.vfxPoolRoot = new TransformNode('weaponVfxPoolRoot', this.scene);
+
+    this.muzzleFlashRoot = this.createMuzzleFlash();
     this.muzzleLight = new PointLight('muzzleLight', Vector3.Zero(), this.scene);
     this.muzzleLight.diffuse = new Color3(1.0, 0.72, 0.35);
+    this.muzzleLight.specular = new Color3(1.0, 0.8, 0.45);
     this.muzzleLight.intensity = 0;
-    this.muzzleLight.range = 8;
+    this.muzzleLight.range = 8.5;
+    this.muzzleLight.shadowEnabled = false;
     this.muzzleLight.parent = this.weaponPivot;
 
     this.vmFillLight = new PointLight('vmFillLight', new Vector3(0.16, 0.2, 0.04), this.scene);
@@ -230,44 +296,112 @@ export class WeaponSystem {
     this.vmRimLight.shadowEnabled = false;
 
     this.decalMaterial = new StandardMaterial('bulletDecalMat', this.scene);
-    this.decalMaterial.diffuseColor = new Color3(0.06, 0.06, 0.07);
+    this.decalMaterial.diffuseColor = new Color3(0.05, 0.05, 0.06);
     this.decalMaterial.specularColor = Color3.Black();
+    this.decalMaterial.alpha = 0.88;
     this.decalMaterial.zOffset = -2;
 
     this.tracerMaterial = new StandardMaterial('tracerGlowMat', this.scene);
     this.tracerMaterial.disableLighting = true;
-    this.tracerMaterial.emissiveColor = new Color3(1.75, 1.15, 0.38);
+    this.tracerMaterial.diffuseColor = Color3.Black();
+    this.tracerMaterial.emissiveColor = new Color3(1.85, 1.18, 0.38);
+    this.tracerMaterial.alpha = 0.95;
+    this.tracerMaterial.alphaMode = Constants.ALPHA_ADD;
+    this.tracerMaterial.disableDepthWrite = true;
 
     this.tracerSuppMaterial = new StandardMaterial('tracerSuppGlowMat', this.scene);
     this.tracerSuppMaterial.disableLighting = true;
-    this.tracerSuppMaterial.emissiveColor = new Color3(1.1, 0.95, 0.55);
+    this.tracerSuppMaterial.diffuseColor = Color3.Black();
+    this.tracerSuppMaterial.emissiveColor = new Color3(1.15, 0.98, 0.58);
+    this.tracerSuppMaterial.alpha = 0.9;
+    this.tracerSuppMaterial.alphaMode = Constants.ALPHA_ADD;
+    this.tracerSuppMaterial.disableDepthWrite = true;
 
     this.brassMaterial = new PBRMaterial('brassCasingMat', this.scene);
     this.brassMaterial.albedoColor = Color3.FromHexString('#d4a64a');
     this.brassMaterial.metallic = 0.95;
     this.brassMaterial.roughness = 0.24;
 
+    this.shotgunHullMaterial = new PBRMaterial('shotgunHullCasingMat', this.scene);
+    this.shotgunHullMaterial.albedoColor = Color3.FromHexString('#c81e1e');
+    this.shotgunHullMaterial.metallic = 0.22;
+    this.shotgunHullMaterial.roughness = 0.38;
+    this.shotgunHullMaterial.clearCoat.isEnabled = true;
+    this.shotgunHullMaterial.clearCoat.intensity = 0.45;
+    this.shotgunHullMaterial.clearCoat.roughness = 0.2;
+
     this.impactMatTarget = new StandardMaterial('impactMatTarget', this.scene);
     this.impactMatTarget.disableLighting = true;
-    this.impactMatTarget.emissiveColor = new Color3(1.2, 0.32, 0.22);
+    this.impactMatTarget.diffuseColor = Color3.Black();
+    this.impactMatTarget.emissiveColor = new Color3(1.45, 0.24, 0.2);
+    this.impactMatTarget.alpha = 0.94;
+    this.impactMatTarget.alphaMode = Constants.ALPHA_ADD;
+    this.impactMatTarget.disableDepthWrite = true;
+
+    this.impactMatHeadshot = new StandardMaterial('impactMatHeadshot', this.scene);
+    this.impactMatHeadshot.disableLighting = true;
+    this.impactMatHeadshot.diffuseColor = Color3.Black();
+    this.impactMatHeadshot.emissiveColor = new Color3(1.85, 1.15, 0.22);
+    this.impactMatHeadshot.alpha = 0.96;
+    this.impactMatHeadshot.alphaMode = Constants.ALPHA_ADD;
+    this.impactMatHeadshot.disableDepthWrite = true;
 
     this.impactMatSparkA = new StandardMaterial('impactMatSparkA', this.scene);
     this.impactMatSparkA.disableLighting = true;
-    this.impactMatSparkA.emissiveColor = new Color3(1.2, 0.85, 0.38);
+    this.impactMatSparkA.diffuseColor = Color3.Black();
+    this.impactMatSparkA.emissiveColor = new Color3(1.65, 0.96, 0.34);
+    this.impactMatSparkA.alpha = 0.95;
+    this.impactMatSparkA.alphaMode = Constants.ALPHA_ADD;
+    this.impactMatSparkA.disableDepthWrite = true;
 
     this.impactMatSparkB = new StandardMaterial('impactMatSparkB', this.scene);
     this.impactMatSparkB.disableLighting = true;
-    this.impactMatSparkB.emissiveColor = new Color3(0.95, 0.95, 1.0);
+    this.impactMatSparkB.diffuseColor = Color3.Black();
+    this.impactMatSparkB.emissiveColor = new Color3(1.3, 1.35, 1.5);
+    this.impactMatSparkB.alpha = 0.95;
+    this.impactMatSparkB.alphaMode = Constants.ALPHA_ADD;
+    this.impactMatSparkB.disableDepthWrite = true;
+
+    this.impactMatKnifeClang = new StandardMaterial('impactMatKnifeClang', this.scene);
+    this.impactMatKnifeClang.disableLighting = true;
+    this.impactMatKnifeClang.diffuseColor = Color3.Black();
+    this.impactMatKnifeClang.emissiveColor = new Color3(1.15, 1.48, 1.9);
+    this.impactMatKnifeClang.alpha = 0.95;
+    this.impactMatKnifeClang.alphaMode = Constants.ALPHA_ADD;
+    this.impactMatKnifeClang.disableDepthWrite = true;
+
+    this.dustMaterial = new StandardMaterial('impactDustMat', this.scene);
+    this.dustMaterial.disableLighting = true;
+    this.dustMaterial.diffuseColor = Color3.Black();
+    this.dustMaterial.emissiveColor = new Color3(0.42, 0.39, 0.34);
+    this.dustMaterial.alpha = 0.38;
+    this.dustMaterial.disableDepthWrite = true;
+
+    this.knifeTrailMaterial = new StandardMaterial('knifeTrailMat', this.scene);
+    this.knifeTrailMaterial.disableLighting = true;
+    this.knifeTrailMaterial.diffuseColor = Color3.Black();
+    this.knifeTrailMaterial.emissiveColor = new Color3(0.95, 1.15, 1.45);
+    this.knifeTrailMaterial.alpha = 0.6;
+    this.knifeTrailMaterial.alphaMode = Constants.ALPHA_ADD;
+    this.knifeTrailMaterial.disableDepthWrite = true;
 
     this.materialsToDispose.push(
       this.decalMaterial,
       this.tracerMaterial,
       this.tracerSuppMaterial,
       this.brassMaterial,
+      this.shotgunHullMaterial,
       this.impactMatTarget,
+      this.impactMatHeadshot,
       this.impactMatSparkA,
-      this.impactMatSparkB
+      this.impactMatSparkB,
+      this.impactMatKnifeClang,
+      this.dustMaterial,
+      this.knifeTrailMaterial
     );
+
+    this.tracerPool = new PooledTracerRingBuffer(this.scene, 'playerTracerPool', 40);
+    this.initVfxPools();
 
     this.buildAllWeaponModels();
     this.bindViewModelLights();
@@ -328,18 +462,52 @@ export class WeaponSystem {
 
   public setGraphicsQuality(quality: GraphicsQuality): void {
     this.graphicsQuality = quality;
-    const maxDecals = quality === 'LOW' ? 8 : quality === 'MEDIUM' ? 24 : 48;
-    while (this.bulletDecals.length > maxDecals) {
-      const oldest = this.bulletDecals.shift();
-      oldest?.dispose();
+    const budget = getVfxQualityBudget(quality);
+    this.tracerPool.setMaxActive(budget.maxTracers);
+
+    for (let i = budget.maxDecals; i < this.decalPool.length; i++) {
+      if (this.decalPool[i].active) {
+        this.decalPool[i].active = false;
+        this.decalPool[i].mesh.setEnabled(false);
+      }
+    }
+    if (this.decalCursor >= budget.maxDecals) {
+      this.decalCursor = 0;
+    }
+
+    if (!budget.casingsEnabled) {
+      for (const slot of this.casingPool) {
+        if (slot.active) {
+          slot.active = false;
+          slot.mesh.setEnabled(false);
+        }
+      }
+      this.pendingCasingTimer = 0;
+      this.pendingCasingWeapon = null;
+    } else {
+      for (let i = budget.maxCasings; i < this.casingPool.length; i++) {
+        if (this.casingPool[i].active) {
+          this.casingPool[i].active = false;
+          this.casingPool[i].mesh.setEnabled(false);
+        }
+      }
+      if (this.casingCursor >= budget.maxCasings) {
+        this.casingCursor = 0;
+      }
+    }
+
+    if (!budget.muzzleLightEnabled) {
+      this.muzzleLight.intensity = 0;
+      this.muzzleLightPeak = 0;
     }
   }
 
   public clearDecals(): void {
-    for (const d of this.bulletDecals) {
-      d.dispose();
+    for (const slot of this.decalPool) {
+      slot.active = false;
+      slot.mesh.setEnabled(false);
     }
-    this.bulletDecals = [];
+    this.decalCursor = 0;
   }
 
   public setViewModelVisible(visible: boolean): void {
@@ -348,9 +516,15 @@ export class WeaponSystem {
     this.vmFillLight.setEnabled(visible);
     this.vmRimLight.setEnabled(visible);
     if (!visible) {
-      this.muzzleFlashMesh.isVisible = false;
+      this.muzzleFlashRoot.setEnabled(false);
       this.muzzleLight.intensity = 0;
+      this.muzzleLightPeak = 0;
       this.muzzleFlashTimer = 0;
+      this.pendingCasingTimer = 0;
+      this.pendingCasingWeapon = null;
+      this.cycleImpulseTimer = 0;
+      this.cycleImpulseWeapon = null;
+      this.hideKnifeTrail();
     }
   }
 
@@ -469,15 +643,41 @@ export class WeaponSystem {
     this.quickMeleeReturnSlot = null;
     this.semiTriggerConsumed = false;
     this.muzzleFlashTimer = 0;
-    this.muzzleFlashMesh.isVisible = false;
+    this.muzzleFlashRoot.setEnabled(false);
     this.muzzleLight.intensity = 0;
+    this.muzzleLightPeak = 0;
+    this.pendingCasingTimer = 0;
+    this.pendingCasingWeapon = null;
+    this.cycleImpulseTimer = 0;
+    this.cycleImpulseWeapon = null;
+    this.kickBackZ = 0;
+    this.kickRotX = 0;
+    this.kickYaw = 0;
+    this.kickRoll = 0;
+    this.vmLandDip = 0;
+    this.hideKnifeTrail();
+    this.player.resetTransientMotion();
   }
 
   public selectWeapon(id: WeaponId, silent = false): void {
     const targetEnabled = this.models.get(id)?.root.isEnabled() ?? false;
     this.isReloading = false;
     this.reloadElapsed = 0;
+    this.reloadMagClickPlayed = false;
     this.semiTriggerConsumed = false;
+    this.muzzleFlashTimer = 0;
+    this.muzzleFlashRoot.setEnabled(false);
+    this.muzzleLight.intensity = 0;
+    this.muzzleLightPeak = 0;
+    this.pendingCasingTimer = 0;
+    this.pendingCasingWeapon = null;
+    this.cycleImpulseTimer = 0;
+    this.cycleImpulseWeapon = null;
+    this.kickBackZ = 0;
+    this.kickRotX = 0;
+    this.kickYaw = 0;
+    this.kickRoll = 0;
+    this.hideKnifeTrail();
     this.activeId = id;
     this.activeSlot = id === 'knife' ? 2 : 1;
 
@@ -499,8 +699,8 @@ export class WeaponSystem {
 
     const activeRig = this.models.get(id);
     if (activeRig) {
-      this.muzzleFlashMesh.parent = activeRig.muzzlePoint;
-      this.muzzleFlashMesh.position.setAll(0);
+      this.muzzleFlashRoot.parent = activeRig.muzzlePoint;
+      this.muzzleFlashRoot.position.setAll(0);
       this.muzzleLight.parent = activeRig.muzzlePoint;
       this.muzzleLight.position.setAll(0);
     }
@@ -529,6 +729,10 @@ export class WeaponSystem {
     if (state.ammoInMag >= cfg.magSize) return;
     if (state.reserveAmmo <= 0) return;
 
+    this.pendingCasingTimer = 0;
+    this.pendingCasingWeapon = null;
+    this.cycleImpulseTimer = 0;
+    this.cycleImpulseWeapon = null;
     this.isReloading = true;
     this.reloadElapsed = 0;
     this.reloadMagClickPlayed = false;
@@ -554,12 +758,20 @@ export class WeaponSystem {
     this.slashTimer = 0;
     this.quickMeleeReturnSlot = null;
     this.muzzleFlashTimer = 0;
-    this.muzzleFlashMesh.isVisible = false;
+    this.muzzleFlashRoot.setEnabled(false);
     this.muzzleLight.intensity = 0;
+    this.muzzleLightPeak = 0;
+    this.pendingCasingTimer = 0;
+    this.pendingCasingWeapon = null;
+    this.cycleImpulseTimer = 0;
+    this.cycleImpulseWeapon = null;
     this.lastHitMarker = null;
     this.spreadBloom = 0;
     this.kickBackZ = 0;
     this.kickRotX = 0;
+    this.kickYaw = 0;
+    this.kickRoll = 0;
+    this.vmLandDip = 0;
     this.swayRoll = 0;
     this.swayPitch = 0;
     this.bobTimer = 0;
@@ -570,6 +782,7 @@ export class WeaponSystem {
     this.charmVelZ = 0;
     this.rangeDistanceMeters = null;
     this.targetingEnemy = false;
+    this.hideKnifeTrail();
     this.clearTransientEffects();
 
     const activeRig = this.models.get(this.activeId);
@@ -600,13 +813,44 @@ export class WeaponSystem {
     this.knifeCooldown = Math.max(0, this.knifeCooldown - clampedDt);
     this.spreadBloom = Math.max(0, this.spreadBloom - clampedDt * 0.045);
 
+    if (this.pendingCasingTimer > 0) {
+      this.pendingCasingTimer = Math.max(0, this.pendingCasingTimer - clampedDt);
+      if (this.pendingCasingTimer === 0 && this.pendingCasingWeapon) {
+        const targetWeapon = this.pendingCasingWeapon;
+        this.pendingCasingWeapon = null;
+        if (this.viewModelVisible && this.activeId === targetWeapon && !this.isReloading) {
+          this.ejectCasingForWeapon(targetWeapon);
+        }
+      }
+    }
+
+    if (this.cycleImpulseTimer > 0) {
+      this.cycleImpulseTimer = Math.max(0, this.cycleImpulseTimer - clampedDt);
+      if (this.cycleImpulseTimer === 0 && this.cycleImpulseWeapon) {
+        const w = this.cycleImpulseWeapon;
+        this.cycleImpulseWeapon = null;
+        if (this.viewModelVisible && this.activeId === w && !this.isReloading) {
+          if (w === 'shotgun') {
+            this.kickBackZ = Math.min(0.16, this.kickBackZ + 0.032);
+            this.kickRoll += 0.04;
+          } else if (w === 'sniper') {
+            this.kickRotX = Math.min(0.28, this.kickRotX + 0.035);
+            this.kickRoll -= 0.055;
+          }
+        }
+      }
+    }
+
     if (this.slashTimer > 0) {
       this.slashTimer = Math.max(0, this.slashTimer - clampedDt);
+      this.updateKnifeTrail();
       if (this.slashTimer === 0 && this.quickMeleeReturnSlot === 1 && this.activeSlot === 2) {
         this.quickMeleeReturnSlot = null;
         this.activeSlot = 1;
         this.selectWeapon(this.equippedGunId);
       }
+    } else {
+      this.hideKnifeTrail();
     }
 
     if (this.isReloading && this.viewModelVisible && this.activeId !== 'knife') {
@@ -650,8 +894,23 @@ export class WeaponSystem {
     if (this.muzzleFlashTimer > 0) {
       this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - clampedDt);
       if (this.muzzleFlashTimer === 0) {
-        this.muzzleFlashMesh.isVisible = false;
+        this.muzzleFlashRoot.setEnabled(false);
         this.muzzleLight.intensity = 0;
+      } else {
+        const ratio = this.muzzleFlashTimer / Math.max(0.001, this.muzzleFlashMaxTimer);
+        this.muzzleFlashMat.alpha = 0.95 * ratio;
+        this.muzzleFlashMat.emissiveColor.set(
+          1.85 * ratio,
+          1.2 * ratio * ratio,
+          0.45 * ratio * ratio
+        );
+        const s = this.muzzleFlashBaseScale * (0.58 + 0.42 * ratio);
+        this.muzzleFlashRoot.scaling.set(s, s, s * (0.75 + 0.35 * ratio));
+        if (this.muzzleLightPeak > 0) {
+          this.muzzleLight.intensity = this.muzzleLightPeak * ratio * ratio;
+        } else {
+          this.muzzleLight.intensity = 0;
+        }
       }
     }
 
@@ -670,12 +929,16 @@ export class WeaponSystem {
     if (this.isReloading) return;
 
     const cfg = this.getActiveConfig();
+    const feel = getWeaponFeelProfile(cfg.id);
 
     if (cfg.isMelee || cfg.id === 'knife') {
       if (this.knifeCooldown > 0) return;
       this.knifeCooldown = 60 / cfg.rpm;
       this.slashTimer = this.slashDuration;
       this.slashSide = -this.slashSide;
+      this.kickBackZ = Math.min(0.12, this.kickBackZ + feel.kickBack);
+      this.kickRotX = Math.min(0.2, this.kickRotX + feel.kickRotX);
+      this.player.addFovKick(feel.fovKickRad);
       this.audio.playKnifeSlash();
       this.charmVelZ += (Math.random() > 0.5 ? 1 : -1) * 14;
       this.charmVelX += 11;
@@ -704,19 +967,38 @@ export class WeaponSystem {
 
     this.audio.playGunshot(cfg.id);
 
-    const kickScale =
-      cfg.id === 'sniper' ? 1.35 : cfg.id === 'shotgun' ? 1.25 : cfg.id === 'smg' ? 0.65 : 1.0;
-    this.kickBackZ = Math.min(0.14, this.kickBackZ + 0.062 * kickScale);
-    this.kickRotX = Math.min(0.24, this.kickRotX + 0.09 * kickScale);
+    const adsBlend = this.player.getAdsBlend();
+    const vmKickScale = computeAdsAttenuatedScale(adsBlend, feel.adsAttenuation);
+
+    this.kickBackZ = Math.min(0.17, this.kickBackZ + feel.kickBack * vmKickScale);
+    this.kickRotX = Math.min(0.28, this.kickRotX + feel.kickRotX * vmKickScale);
+
+    if (cfg.id === 'smg') {
+      this.smgJitterDir = -this.smgJitterDir;
+      const jitterSign = Math.random() > 0.2 ? this.smgJitterDir : -this.smgJitterDir;
+      this.kickYaw = Math.max(-0.08, Math.min(0.08, this.kickYaw + jitterSign * feel.kickYaw * (0.7 + Math.random() * 0.6) * vmKickScale));
+      this.kickRoll = Math.max(-0.09, Math.min(0.09, this.kickRoll + jitterSign * feel.kickRoll * vmKickScale));
+    } else {
+      const yawJitter = (Math.random() * 2 - 1) * feel.kickYaw * vmKickScale;
+      const rollDir = cfg.id === 'shotgun' ? -1 : Math.random() > 0.5 ? 1 : -1;
+      this.kickYaw = Math.max(-0.08, Math.min(0.08, this.kickYaw + yawJitter));
+      this.kickRoll = Math.max(-0.1, Math.min(0.1, this.kickRoll + rollDir * feel.kickRoll * vmKickScale));
+    }
 
     const adsRecoilScale = this.player.getIsAds() ? 0.68 : 1.0;
     const yawRand = (Math.random() * 2 - 1) * cfg.recoilYaw * adsRecoilScale;
     const pitchKick = cfg.recoilPitch * (0.85 + Math.random() * 0.3) * adsRecoilScale;
     this.player.addRecoil(pitchKick, yawRand);
+    this.player.addFovKick(feel.fovKickRad * vmKickScale);
 
-    this.triggerMuzzleFlash(cfg.suppressed);
-    this.spawnShellCasing();
-    this.performHitscan(cfg);
+    this.triggerMuzzleFlash(cfg.suppressed, feel.muzzleScale);
+    this.scheduleOrSpawnShellCasing(cfg.id, feel);
+    if (feel.boltCyclePulseAtSec > 0) {
+      this.cycleImpulseTimer = feel.boltCyclePulseAtSec;
+      this.cycleImpulseWeapon = cfg.id;
+    }
+
+    this.performHitscan(cfg, feel);
 
     this.spreadBloom = Math.min(0.032, this.spreadBloom + (cfg.id === 'smg' ? 0.0038 : 0.0055));
   }
@@ -796,7 +1078,7 @@ export class WeaponSystem {
       }
 
       this.audio.playKnifeHit(isTargetHit);
-      this.spawnImpact(hitPoint, isTargetHit, hitNormal);
+      this.spawnImpact(hitPoint, isTargetHit ? 'knife_character' : 'knife_env', hitNormal);
       this.onNetworkShot?.({
         muzzle: origin.add(forward.scale(0.45)),
         endPoint: hitPoint,
@@ -847,16 +1129,19 @@ export class WeaponSystem {
           timestamp: performance.now(),
         };
         this.audio.playHitMarker(result.zone === 'head');
-        this.spawnImpact(hitPoint, true, hitNormal);
+        this.spawnImpact(hitPoint, 'knife_character', hitNormal, result.zone === 'head');
         return;
       }
     }
 
     this.audio.playKnifeHit(false);
-    this.spawnImpact(hitPoint, false, hitNormal);
+    this.spawnImpact(hitPoint, 'knife_env', hitNormal);
   }
 
-  private performHitscan(cfg: WeaponConfig): void {
+  private performHitscan(
+    cfg: WeaponConfig,
+    feel = getWeaponFeelProfile(cfg.id)
+  ): void {
     const spread = this.computeCurrentSpread();
     const origin = this.camera.globalPosition.clone();
     const forward = this.camera.getDirection(Vector3.Forward()).normalize();
@@ -900,7 +1185,13 @@ export class WeaponSystem {
         primaryEndPoint = endPoint;
       }
 
-      this.spawnTracer(muzzleWorld, endPoint, cfg.suppressed);
+      this.spawnTracer(
+        muzzleWorld,
+        endPoint,
+        cfg.suppressed,
+        feel.tracerThickness,
+        feel.tracerDuration
+      );
 
       if (this.multiplayerMode) {
         let hitPlayerId: string | undefined;
@@ -921,8 +1212,14 @@ export class WeaponSystem {
             }
           }
           const hitNormal = pick.getNormal(true) ?? dir.scale(-1);
-          this.spawnImpact(pick.pickedPoint, isTargetHit, hitNormal);
-          if (!meta?.isRemotePlayer) {
+          this.spawnImpact(
+            pick.pickedPoint,
+            isTargetHit ? 'character' : 'environment',
+            hitNormal,
+            hitZone === 'head',
+            pelletCount > 1 && p % 2 === 1
+          );
+          if (!meta?.isRemotePlayer && (pelletCount === 1 || p % 2 === 0)) {
             this.spawnBulletDecal(pick.pickedPoint, hitNormal);
           }
         }
@@ -973,12 +1270,24 @@ export class WeaponSystem {
               distanceMeters,
             });
           }
-          this.spawnImpact(pick.pickedPoint, true, hitNormal);
+          this.spawnImpact(
+            pick.pickedPoint,
+            'character',
+            hitNormal,
+            result.zone === 'head',
+            pelletCount > 1 && p % 2 === 1
+          );
           continue;
         }
       }
 
-      this.spawnImpact(pick.pickedPoint, false, hitNormal);
+      this.spawnImpact(
+        pick.pickedPoint,
+        'environment',
+        hitNormal,
+        false,
+        pelletCount > 1 && p % 2 === 1
+      );
       if (!meta?.isBot && (pelletCount === 1 || p % 2 === 0)) {
         this.spawnBulletDecal(pick.pickedPoint, hitNormal);
       }
@@ -1045,148 +1354,247 @@ export class WeaponSystem {
     return base + this.spreadBloom * (isAds ? 0.35 : 1) + speedFactor + airPenalty;
   }
 
-  private triggerMuzzleFlash(suppressed: boolean): void {
-    this.muzzleFlashTimer = suppressed ? 0.025 : 0.052;
-    this.muzzleFlashMesh.isVisible = !suppressed;
-    this.muzzleFlashMesh.rotation.z = Math.random() * Math.PI * 2;
-    const scale = suppressed ? 0.45 : 0.95 + Math.random() * 0.55;
-    this.muzzleFlashMesh.scaling.setAll(scale);
-    this.muzzleLight.intensity = suppressed ? 0.7 : 6.0;
+  private triggerMuzzleFlash(suppressed: boolean, feelScale = 1.0): void {
+    const budget = getVfxQualityBudget(this.graphicsQuality);
+    this.muzzleFlashMaxTimer = suppressed ? 0.026 : 0.045;
+    this.muzzleFlashTimer = this.muzzleFlashMaxTimer;
+    this.muzzleFlashRoot.rotation.z = Math.random() * Math.PI * 2;
+    this.muzzleFlashBaseScale =
+      (suppressed ? 0.42 : 0.86 + Math.random() * 0.42) * feelScale;
+    this.muzzleFlashRoot.scaling.set(
+      this.muzzleFlashBaseScale * (0.9 + Math.random() * 0.24),
+      this.muzzleFlashBaseScale * (0.9 + Math.random() * 0.24),
+      this.muzzleFlashBaseScale * (0.94 + Math.random() * 0.32)
+    );
+    this.muzzleFlashMat.alpha = 0.95;
+    this.muzzleFlashMat.emissiveColor.set(1.85, 1.2, 0.45);
+    this.muzzleFlashRoot.setEnabled(!suppressed);
+
+    if (budget.muzzleLightEnabled) {
+      this.muzzleLightPeak = (suppressed ? 0.6 : 5.8) * budget.muzzleLightScale;
+      this.muzzleLight.intensity = this.muzzleLightPeak;
+    } else {
+      this.muzzleLightPeak = 0;
+      this.muzzleLight.intensity = 0;
+    }
   }
 
-  private spawnShellCasing(): void {
-    if (this.graphicsQuality === 'LOW' || this.casings.length >= 18) return;
-    if (this.activeId === 'knife') return;
-    const rig = this.models.get(this.activeId);
-    if (!rig) return;
+  private scheduleOrSpawnShellCasing(
+    weaponId: WeaponId,
+    feel = getWeaponFeelProfile(weaponId)
+  ): void {
+    const budget = getVfxQualityBudget(this.graphicsQuality);
+    if (!budget.casingsEnabled || feel.casingKind === 'none') return;
+    if (feel.casingDelaySec > 0) {
+      this.pendingCasingTimer = feel.casingDelaySec;
+      this.pendingCasingWeapon = weaponId;
+      return;
+    }
+    this.ejectCasingForWeapon(weaponId);
+  }
 
-    const casing = MeshBuilder.CreateCylinder(
-      'shellCasing',
-      { height: 0.024, diameter: 0.009, tessellation: 8 },
-      this.scene
-    );
+  private ejectCasingForWeapon(weaponId: WeaponId): void {
+    const budget = getVfxQualityBudget(this.graphicsQuality);
+    if (!budget.casingsEnabled || budget.maxCasings <= 0) return;
+    const feel = getWeaponFeelProfile(weaponId);
+    const kind: CasingKind = feel.casingKind;
+    if (kind === 'none') return;
+
+    const rig = this.models.get(weaponId);
+    if (!rig || this.casingPool.length === 0) return;
+
+    const slotCap = Math.min(this.casingPool.length, budget.maxCasings);
+    const slot = this.casingPool[this.casingCursor % slotCap];
+    this.casingCursor = (this.casingCursor + 1) % slotCap;
+
     const portPos = rig.ejectionPort.getAbsolutePosition();
-    casing.position.copyFrom(portPos);
-    casing.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
-    casing.material = this.brassMaterial;
-    casing.isPickable = false;
-    casing.checkCollisions = false;
-
-    const right = this.camera.getDirection(Vector3.Right()).normalize();
-    const up = this.camera.getDirection(Vector3.Up()).normalize();
-    const back = this.camera.getDirection(Vector3.Forward()).scale(-1).normalize();
-    const vel = right
-      .scale(2.1 + Math.random() * 0.9)
-      .add(up.scale(1.6 + Math.random() * 0.8))
-      .add(back.scale(0.4 + Math.random() * 0.5));
-    const spin = new Vector3(14 + Math.random() * 12, 10 + Math.random() * 10, 16 + Math.random() * 10);
-
-    this.casings.push({ mesh: casing, vel, spin, life: 0.68 });
-  }
-
-  private spawnTracer(start: Vector3, end: Vector3, suppressed: boolean): void {
-    const delta = end.subtract(start);
-    const fullDist = delta.length();
-    if (fullDist < 0.25) return;
-
-    const dir = delta.scale(1 / fullDist);
-    const beamLen = Math.min(fullDist, 28);
-    const beamStart = start.add(dir.scale(Math.min(0.45, fullDist * 0.15)));
-    const mid = beamStart.add(dir.scale(beamLen * 0.5));
-
-    const beam = MeshBuilder.CreateBox(
-      'tracer',
-      { width: suppressed ? 0.014 : 0.022, height: suppressed ? 0.014 : 0.022, depth: beamLen },
-      this.scene
+    slot.mesh.position.copyFrom(portPos);
+    slot.mesh.rotation.set(
+      Math.random() * Math.PI,
+      Math.random() * Math.PI,
+      Math.random() * Math.PI
     );
-    beam.position.copyFrom(mid);
-    beam.lookAt(end);
-    beam.material = suppressed ? this.tracerSuppMaterial : this.tracerMaterial;
-    beam.isPickable = false;
-    beam.checkCollisions = false;
 
-    this.tracers.push({ mesh: beam, life: 0.055, maxLife: 0.055 });
+    if (kind === 'shotgunHull') {
+      slot.mesh.material = this.shotgunHullMaterial;
+      slot.mesh.scaling.set(1.65, 1.65, 1.65);
+    } else if (kind === 'brassHeavy') {
+      slot.mesh.material = this.brassMaterial;
+      slot.mesh.scaling.set(1.18, 1.48, 1.18);
+    } else if (kind === 'brassPistol') {
+      slot.mesh.material = this.brassMaterial;
+      slot.mesh.scaling.set(0.86, 0.82, 0.86);
+    } else {
+      slot.mesh.material = this.brassMaterial;
+      slot.mesh.scaling.set(0.96, 1.08, 0.96);
+    }
+
+    const right = this.camera.getDirection(Vector3.Right());
+    const up = this.camera.getDirection(Vector3.Up());
+    const forward = this.camera.getDirection(Vector3.Forward());
+    const ejectSpeedR = kind === 'shotgunHull' ? 2.4 : 2.15;
+    const ejectSpeedU = kind === 'shotgunHull' ? 1.85 : 1.65;
+
+    slot.vel.set(
+      right.x * (ejectSpeedR + Math.random() * 0.9) + up.x * (ejectSpeedU + Math.random() * 0.75) - forward.x * (0.35 + Math.random() * 0.45),
+      right.y * (ejectSpeedR + Math.random() * 0.9) + up.y * (ejectSpeedU + Math.random() * 0.75) - forward.y * (0.35 + Math.random() * 0.45),
+      right.z * (ejectSpeedR + Math.random() * 0.9) + up.z * (ejectSpeedU + Math.random() * 0.75) - forward.z * (0.35 + Math.random() * 0.45)
+    );
+    slot.spin.set(
+      14 + Math.random() * 14,
+      10 + Math.random() * 12,
+      16 + Math.random() * 14
+    );
+    slot.floorY = Math.max(0.015, this.player.collider.position.y - 0.88);
+    slot.life = 0.72;
+    slot.maxLife = 0.72;
+    slot.active = true;
+    slot.mesh.visibility = 1.0;
+    slot.mesh.setEnabled(true);
   }
 
-  private spawnImpact(point: Vector3, isTargetHit: boolean, normal: Vector3): void {
-    const sparkCount =
-      this.graphicsQuality === 'LOW' ? 1 : this.graphicsQuality === 'MEDIUM' ? 3 : 5;
+  private spawnTracer(
+    start: Vector3,
+    end: Vector3,
+    suppressed: boolean,
+    thickness = 0.02,
+    duration = 0.06
+  ): void {
+    this.tracerPool.spawn(
+      start,
+      end,
+      suppressed ? this.tracerSuppMaterial : this.tracerMaterial,
+      {
+        thickness,
+        duration,
+        maxLength: 28,
+        startLead: 0.14,
+      }
+    );
+  }
 
-    for (let i = 0; i < sparkCount; i++) {
-      const spark = MeshBuilder.CreateBox(
-        'impactSpark',
-        { size: isTargetHit ? 0.065 : 0.048 },
-        this.scene
-      );
-      spark.position.copyFrom(point);
-      spark.isPickable = false;
-      spark.checkCollisions = false;
+  private spawnImpact(
+    point: Vector3,
+    kind: ImpactKind,
+    normal: Vector3,
+    isHeadshot = false,
+    reduced = false
+  ): void {
+    const budget = getVfxQualityBudget(this.graphicsQuality);
+    const isTarget = kind === 'character' || kind === 'knife_character';
+    let sparkCount = isTarget ? budget.targetBurstCount : budget.envSparkCount;
+    if (reduced) {
+      sparkCount = Math.max(1, Math.ceil(sparkCount * 0.5));
+    }
 
-      spark.material = isTargetHit
-        ? this.impactMatTarget
-        : i % 2 === 0
-          ? this.impactMatSparkA
-          : this.impactMatSparkB;
+    const impactCap = Math.min(this.impactPool.length, budget.maxImpacts);
+    if (impactCap > 0) {
+      for (let i = 0; i < sparkCount; i++) {
+        const slot = this.impactPool[this.impactCursor % impactCap];
+        this.impactCursor = (this.impactCursor + 1) % impactCap;
 
-      const vel = new Vector3(
-        normal.x * (1.8 + Math.random() * 2.2) + (Math.random() - 0.5) * 3.0,
-        normal.y * (1.8 + Math.random() * 2.2) + Math.random() * 2.2,
-        normal.z * (1.8 + Math.random() * 2.2) + (Math.random() - 0.5) * 3.0
-      );
+        slot.mesh.position.copyFrom(point);
+        if (kind === 'character' || kind === 'knife_character') {
+          slot.mesh.material = isHeadshot ? this.impactMatHeadshot : this.impactMatTarget;
+          slot.baseScale = isHeadshot ? 1.35 : 1.15;
+          slot.maxLife = 0.18;
+          slot.gravity = 7.5;
+          slot.vel.set(
+            normal.x * (1.4 + Math.random() * 1.8) + (Math.random() - 0.5) * 2.4,
+            normal.y * (1.4 + Math.random() * 1.8) + Math.random() * 1.8,
+            normal.z * (1.4 + Math.random() * 1.8) + (Math.random() - 0.5) * 2.4
+          );
+        } else if (kind === 'knife_env') {
+          slot.mesh.material = i % 2 === 0 ? this.impactMatKnifeClang : this.impactMatSparkB;
+          slot.baseScale = 1.05;
+          slot.maxLife = 0.19;
+          slot.gravity = 11.0;
+          slot.vel.set(
+            normal.x * (2.4 + Math.random() * 2.6) + (Math.random() - 0.5) * 3.8,
+            normal.y * (2.2 + Math.random() * 2.4) + Math.random() * 2.4,
+            normal.z * (2.4 + Math.random() * 2.6) + (Math.random() - 0.5) * 3.8
+          );
+        } else {
+          slot.mesh.material = i % 2 === 0 ? this.impactMatSparkA : this.impactMatSparkB;
+          slot.baseScale = 0.95;
+          slot.maxLife = 0.16;
+          slot.gravity = 11.5;
+          slot.vel.set(
+            normal.x * (2.0 + Math.random() * 2.5) + (Math.random() - 0.5) * 3.4,
+            normal.y * (2.0 + Math.random() * 2.5) + Math.random() * 2.4,
+            normal.z * (2.0 + Math.random() * 2.5) + (Math.random() - 0.5) * 3.4
+          );
+        }
 
-      this.impacts.push({ mesh: spark, vel, life: 0.16, maxLife: 0.16 });
+        slot.life = slot.maxLife;
+        slot.active = true;
+        slot.mesh.scaling.setAll(slot.baseScale);
+        slot.mesh.visibility = 1.0;
+        slot.mesh.setEnabled(true);
+      }
+    }
+
+    if (!isTarget && !reduced && budget.dustPuffCount > 0 && budget.maxDustPuffs > 0) {
+      const dustCap = Math.min(this.dustPool.length, budget.maxDustPuffs);
+      for (let d = 0; d < budget.dustPuffCount; d++) {
+        const puff = this.dustPool[this.dustCursor % dustCap];
+        this.dustCursor = (this.dustCursor + 1) % dustCap;
+
+        puff.mesh.position.set(
+          point.x + normal.x * 0.06 + (Math.random() - 0.5) * 0.08,
+          point.y + normal.y * 0.06 + (Math.random() - 0.5) * 0.08,
+          point.z + normal.z * 0.06 + (Math.random() - 0.5) * 0.08
+        );
+        puff.vel.set(
+          normal.x * (0.45 + Math.random() * 0.45) + (Math.random() - 0.5) * 0.4,
+          0.35 + Math.random() * 0.45,
+          normal.z * (0.45 + Math.random() * 0.45) + (Math.random() - 0.5) * 0.4
+        );
+        puff.life = 0.28;
+        puff.maxLife = 0.28;
+        puff.active = true;
+        puff.mesh.scaling.setAll(0.65);
+        puff.mesh.visibility = 0.85;
+        puff.mesh.setEnabled(true);
+      }
     }
   }
 
   private spawnBulletDecal(point: Vector3, normal: Vector3): void {
-    const maxDecals =
-      this.graphicsQuality === 'LOW' ? 8 : this.graphicsQuality === 'MEDIUM' ? 24 : 48;
+    const budget = getVfxQualityBudget(this.graphicsQuality);
+    const decalCap = Math.min(this.decalPool.length, budget.maxDecals);
+    if (decalCap <= 0) return;
 
-    while (this.bulletDecals.length >= maxDecals) {
-      const oldest = this.bulletDecals.shift();
-      oldest?.dispose();
-    }
+    const slot = this.decalPool[this.decalCursor % decalCap];
+    this.decalCursor = (this.decalCursor + 1) % decalCap;
 
-    const decal = MeshBuilder.CreateDisc(
-      'bulletDecal',
-      { radius: 0.042, tessellation: 8, sideOrientation: Mesh.DOUBLESIDE },
-      this.scene
-    );
-    decal.position.copyFrom(point).addInPlace(normal.scale(0.014));
-    decal.lookAt(point.add(normal.scale(2)));
-    decal.material = this.decalMaterial;
-    decal.isPickable = false;
-    decal.checkCollisions = false;
-    this.bulletDecals.push(decal);
+    slot.active = true;
+    slot.mesh.position.copyFrom(point).addInPlace(normal.scale(0.014));
+    slot.mesh.lookAt(point.add(normal.scale(2)));
+    slot.mesh.rotation.z = Math.random() * Math.PI * 2;
+    const s = 0.85 + Math.random() * 0.35;
+    slot.mesh.scaling.set(s, s, 1);
+    slot.mesh.setEnabled(true);
   }
 
   private updateTransients(dt: number): void {
-    for (let i = this.tracers.length - 1; i >= 0; i--) {
-      const t = this.tracers[i];
-      t.life -= dt;
-      if (t.life <= 0) {
-        t.mesh.dispose();
-        this.tracers.splice(i, 1);
-      } else {
-        const ratio = t.life / t.maxLife;
-        t.mesh.scaling.x = ratio;
-        t.mesh.scaling.y = ratio;
-      }
-    }
+    this.tracerPool.update(dt);
 
-    for (let i = this.casings.length - 1; i >= 0; i--) {
-      const c = this.casings[i];
+    for (let i = 0; i < this.casingPool.length; i++) {
+      const c = this.casingPool[i];
+      if (!c.active) continue;
       c.life -= dt;
       if (c.life <= 0) {
-        c.mesh.dispose();
-        this.casings.splice(i, 1);
+        c.active = false;
+        c.life = 0;
+        c.mesh.setEnabled(false);
       } else {
         c.mesh.position.x += c.vel.x * dt;
         c.mesh.position.y += c.vel.y * dt;
         c.mesh.position.z += c.vel.z * dt;
         c.vel.y -= 14.5 * dt;
-        if (c.mesh.position.y < 0.015 && c.vel.y < 0) {
-          c.mesh.position.y = 0.015;
+        if (c.mesh.position.y < c.floorY && c.vel.y < 0) {
+          c.mesh.position.y = c.floorY;
           c.vel.y *= -0.42;
           c.vel.x *= 0.65;
           c.vel.z *= 0.65;
@@ -1194,23 +1602,90 @@ export class WeaponSystem {
         c.mesh.rotation.x += c.spin.x * dt;
         c.mesh.rotation.y += c.spin.y * dt;
         c.mesh.rotation.z += c.spin.z * dt;
+        if (c.life < 0.16) {
+          c.mesh.visibility = Math.max(0, c.life / 0.16);
+        }
       }
     }
 
-    for (let i = this.impacts.length - 1; i >= 0; i--) {
-      const imp = this.impacts[i];
+    for (let i = 0; i < this.impactPool.length; i++) {
+      const imp = this.impactPool[i];
+      if (!imp.active) continue;
       imp.life -= dt;
       if (imp.life <= 0) {
-        imp.mesh.dispose();
-        this.impacts.splice(i, 1);
+        imp.active = false;
+        imp.life = 0;
+        imp.mesh.setEnabled(false);
       } else {
         imp.mesh.position.x += imp.vel.x * dt;
         imp.mesh.position.y += imp.vel.y * dt;
         imp.mesh.position.z += imp.vel.z * dt;
-        imp.vel.y -= 9.5 * dt;
+        imp.vel.y -= imp.gravity * dt;
         const ratio = imp.life / imp.maxLife;
-        imp.mesh.scaling.setAll(0.35 + ratio * 0.85);
+        imp.mesh.scaling.setAll(imp.baseScale * (0.3 + ratio * 0.85));
+        imp.mesh.visibility = ratio;
       }
+    }
+
+    for (let i = 0; i < this.dustPool.length; i++) {
+      const puff = this.dustPool[i];
+      if (!puff.active) continue;
+      puff.life -= dt;
+      if (puff.life <= 0) {
+        puff.active = false;
+        puff.life = 0;
+        puff.mesh.setEnabled(false);
+      } else {
+        puff.mesh.position.x += puff.vel.x * dt;
+        puff.mesh.position.y += puff.vel.y * dt;
+        puff.mesh.position.z += puff.vel.z * dt;
+        puff.vel.scaleInPlace(Math.exp(-4.5 * dt));
+        const progress = 1 - puff.life / puff.maxLife;
+        puff.mesh.scaling.setAll(0.65 + progress * 1.45);
+        puff.mesh.visibility = Math.max(0, (1 - progress) * 0.85);
+      }
+    }
+  }
+
+  private updateKnifeTrail(): void {
+    const budget = getVfxQualityBudget(this.graphicsQuality);
+    const activeSegs = Math.min(this.knifeTrailMeshes.length, budget.knifeTrailSegments);
+    if (!this.viewModelVisible || this.slashTimer <= 0 || activeSegs <= 0) {
+      this.hideKnifeTrail();
+      return;
+    }
+
+    const p = 1 - this.slashTimer / this.slashDuration;
+    if (p < 0.08 || p > 0.92) {
+      this.hideKnifeTrail();
+      return;
+    }
+
+    const envelope = Math.sin(((p - 0.08) / 0.84) * Math.PI);
+    for (let i = 0; i < this.knifeTrailMeshes.length; i++) {
+      const seg = this.knifeTrailMeshes[i];
+      if (i >= activeSegs) {
+        seg.setEnabled(false);
+        continue;
+      }
+      const trailP = Math.max(0.05, p - i * 0.045);
+      const arcAngle = (trailP - 0.5) * 1.85 * this.slashSide;
+      const x = Math.sin(arcAngle) * 0.24;
+      const y = -0.02 + Math.cos(arcAngle) * 0.055;
+      const z = 0.52 - Math.abs(arcAngle) * 0.05;
+
+      seg.position.set(x, y, z);
+      seg.rotation.set(0.18, 0, -arcAngle + this.slashSide * 0.65);
+      const segFade = 1 - i / Math.max(1, activeSegs);
+      seg.scaling.set(1.0, 0.85 + segFade * 0.45, 1.0);
+      seg.visibility = Math.max(0, Math.min(1, envelope * segFade * 0.92));
+      seg.setEnabled(true);
+    }
+  }
+
+  private hideKnifeTrail(): void {
+    for (let i = 0; i < this.knifeTrailMeshes.length; i++) {
+      this.knifeTrailMeshes[i].setEnabled(false);
     }
   }
 
@@ -1233,30 +1708,40 @@ export class WeaponSystem {
     const isMoving = this.player.getIsGrounded() && speed > 0.6 && stance !== 'slide';
 
     if (isMoving) {
-      this.bobTimer += dt * (stance === 'sprint' ? 13.2 : 8.6);
+      this.bobTimer += dt * (stance === 'sprint' ? 13.4 : 8.8);
     }
 
     const hipWeight = 1 - adsBlend;
-    const bobScale = isMoving ? 0.0022 * adsBlend + 0.012 * hipWeight : 0.0012;
+    const speedRatio = Math.max(0, Math.min(1.15, speed / 9.1));
+    const bobScale = isMoving
+      ? (0.002 * adsBlend + 0.013 * hipWeight) * Math.max(0.45, speedRatio)
+      : 0.0012;
     const bobX = isMoving ? Math.cos(this.bobTimer * 0.5) * bobScale : 0;
     const bobY = isMoving
-      ? Math.abs(Math.sin(this.bobTimer)) * -bobScale * 1.15
+      ? Math.abs(Math.sin(this.bobTimer)) * -bobScale * 1.18
       : Math.sin(performance.now() * 0.002) * 0.0015;
 
     const strafeN = Math.max(-1, Math.min(1, axes.right / 9.1));
     const fwdN = Math.max(-1, Math.min(1, axes.forward / 9.1));
-    const swayAmt = isAds ? 0.004 : 0.016;
+    const swayAmt = isAds ? 0.0032 : 0.017;
     const swayX = strafeN * swayAmt;
     const swayZ = -fwdN * swayAmt * 0.45;
 
-    const targetSwayRoll = -strafeN * (stance === 'sprint' && !isAds ? 0.11 : 0.045) * hipWeight;
-    const targetSwayPitch = fwdN * (stance === 'sprint' && !isAds ? 0.03 : 0.012) * hipWeight;
+    const targetLandDip = this.player.getLandDip() * (0.48 * (1 - adsBlend * 0.72));
+    this.vmLandDip += (targetLandDip - this.vmLandDip) * (1 - Math.exp(-16 * dt));
+
+    const targetSwayRoll = -strafeN * (stance === 'sprint' && !isAds ? 0.115 : 0.048) * hipWeight;
+    const targetSwayPitch = fwdN * (stance === 'sprint' && !isAds ? 0.032 : 0.014) * hipWeight;
     const swayLerp = 1 - Math.exp(-10 * dt);
     this.swayRoll += (targetSwayRoll - this.swayRoll) * swayLerp;
     this.swayPitch += (targetSwayPitch - this.swayPitch) * swayLerp;
 
-    this.kickBackZ *= Math.exp(-22 * dt);
-    this.kickRotX *= Math.exp(-20 * dt);
+    const recBackDecay = this.activeId === 'smg' ? 26 : this.activeId === 'sniper' ? 14 : 20;
+    const recRotDecay = this.activeId === 'smg' ? 24 : this.activeId === 'sniper' ? 13 : 18;
+    this.kickBackZ *= Math.exp(-recBackDecay * dt);
+    this.kickRotX *= Math.exp(-recRotDecay * dt);
+    this.kickYaw *= Math.exp(-22 * dt);
+    this.kickRoll *= Math.exp(-20 * dt);
     this.equipDrop *= Math.exp(-12 * dt);
 
     // Knife slash arc
@@ -1297,7 +1782,8 @@ export class WeaponSystem {
     const slideRotZ = slidingHip ? 0.14 : slidingAds ? 0.035 : 0;
 
     const targetX = baseTargetX + bobX + swayX + slideOffsetX + slashOffX;
-    const targetY = baseTargetY + bobY + reloadOffsetY - this.equipDrop + slideOffsetY + slashOffY;
+    const targetY =
+      baseTargetY + bobY + reloadOffsetY - this.equipDrop - this.vmLandDip + slideOffsetY + slashOffY;
     const targetZ = baseTargetZ - this.kickBackZ + swayZ + slashOffZ;
 
     const posLerp = 1 - Math.exp(-(this.slashTimer > 0 ? 28 : isAds ? 20 : 14) * dt);
@@ -1310,8 +1796,8 @@ export class WeaponSystem {
     const adsRotZ = rig.adsRot.z * adsBlend;
 
     const targetRotX = -this.kickRotX + sprintRotX + this.swayPitch + adsRotX + slashRotX;
-    const targetRotY = sprintRotY + slideRotY + adsRotY + slashRotY;
-    const targetRotZ = reloadTiltZ + slideRotZ + this.swayRoll + adsRotZ + slashRotZ;
+    const targetRotY = sprintRotY + slideRotY + adsRotY + slashRotY + this.kickYaw;
+    const targetRotZ = reloadTiltZ + slideRotZ + this.swayRoll + adsRotZ + slashRotZ + this.kickRoll;
 
     const rotLerp = 1 - Math.exp(-(this.slashTimer > 0 ? 28 : isAds ? 18 : 14) * dt);
     this.weaponPivot.rotation.x += (targetRotX - this.weaponPivot.rotation.x) * rotLerp;
@@ -1337,18 +1823,177 @@ export class WeaponSystem {
     }
   }
 
-  private createMuzzleFlash(): Mesh {
-    const flash = MeshBuilder.CreatePolyhedron('muzzleFlash', { type: 1, size: 0.06 }, this.scene);
+  private initVfxPools(): void {
+    for (let i = 0; i < CASING_POOL_CAPACITY; i++) {
+      const mesh = MeshBuilder.CreateCylinder(
+        `shellCasingPool_${i}`,
+        { height: 0.025, diameter: 0.01, tessellation: 8 },
+        this.scene
+      );
+      mesh.parent = this.vfxPoolRoot;
+      mesh.material = this.brassMaterial;
+      mesh.isPickable = false;
+      mesh.checkCollisions = false;
+      mesh.setEnabled(false);
+      this.casingPool.push({
+        mesh,
+        active: false,
+        vel: Vector3.Zero(),
+        spin: Vector3.Zero(),
+        life: 0,
+        maxLife: 0.72,
+        floorY: 0.015,
+      });
+    }
+
+    for (let i = 0; i < IMPACT_POOL_CAPACITY; i++) {
+      const mesh = MeshBuilder.CreateBox(
+        `impactSparkPool_${i}`,
+        { size: 0.048 },
+        this.scene
+      );
+      mesh.parent = this.vfxPoolRoot;
+      mesh.material = this.impactMatSparkA;
+      mesh.isPickable = false;
+      mesh.checkCollisions = false;
+      mesh.setEnabled(false);
+      this.impactPool.push({
+        mesh,
+        active: false,
+        vel: Vector3.Zero(),
+        life: 0,
+        maxLife: 0.16,
+        gravity: 11.5,
+        baseScale: 1.0,
+      });
+    }
+
+    for (let i = 0; i < DUST_POOL_CAPACITY; i++) {
+      const mesh = MeshBuilder.CreatePolyhedron(
+        `impactDustPool_${i}`,
+        { type: 1, size: 0.082 },
+        this.scene
+      );
+      mesh.parent = this.vfxPoolRoot;
+      mesh.material = this.dustMaterial;
+      mesh.isPickable = false;
+      mesh.checkCollisions = false;
+      mesh.setEnabled(false);
+      this.dustPool.push({
+        mesh,
+        active: false,
+        vel: Vector3.Zero(),
+        life: 0,
+        maxLife: 0.28,
+      });
+    }
+
+    for (let i = 0; i < DECAL_POOL_CAPACITY; i++) {
+      const mesh = MeshBuilder.CreateDisc(
+        `bulletDecalPool_${i}`,
+        { radius: 0.044, tessellation: 8, sideOrientation: Mesh.DOUBLESIDE },
+        this.scene
+      );
+      mesh.parent = this.vfxPoolRoot;
+      mesh.material = this.decalMaterial;
+      mesh.isPickable = false;
+      mesh.checkCollisions = false;
+      mesh.setEnabled(false);
+      this.decalPool.push({
+        mesh,
+        active: false,
+      });
+    }
+
+    for (let i = 0; i < KNIFE_TRAIL_CAPACITY; i++) {
+      const seg = MeshBuilder.CreateBox(
+        `knifeArcSeg_${i}`,
+        { width: 0.011, height: 0.135, depth: 0.004 },
+        this.scene
+      );
+      seg.parent = this.camera;
+      seg.material = this.knifeTrailMaterial;
+      seg.isPickable = false;
+      seg.checkCollisions = false;
+      seg.renderingGroupId = 1;
+      seg.setEnabled(false);
+      this.knifeTrailMeshes.push(seg);
+    }
+  }
+
+  private createMuzzleFlash(): TransformNode {
+    const root = new TransformNode('muzzleFlashRoot', this.scene);
+
     const mat = new StandardMaterial('muzzleFlashMat', this.scene);
     mat.disableLighting = true;
-    mat.emissiveColor = new Color3(1.4, 0.95, 0.35);
-    flash.material = mat;
-    flash.isVisible = false;
-    flash.isPickable = false;
-    flash.checkCollisions = false;
-    flash.renderingGroupId = 1;
+    mat.diffuseColor = Color3.Black();
+    mat.emissiveColor = new Color3(1.85, 1.2, 0.45);
+    mat.alpha = 0.95;
+    mat.alphaMode = Constants.ALPHA_ADD;
+    mat.backFaceCulling = false;
+    mat.disableDepthWrite = true;
+    this.muzzleFlashMat = mat;
     this.materialsToDispose.push(mat);
-    return flash;
+
+    const bladeAngles = [0, Math.PI / 3, (2 * Math.PI) / 3];
+    for (let i = 0; i < bladeAngles.length; i++) {
+      const blade = MeshBuilder.CreatePlane(
+        `muzzleStarBlade_${i}`,
+        { width: 0.175, height: 0.042 },
+        this.scene
+      );
+      blade.parent = root;
+      blade.rotation.z = bladeAngles[i];
+      blade.position.z = 0.025;
+      blade.material = mat;
+      blade.isPickable = false;
+      blade.checkCollisions = false;
+      blade.renderingGroupId = 1;
+      this.muzzleFlashMeshes.push(blade);
+    }
+
+    for (let i = 0; i < 2; i++) {
+      const axial = MeshBuilder.CreatePlane(
+        `muzzleAxialBlade_${i}`,
+        { width: 0.15, height: 0.04 },
+        this.scene
+      );
+      axial.parent = root;
+      axial.rotation.y = Math.PI / 2;
+      axial.rotation.x = i === 0 ? 0 : Math.PI / 2;
+      axial.position.z = 0.075;
+      axial.material = mat;
+      axial.isPickable = false;
+      axial.checkCollisions = false;
+      axial.renderingGroupId = 1;
+      this.muzzleFlashMeshes.push(axial);
+    }
+
+    const cone = MeshBuilder.CreateCylinder(
+      'muzzleFlashCone',
+      { height: 0.17, diameterTop: 0.004, diameterBottom: 0.056, tessellation: 8 },
+      this.scene
+    );
+    cone.parent = root;
+    cone.rotation.x = Math.PI / 2;
+    cone.position.z = 0.088;
+    cone.material = mat;
+    cone.isPickable = false;
+    cone.checkCollisions = false;
+    cone.renderingGroupId = 1;
+    this.muzzleFlashMeshes.push(cone);
+
+    const core = MeshBuilder.CreatePolyhedron('muzzleFlashCore', { type: 1, size: 0.03 }, this.scene);
+    core.parent = root;
+    core.position.z = 0.018;
+    core.material = mat;
+    core.isPickable = false;
+    core.checkCollisions = false;
+    core.renderingGroupId = 1;
+    this.muzzleFlashMeshes.push(core);
+
+    root.setEnabled(false);
+    return root;
   }
 
   private bindViewModelLights(): void {
@@ -2081,23 +2726,77 @@ export class WeaponSystem {
     return mesh;
   }
 
+  public getVfxPoolStats() {
+    let activeCasings = 0;
+    for (const c of this.casingPool) if (c.active) activeCasings += 1;
+    let activeImpacts = 0;
+    for (const imp of this.impactPool) if (imp.active) activeImpacts += 1;
+    let activeDust = 0;
+    for (const d of this.dustPool) if (d.active) activeDust += 1;
+    let activeDecals = 0;
+    for (const dec of this.decalPool) if (dec.active) activeDecals += 1;
+    let knifeTrailVisibleCount = 0;
+    for (const seg of this.knifeTrailMeshes) if (seg.isEnabled()) knifeTrailVisibleCount += 1;
+    return {
+      tracerCapacity: this.tracerPool.getCapacity(),
+      activeTracers: this.tracerPool.getActiveCount(),
+      casingCapacity: this.casingPool.length,
+      activeCasings,
+      impactCapacity: this.impactPool.length,
+      activeImpacts,
+      dustCapacity: this.dustPool.length,
+      activeDust,
+      decalCapacity: this.decalPool.length,
+      activeDecals,
+      muzzleFlashEnabled: this.muzzleFlashRoot.isEnabled(),
+      muzzleFlashMeshCount: this.muzzleFlashMeshes.length,
+      muzzleLightIntensity: this.muzzleLight.intensity,
+      knifeTrailVisibleCount,
+    };
+  }
+
   public clearTransientEffects(): void {
-    for (const tracer of this.tracers) tracer.mesh.dispose();
-    for (const casing of this.casings) casing.mesh.dispose();
-    for (const impact of this.impacts) impact.mesh.dispose();
-    this.tracers.length = 0;
-    this.casings.length = 0;
-    this.impacts.length = 0;
+    this.tracerPool.clear();
+    for (const c of this.casingPool) {
+      c.active = false;
+      c.life = 0;
+      c.mesh.setEnabled(false);
+    }
+    for (const imp of this.impactPool) {
+      imp.active = false;
+      imp.life = 0;
+      imp.mesh.setEnabled(false);
+    }
+    for (const d of this.dustPool) {
+      d.active = false;
+      d.life = 0;
+      d.mesh.setEnabled(false);
+    }
+    this.hideKnifeTrail();
   }
 
   public dispose(): void {
     this.clearDecals();
     this.clearTransientEffects();
+    this.tracerPool.dispose();
+    for (const c of this.casingPool) c.mesh.dispose();
+    this.casingPool = [];
+    for (const imp of this.impactPool) imp.mesh.dispose();
+    this.impactPool = [];
+    for (const d of this.dustPool) d.mesh.dispose();
+    this.dustPool = [];
+    for (const dec of this.decalPool) dec.mesh.dispose();
+    this.decalPool = [];
+    for (const seg of this.knifeTrailMeshes) seg.dispose();
+    this.knifeTrailMeshes = [];
+    this.vfxPoolRoot.dispose();
     this.charmRoots.clear();
     this.charmPivot = null;
     this.models.forEach((rig) => rig.root.dispose());
     this.models.clear();
-    this.muzzleFlashMesh.dispose();
+    for (const m of this.muzzleFlashMeshes) m.dispose();
+    this.muzzleFlashMeshes = [];
+    this.muzzleFlashRoot.dispose();
     this.muzzleLight.dispose();
     this.vmFillLight.dispose();
     this.vmRimLight.dispose();

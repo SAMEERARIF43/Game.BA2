@@ -16,6 +16,7 @@ import {
   isFullscreenSupported,
   toggleFullscreen,
 } from '../utils/fullscreen';
+import { playUiAudioCue } from '../utils/uiAudio';
 
 interface SettingsPanelProps {
   settings: GameSettings;
@@ -184,8 +185,65 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     </label>
   );
 
+  const effectiveVolumePct = settings.muted ? 0 : Math.round(settings.volume * 100);
+
   return (
     <div className="space-y-4">
+      <section
+        aria-label="Global audio controls"
+        className="flex flex-col gap-3 border border-white/12 bg-black/35 px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between"
+      >
+        <div className="flex items-center justify-between gap-3 sm:justify-start">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={!settings.muted}
+            aria-label={settings.muted ? 'Unmute game sound effects and UI clicks' : 'Mute game sound effects and UI clicks'}
+            onClick={() => onUpdateSettings({ ...settings, muted: !settings.muted })}
+            className={`inline-flex min-h-10 cursor-pointer items-center gap-2 border px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${FOCUS_CLASS} ${
+              settings.muted
+                ? 'border-red-400/50 bg-red-500/15 text-red-200 hover:bg-red-500/25'
+                : 'border-amber-400/50 bg-amber-400/15 text-amber-200 hover:bg-amber-400/25'
+            }`}
+          >
+            {settings.muted ? (
+              <VolumeX className="h-4 w-4 text-red-400" aria-hidden="true" />
+            ) : (
+              <Volume2 className="h-4 w-4 text-amber-400" aria-hidden="true" />
+            )}
+            <span>{settings.muted ? 'Audio Muted' : 'Audio Active'}</span>
+          </button>
+
+          <span className="text-[11px] text-slate-400">
+            SFX &amp; UI clicks
+          </span>
+        </div>
+
+        <label className="flex flex-1 items-center gap-3 sm:max-w-xs">
+          <span className="shrink-0 text-xs text-slate-300">Master</span>
+          <input
+            type="range"
+            aria-label="Global master volume"
+            min={0}
+            max={1}
+            step={0.05}
+            value={settings.volume}
+            onChange={(event) => {
+              const nextVolume = Number(event.target.value);
+              onUpdateSettings({
+                ...settings,
+                volume: nextVolume,
+                muted: nextVolume <= 0,
+              });
+            }}
+            className="w-full cursor-pointer accent-amber-400"
+          />
+          <span className="w-10 shrink-0 text-right font-mono-tabular text-xs font-semibold text-white">
+            {effectiveVolumePct}%
+          </span>
+        </label>
+      </section>
+
       <div
         className={`grid gap-1 border-b border-white/10 pb-3 ${
           inMatch ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-5'
@@ -423,20 +481,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
         {activeTab === 'audio' && (
           <>
-            {renderToggle('Mute Audio', settings.muted, () =>
-              onUpdateSettings({ ...settings, muted: !settings.muted })
-            )}
             {renderSlider(
-              'Master Volume',
-              settings.volume,
-              0,
-              1,
-              0.05,
-              `${Math.round(settings.volume * 100)}%`,
-              (volume) => onUpdateSettings({ ...settings, volume, muted: false })
-            )}
-            {renderSlider(
-              'SFX Volume',
+              'SFX & UI Clicks Volume',
               settings.sfxVolume,
               0,
               1,
@@ -453,13 +499,28 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               `${Math.round(settings.musicVolume * 100)}%`,
               (musicVolume) => onUpdateSettings({ ...settings, musicVolume })
             )}
-            <div className="flex items-center gap-2 text-[11px] text-slate-400">
-              {settings.muted ? (
-                <VolumeX className="h-3.5 w-3.5 text-red-400" />
-              ) : (
-                <Volume2 className="h-3.5 w-3.5 text-amber-400" />
-              )}
-              {settings.muted ? 'All game audio is muted.' : 'Audio changes apply immediately.'}
+            <div className="flex flex-wrap items-center justify-between gap-3 border border-white/10 bg-black/25 px-3 py-2.5">
+              <div className="flex items-center gap-2 text-[11px] text-slate-300">
+                {settings.muted || settings.volume <= 0 ? (
+                  <VolumeX className="h-3.5 w-3.5 text-red-400" aria-hidden="true" />
+                ) : (
+                  <Volume2 className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
+                )}
+                <span>
+                  {settings.muted
+                    ? 'All game SFX, ambient audio, and UI clicks are muted.'
+                    : 'Global mute and master volume apply to game SFX and UI clicks.'}
+                </span>
+              </div>
+              <button
+                type="button"
+                data-ui-sound="none"
+                disabled={settings.muted || settings.volume <= 0}
+                onClick={() => playUiAudioCue('sfx_preview')}
+                className={`cursor-pointer border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-amber-400/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap ${FOCUS_CLASS}`}
+              >
+                Test Sound
+              </button>
             </div>
           </>
         )}

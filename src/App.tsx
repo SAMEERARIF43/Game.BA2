@@ -8,6 +8,7 @@ import { isOfflineMatchStatus } from './match/matchMachine';
 import { CustomMatchMenu } from './ui/CustomMatchMenu';
 import { EndMatchScreen } from './ui/EndMatchScreen';
 import { GameHUD } from './ui/GameHUD';
+import { LoadingOverlay } from './ui/LoadingOverlay';
 import { LobbyScreen } from './ui/LobbyScreen';
 import { MainMenu } from './ui/MainMenu';
 import { MapSelector } from './ui/MapSelector';
@@ -182,6 +183,24 @@ export default function App() {
             />
           )}
         </>
+      )}
+
+      {!contextLost && derived.initProgress.active && (
+        <LoadingOverlay
+          title="STRIKE FORCE"
+          detail="Preparing tactical 3D environment"
+          stage={derived.initProgress.stage}
+          progress={derived.initProgress.progress}
+        />
+      )}
+
+      {!contextLost && !derived.initProgress.active && status === 'mp_connecting' && (
+        <LoadingOverlay
+          title="CONNECTING TO MATCH"
+          detail="Establishing authoritative Colyseus session"
+          stage={derived.connectStage ?? 'Connecting to server...'}
+          onCancel={actions.cancelMpConnect}
+        />
       )}
     </main>
   );

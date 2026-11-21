@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
-import { EngineManager } from '../game/EngineManager';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { EngineManager, InitProgressState } from '../game/EngineManager';
 import { CharacterId, GameSettings, GunId, KnifeCharmId } from '../game/types';
 import { MapId } from '../maps/types';
 import {
@@ -24,11 +24,14 @@ import {
 } from '../settings/settingsStorage';
 import { toggleFullscreen } from '../utils/fullscreen';
 import { navigateToRoute, parseRouteFromLocation } from '../utils/router';
+import { registerUiAudioHandler } from '../utils/uiAudio';
 
 export interface MatchMachineDerived {
   isMultiplayerInMatch: boolean;
   isMultiplayerHost: boolean;
   postMatchStats: PostMatchStats;
+  initProgress: InitProgressState;
+  connectStage: string | null;
 }
 
 export interface MatchMachineActions {
@@ -50,6 +53,7 @@ export interface MatchMachineActions {
   lookupRoom: (roomCode: string) => Promise<RoomLookupSummary>;
   createPrivateMatch: (options: CreatePrivateMatchOptions) => Promise<void>;
   joinPrivateMatch: (roomCode: string, playerName: string, password?: string) => Promise<void>;
+  cancelMpConnect: () => void;
   leaveMultiplayer: () => Promise<void>;
   returnToLobby: () => void;
   updateRoomConfig: (patch: Partial<CreatePrivateMatchOptions>) => void;
@@ -68,6 +72,13 @@ export function useMatchMachine() {
       rank: getRankSummary(loadProgression().xp),
     })
   );
+
+  const [initProgress, setInitProgress] = useState<InitProgressState>({
+    active: true,
+    progress: 12,
+    stage: 'Initializing 3D viewport',
+  });
+  const [connectStage, setConnectStage] = useState<string | null>(null);
 
   const stateRef = useRef<MatchMachineState>(state);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -156,6 +167,9 @@ export function useMatchMachine() {
       onContextLost: (lost) => {
         dispatchAction({ type: 'SET_CONTEXT_LOST', lost });
       },
+      onInitProgress: (nextProgress) => {
+        setInitProgress(nextProgress);
+      },
       onMultiplayerShot: (payload) => {
         networkRef.current?.sendFire(payload);
       },
@@ -172,6 +186,28 @@ export function useMatchMachine() {
       },
     });
     engineRef.current = manager;
+    registerUiAudioHandler((cue) => {
+      engineRef.current?.playUiAudioCue(cue);
+    });
+
+    const onDocumentClick = (event: MouseEvent) => {
+      if (document.pointerLockElement) return;
+      const target = event.target as HTMLElement | null;
+      if (!target || target === canvas) return;
+      const interactive = target.closest(
+        'button, [role="tab"], [role="switch"], select, input[type="checkbox"], input[type="radio"]'
+      ) as HTMLElement | null;
+      if (!interactive) return;
+      if ((interactive as HTMLButtonElement).disabled || interactive.getAttribute('aria-disabled') === 'true') {
+        return;
+      }
+      if (interactive.dataset.uiSound === 'none') return;
+      const isToggle =
+        interactive.getAttribute('role') === 'switch' ||
+        interactive.getAttribute('aria-pressed') !== null;
+      manager.playUiAudioCue(isToggle ? 'toggle' : 'click');
+    };
+    document.addEventListener('click', onDocumentClick);
 
     // Handle initial direct URL route (e.g. /map/:id)
     if (stateRef.current.status === 'offline_paused') {
@@ -179,6 +215,8 @@ export function useMatchMachine() {
     }
 
     return () => {
+      document.removeEventListener('click', onDocumentClick);
+      registerUiAudioHandler(null);
       clearNoticeTimer();
       void network.leaveRoom();
       networkRef.current = null;
@@ -408,6 +446,7 @@ export function useMatchMachine() {
       if (started.status !== 'mp_connecting') {
         throw new Error('A multiplayer connection attempt is already in progress.');
       }
+      setConnectStage('Creating private match room...');
       const epoch = started.connectionEpoch;
       const latestSettings = stateRef.current.settings;
 
@@ -424,10 +463,12 @@ export function useMatchMachine() {
         }
 
         const synced = dispatchAction({ type: 'MP_CONNECT_SUCCESS', epoch, snapshot });
+        setConnectStage(null);
         navigateToRoute(deriveActiveRoute(synced));
         engineRef.current?.syncMultiplayerState(snapshot);
       } catch (err) {
         if (stateRef.current.connectionEpoch === epoch) {
+          setConnectStage(null);
           dispatchAction({ type: 'MP_CONNECT_FAILURE', epoch });
           throw err;
         }
@@ -450,6 +491,8 @@ export function useMatchMachine() {
       if (started.status !== 'mp_connecting') {
         throw new Error('A multiplayer connection attempt is already in progress.');
       }
+      const normalizedCode = roomCode.trim().toUpperCase();
+      setConnectStage(`Joining room ${normalizedCode}...`);
       const epoch = started.connectionEpoch;
       const latestSettings = stateRef.current.settings;
 
@@ -468,10 +511,12 @@ export function useMatchMachine() {
         }
 
         const synced = dispatchAction({ type: 'MP_CONNECT_SUCCESS', epoch, snapshot });
+        setConnectStage(null);
         navigateToRoute(deriveActiveRoute(synced));
         engineRef.current?.syncMultiplayerState(snapshot);
       } catch (err) {
         if (stateRef.current.connectionEpoch === epoch) {
+          setConnectStage(null);
           dispatchAction({ type: 'MP_CONNECT_FAILURE', epoch });
           throw err;
         }
@@ -480,8 +525,15 @@ export function useMatchMachine() {
     [dispatchAction]
   );
 
+  const cancelMpConnect = useCallback(() => {
+    setConnectStage(null);
+    dispatchAction({ type: 'MP_CONNECT_CANCEL' });
+    void networkRef.current?.leaveRoom();
+  }, [dispatchAction]);
+
   const leaveMultiplayer = useCallback(async () => {
     clearNoticeTimer();
+    setConnectStage(null);
     const nextState = dispatchAction({ type: 'LEAVE_MULTIPLAYER' });
     navigateToRoute(deriveActiveRoute(nextState));
     engineRef.current?.returnToMenu();
@@ -525,8 +577,10 @@ export function useMatchMachine() {
         state.lobbySnapshot !== null &&
         state.lobbySnapshot.hostId === state.lobbySnapshot.localPlayerId,
       postMatchStats: derivePostMatchStats(state.hud),
+      initProgress,
+      connectStage,
     }),
-    [state.hud, state.lobbySnapshot, state.status]
+    [connectStage, initProgress, state.hud, state.lobbySnapshot, state.status]
   );
 
   const actions = useMemo<MatchMachineActions>(
@@ -549,6 +603,7 @@ export function useMatchMachine() {
       lookupRoom,
       createPrivateMatch,
       joinPrivateMatch,
+      cancelMpConnect,
       leaveMultiplayer,
       returnToLobby,
       updateRoomConfig,
@@ -561,6 +616,7 @@ export function useMatchMachine() {
     [
       backToMenu,
       balanceRoomTeams,
+      cancelMpConnect,
       createPrivateMatch,
       deployMap,
       joinPrivateMatch,

@@ -1,5 +1,5 @@
-import { GameSettings, HudState, WEAPONS } from '../game/types';
-import { MapId } from '../maps/types';
+import { GameSettings, HudState, MatchParticipant, WEAPONS } from '../game/types';
+import { MapId, TeamId } from '../maps/types';
 import { LobbyRoomSnapshot } from '../multiplayer/types';
 import { AppRoute } from '../utils/router';
 import { DEFAULT_KILL_LIMIT, MATCH_DURATION_SEC } from './MatchManager';
@@ -46,6 +46,7 @@ export type MatchMachineAction =
   | { type: 'MP_CONNECT_START' }
   | { type: 'MP_CONNECT_SUCCESS'; epoch: number; snapshot: LobbyRoomSnapshot }
   | { type: 'MP_CONNECT_FAILURE'; epoch: number }
+  | { type: 'MP_CONNECT_CANCEL' }
   | { type: 'MP_STATE_SYNC'; snapshot: LobbyRoomSnapshot; epoch?: number }
   | { type: 'MP_SYSTEM_NOTICE'; message: string }
   | { type: 'CLEAR_SYSTEM_NOTICE' }
@@ -61,6 +62,20 @@ export interface PostMatchStats {
   deaths: number;
   accuracyPct: number;
   headshots: number;
+}
+
+export interface MatchMvpSummary {
+  id: string;
+  name: string;
+  team: TeamId;
+  isPlayer: boolean;
+  isBot: boolean;
+  kills: number;
+  deaths: number;
+  kdRatio: number;
+  combatScore: number;
+  headshots: number | null;
+  accuracyPct: number | null;
 }
 
 export const INITIAL_HUD: HudState = {
@@ -255,6 +270,74 @@ export function derivePostMatchStats(hud: HudState): PostMatchStats {
   };
 }
 
+export function selectMatchMvp(
+  participants: readonly MatchParticipant[],
+  playerStats: PostMatchStats
+): MatchMvpSummary | null {
+  if (participants.length === 0) {
+    if (playerStats.kills === 0 && playerStats.deaths === 0 && playerStats.headshots === 0) {
+      return null;
+    }
+    const combatScore =
+      playerStats.kills * 100 +
+      playerStats.headshots * 50 +
+      (playerStats.kills > 0 ? Math.round(playerStats.accuracyPct * 0.5) : 0);
+    const kdRatio =
+      playerStats.deaths > 0
+        ? Math.round((playerStats.kills / playerStats.deaths) * 100) / 100
+        : playerStats.kills;
+    return {
+      id: 'player',
+      name: 'You',
+      team: 'blue',
+      isPlayer: true,
+      isBot: false,
+      kills: playerStats.kills,
+      deaths: playerStats.deaths,
+      kdRatio,
+      combatScore,
+      headshots: playerStats.headshots,
+      accuracyPct: playerStats.accuracyPct,
+    };
+  }
+
+  const scored: MatchMvpSummary[] = participants.map((participant) => {
+    const kills = participant.isPlayer ? playerStats.kills : participant.kills;
+    const deaths = participant.isPlayer ? playerStats.deaths : participant.deaths;
+    const headshots = participant.isPlayer ? playerStats.headshots : null;
+    const accuracyPct = participant.isPlayer ? playerStats.accuracyPct : null;
+    const combatScore =
+      kills * 100 +
+      (headshots !== null ? headshots * 50 : 0) +
+      (accuracyPct !== null && kills > 0 ? Math.round(accuracyPct * 0.5) : 0);
+    const kdRatio = deaths > 0 ? Math.round((kills / deaths) * 100) / 100 : kills;
+
+    return {
+      id: participant.id,
+      name: participant.name,
+      team: participant.team,
+      isPlayer: participant.isPlayer,
+      isBot: !participant.isPlayer && participant.id.startsWith('bot_'),
+      kills,
+      deaths,
+      kdRatio,
+      combatScore,
+      headshots,
+      accuracyPct,
+    };
+  });
+
+  scored.sort(
+    (a, b) =>
+      b.combatScore - a.combatScore ||
+      a.deaths - b.deaths ||
+      b.kills - a.kills ||
+      Number(b.isPlayer) - Number(a.isPlayer)
+  );
+
+  return scored[0] ?? null;
+}
+
 function mapSnapshotPhaseToStatus(phase: LobbyRoomSnapshot['phase']): MatchMachineStatus {
   switch (phase) {
     case 'lobby':
@@ -394,6 +477,18 @@ export function matchReducer(
       return {
         ...state,
         status: 'custom_menu',
+        lobbySnapshot: null,
+      };
+    }
+
+    case 'MP_CONNECT_CANCEL': {
+      if (state.status !== 'mp_connecting') {
+        return state;
+      }
+      return {
+        ...state,
+        status: 'custom_menu',
+        connectionEpoch: state.connectionEpoch + 1,
         lobbySnapshot: null,
       };
     }

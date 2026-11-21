@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, KeyRound, Plus, Shield, Users } from 'lucide-react';
+import { ArrowLeft, KeyRound, Loader2, Plus, Shield, Users } from 'lucide-react';
 import { MAP_LIST } from '../maps/MapManager';
 import { MapId } from '../maps/types';
 import { CreatePrivateMatchOptions, RoomLookupSummary } from '../multiplayer/types';
@@ -46,6 +46,7 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [roomPreview, setRoomPreview] = useState<RoomLookupSummary | null>(null);
+  const [lookingUp, setLookingUp] = useState(false);
 
   useEffect(() => {
     if (initialJoinCode) {
@@ -58,10 +59,12 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
     const code = joinCode.trim().toUpperCase();
     if (code.length !== 6) {
       setRoomPreview(null);
+      setLookingUp(false);
       return;
     }
 
     let cancelled = false;
+    setLookingUp(true);
     onLookupRoom(code)
       .then((summary) => {
         if (!cancelled) {
@@ -72,6 +75,11 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
       .catch(() => {
         if (!cancelled) {
           setRoomPreview(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLookingUp(false);
         }
       });
 
@@ -345,7 +353,14 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
                   />
                 </label>
 
-                {roomPreview && (
+                {lookingUp && (
+                  <div className="flex items-center gap-2 border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-300">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400 motion-reduce:animate-none" />
+                    <span>Checking room {joinCode}...</span>
+                  </div>
+                )}
+
+                {!lookingUp && roomPreview && (
                   <div className="border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs">
                     <div className="flex items-center justify-between font-medium text-emerald-200">
                       <span>{roomPreview.roomName}</span>

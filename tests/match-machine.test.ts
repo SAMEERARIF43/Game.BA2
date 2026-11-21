@@ -8,6 +8,7 @@ import {
   isGameplayShortcutBlocked,
   matchReducer,
   RankInfo,
+  selectMatchMvp,
 } from '../src/match/matchMachine.ts';
 import { GameSettings } from '../src/game/types.ts';
 import { LobbyRoomSnapshot } from '../src/multiplayer/types.ts';
@@ -331,3 +332,97 @@ test('MatchMachine: disconnect, system notice, popstate & contextLost', () => {
     headshots: 3,
   });
 });
+
+test('MatchMachine: MP_CONNECT_CANCEL returns to custom_menu and invalidates in-flight epoch', () => {
+  let state = makeInitial({ view: 'custom', joinCode: 'WAR482' });
+  state = matchReducer(state, { type: 'MP_CONNECT_START' });
+  assert.strictEqual(state.status, 'mp_connecting');
+  const canceledEpoch = state.connectionEpoch;
+
+  state = matchReducer(state, { type: 'MP_CONNECT_CANCEL' });
+  assert.strictEqual(state.status, 'custom_menu');
+  assert.strictEqual(state.connectionEpoch, canceledEpoch + 1);
+  assert.strictEqual(state.lobbySnapshot, null);
+
+  // Stale connect success after cancel must be ignored
+  const afterStaleSuccess = matchReducer(state, {
+    type: 'MP_CONNECT_SUCCESS',
+    epoch: canceledEpoch,
+    snapshot: makeSnapshot('lobby', 'urban'),
+  });
+  assert.strictEqual(afterStaleSuccess.status, 'custom_menu');
+  assert.strictEqual(afterStaleSuccess.lobbySnapshot, null);
+});
+
+test('MatchMachine: selectMatchMvp computes highest combat score using playerStats', () => {
+  // Case 1: Local player combat score (kills + headshot & accuracy bonuses) beats bot with equal kills
+  const mvpPlayerWin = selectMatchMvp(
+    [
+      {
+        id: 'bot_red_1',
+        name: 'Viper',
+        team: 'red',
+        isPlayer: false,
+        kills: 10,
+        deaths: 3,
+        isAlive: true,
+        respawnTimer: 0,
+      },
+      {
+        id: 'player',
+        name: 'TestOp',
+        team: 'blue',
+        isPlayer: true,
+        kills: 10,
+        deaths: 4,
+        isAlive: true,
+        respawnTimer: 0,
+      },
+    ],
+    { kills: 10, deaths: 4, accuracyPct: 50, headshots: 4 }
+  );
+
+  assert.ok(mvpPlayerWin);
+  assert.strictEqual(mvpPlayerWin.id, 'player');
+  assert.strictEqual(mvpPlayerWin.combatScore, 1225); // 10*100 + 4*50 + 25
+  assert.strictEqual(mvpPlayerWin.kdRatio, 2.5);
+
+  // Case 2: Another operator with substantially more eliminations wins MVP
+  const mvpOpponentWin = selectMatchMvp(
+    [
+      {
+        id: 'bot_red_1',
+        name: 'Viper',
+        team: 'red',
+        isPlayer: false,
+        kills: 18,
+        deaths: 2,
+        isAlive: true,
+        respawnTimer: 0,
+      },
+      {
+        id: 'player',
+        name: 'TestOp',
+        team: 'blue',
+        isPlayer: true,
+        kills: 9,
+        deaths: 5,
+        isAlive: true,
+        respawnTimer: 0,
+      },
+    ],
+    { kills: 9, deaths: 5, accuracyPct: 40, headshots: 2 }
+  );
+
+  assert.ok(mvpOpponentWin);
+  assert.strictEqual(mvpOpponentWin.id, 'bot_red_1');
+  assert.strictEqual(mvpOpponentWin.combatScore, 1800);
+  assert.strictEqual(mvpOpponentWin.kdRatio, 9);
+
+  // Case 3: Empty participants returns null when playerStats are all zero
+  assert.strictEqual(
+    selectMatchMvp([], { kills: 0, deaths: 0, accuracyPct: 0, headshots: 0 }),
+    null
+  );
+});
+

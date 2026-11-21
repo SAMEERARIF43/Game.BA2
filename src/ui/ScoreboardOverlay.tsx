@@ -4,6 +4,7 @@ import { MatchParticipant, MatchSnapshot } from '../game/types';
 interface ScoreboardOverlayProps {
   match: MatchSnapshot;
   embedded?: boolean;
+  mvpId?: string;
 }
 
 export function formatMatchTime(seconds: number): string {
@@ -105,12 +106,14 @@ function TeamTable({
 export const ScoreboardOverlay: React.FC<ScoreboardOverlayProps> = ({
   match,
   embedded = false,
+  mvpId,
 }) => {
   const blueTeam = match.participants.filter((p) => p.team === 'blue');
   const redTeam = match.participants.filter((p) => p.team === 'red');
-  const mvp = [...match.participants].sort(
+  const fallbackMvp = [...match.participants].sort(
     (a, b) => b.kills - a.kills || a.deaths - b.deaths,
   )[0];
+  const resolvedMvpId = mvpId ?? fallbackMvp?.id;
 
   const content = (
     <div className="w-full max-w-4xl border border-slate-400/20 bg-[#0e131b]/95 p-4 shadow-2xl shadow-black/40 sm:p-5">
@@ -139,14 +142,14 @@ export const ScoreboardOverlay: React.FC<ScoreboardOverlayProps> = ({
           score={match.blueScore}
           accentClass="text-blue-400"
           rows={blueTeam}
-          mvpId={mvp?.id}
+          mvpId={resolvedMvpId}
         />
         <TeamTable
           label="Red Opposition"
           score={match.redScore}
           accentClass="text-red-400"
           rows={redTeam}
-          mvpId={mvp?.id}
+          mvpId={resolvedMvpId}
         />
       </div>
     </div>

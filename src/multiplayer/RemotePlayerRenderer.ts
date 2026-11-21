@@ -1,5 +1,6 @@
 import {
   Color3,
+  Constants,
   DynamicTexture,
   Material,
   Mesh,
@@ -16,7 +17,12 @@ import {
   buildOperatorRig,
   createOperatorPalette,
 } from '../game/OperatorMeshBuilder';
-import { CharacterId, WeaponId } from '../game/types';
+import {
+  PooledTracerRingBuffer,
+  getVfxQualityBudget,
+  getWeaponFeelProfile,
+} from '../game/combatVfx';
+import { CharacterId, GraphicsQuality, WeaponId } from '../game/types';
 import { TeamId } from '../maps/types';
 import { LobbyPlayerInfo, RemoteFireEvent } from './types';
 
@@ -50,40 +56,51 @@ interface RemoteAvatar {
   headMat: PBRMaterial;
 }
 
-interface RemoteTracer {
-  mesh: Mesh;
-  life: number;
-  maxLife: number;
-}
-
 export class RemotePlayerRenderer {
   private scene: Scene;
   private avatars = new Map<string, RemoteAvatar>();
-  private tracers: RemoteTracer[] = [];
+  private tracerPool: PooledTracerRingBuffer;
   private sharedMaterials: Material[] = [];
   private bluePalette: OperatorPalette;
   private redPalette: OperatorPalette;
   private blueTracerMat: StandardMaterial;
   private redTracerMat: StandardMaterial;
+  private readonly fireStartScratch = new Vector3();
+  private readonly fireEndScratch = new Vector3();
 
   constructor(scene: Scene) {
     this.scene = scene;
+
+    this.tracerPool = new PooledTracerRingBuffer(this.scene, 'remoteTracerPool', 32);
 
     this.bluePalette = createOperatorPalette(this.scene, 'blue', 'remBluePal');
     this.redPalette = createOperatorPalette(this.scene, 'red', 'remRedPal');
 
     this.blueTracerMat = new StandardMaterial('remoteTracerBlue', this.scene);
     this.blueTracerMat.disableLighting = true;
-    this.blueTracerMat.emissiveColor = new Color3(0.45, 1.0, 1.85);
+    this.blueTracerMat.diffuseColor = Color3.Black();
+    this.blueTracerMat.emissiveColor = new Color3(0.45, 1.05, 1.9);
+    this.blueTracerMat.alpha = 0.94;
+    this.blueTracerMat.alphaMode = Constants.ALPHA_ADD;
+    this.blueTracerMat.disableDepthWrite = true;
 
     this.redTracerMat = new StandardMaterial('remoteTracerRed', this.scene);
     this.redTracerMat.disableLighting = true;
-    this.redTracerMat.emissiveColor = new Color3(1.9, 0.65, 0.35);
+    this.redTracerMat.diffuseColor = Color3.Black();
+    this.redTracerMat.emissiveColor = new Color3(1.95, 0.68, 0.35);
+    this.redTracerMat.alpha = 0.94;
+    this.redTracerMat.alphaMode = Constants.ALPHA_ADD;
+    this.redTracerMat.disableDepthWrite = true;
 
     this.sharedMaterials.push(
       this.blueTracerMat,
       this.redTracerMat
     );
+  }
+
+  public setGraphicsQuality(quality: GraphicsQuality): void {
+    const budget = getVfxQualityBudget(quality);
+    this.tracerPool.setMaxActive(budget.maxTracers);
   }
 
   public syncPlayers(players: LobbyPlayerInfo[], localPlayerId: string): void {
@@ -140,33 +157,30 @@ export class RemotePlayerRenderer {
 
   public spawnRemoteFire(evt: RemoteFireEvent): void {
     if (evt.weaponId === 'knife') return;
+    const feel = getWeaponFeelProfile(evt.weaponId);
     const avatar = this.avatars.get(evt.shooterId);
-    let start = new Vector3(evt.muzzleX, evt.muzzleY, evt.muzzleZ);
+    this.fireStartScratch.set(evt.muzzleX, evt.muzzleY, evt.muzzleZ);
     if (avatar && avatar.isAlive) {
       avatar.muzzleFlash.isVisible = true;
+      avatar.muzzleFlash.rotation.z = Math.random() * Math.PI * 2;
+      const flashScale = (0.82 + Math.random() * 0.44) * feel.muzzleScale;
+      avatar.muzzleFlash.scaling.setAll(flashScale);
       avatar.muzzleFlashTimer = 0.045;
-      start = avatar.muzzlePoint.getAbsolutePosition();
+      this.fireStartScratch.copyFrom(avatar.muzzlePoint.getAbsolutePosition());
     }
 
-    const end = new Vector3(evt.endX, evt.endY, evt.endZ);
-    const delta = end.subtract(start);
-    const fullDist = delta.length();
-    if (fullDist < 0.3) return;
-    const beamLen = Math.min(fullDist, 24);
-    const dir = delta.scale(1 / fullDist);
-    const mid = start.add(dir.scale(beamLen * 0.5));
-
-    const beam = MeshBuilder.CreateBox(
-      'remoteTracer',
-      { width: 0.018, height: 0.018, depth: beamLen },
-      this.scene
+    this.fireEndScratch.set(evt.endX, evt.endY, evt.endZ);
+    this.tracerPool.spawn(
+      this.fireStartScratch,
+      this.fireEndScratch,
+      avatar?.team === 'blue' ? this.blueTracerMat : this.redTracerMat,
+      {
+        thickness: feel.tracerThickness,
+        duration: feel.tracerDuration,
+        maxLength: 26,
+        startLead: 0.05,
+      }
     );
-    beam.position.copyFrom(mid);
-    beam.lookAt(end);
-    beam.material = avatar?.team === 'blue' ? this.blueTracerMat : this.redTracerMat;
-    beam.isPickable = false;
-    beam.checkCollisions = false;
-    this.tracers.push({ mesh: beam, life: 0.06, maxLife: 0.06 });
   }
 
   public update(dt: number): void {
@@ -222,25 +236,11 @@ export class RemotePlayerRenderer {
       }
     }
 
-    for (let i = this.tracers.length - 1; i >= 0; i--) {
-      const t = this.tracers[i];
-      t.life -= clampedDt;
-      if (t.life <= 0) {
-        t.mesh.dispose();
-        this.tracers.splice(i, 1);
-      } else {
-        const ratio = t.life / t.maxLife;
-        t.mesh.scaling.x = ratio;
-        t.mesh.scaling.y = ratio;
-      }
-    }
+    this.tracerPool.update(clampedDt);
   }
 
   public clear(): void {
-    for (const t of this.tracers) {
-      t.mesh.dispose();
-    }
-    this.tracers = [];
+    this.tracerPool.clear();
 
     for (const avatar of this.avatars.values()) {
       this.disposeAvatar(avatar);
@@ -250,6 +250,7 @@ export class RemotePlayerRenderer {
 
   public dispose(): void {
     this.clear();
+    this.tracerPool.dispose();
     this.bluePalette.dispose();
     this.redPalette.dispose();
     for (const mat of this.sharedMaterials) {

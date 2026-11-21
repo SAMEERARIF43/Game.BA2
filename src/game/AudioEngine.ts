@@ -260,6 +260,20 @@ export class AudioEngine {
     this.triggerTone(now + 0.025, 480, 720, 0.035, 'triangle', 0.18);
   }
 
+  public playUiClick(variant: 'click' | 'toggle' = 'click'): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted || this.masterVolume <= 0 || this.sfxVolume <= 0) {
+      return;
+    }
+    const now = this.ctx.currentTime;
+    if (variant === 'toggle') {
+      this.triggerTone(now, 680, 960, 0.032, 'triangle', 0.12);
+      this.triggerTone(now + 0.024, 960, 1180, 0.028, 'sine', 0.09);
+    } else {
+      this.triggerTone(now, 880, 620, 0.026, 'triangle', 0.11);
+    }
+  }
+
   public playLowAmmoWarning(): void {
     this.unlock();
     if (!this.ctx || !this.sfxGain || this.muted) return;

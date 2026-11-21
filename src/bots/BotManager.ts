@@ -1,9 +1,9 @@
 import {
   AbstractMesh,
   Color3,
+  Constants,
   Material,
   Mesh,
-  MeshBuilder,
   PBRMaterial,
   Ray,
   Scene,
@@ -16,8 +16,9 @@ import {
   buildOperatorRig,
   createOperatorPalette,
 } from '../game/OperatorMeshBuilder';
+import { PooledTracerRingBuffer, getVfxQualityBudget } from '../game/combatVfx';
 import { getCharacterForWeaponId } from '../game/loadoutRules';
-import { HitZone, MatchParticipant, WeaponId } from '../game/types';
+import { GraphicsQuality, HitZone, MatchParticipant, WeaponId } from '../game/types';
 import { MapDefinition, TeamId } from '../maps/types';
 import { MatchManager, RESPAWN_DELAY_SEC } from '../match/MatchManager';
 
@@ -110,12 +111,6 @@ interface BotAgent {
   headMat: PBRMaterial;
 }
 
-interface BotTracer {
-  mesh: Mesh;
-  life: number;
-  maxLife: number;
-}
-
 const BOT_MOVE_SPEED = 4.9;
 const BOT_STRAFE_SPEED = 3.2;
 const BOT_DETECT_RANGE = 42;
@@ -128,12 +123,12 @@ export class BotManager {
 
   private mapDef: MapDefinition | null = null;
   private bots: BotAgent[] = [];
-  private tracers: BotTracer[] = [];
+  private tracerPool: PooledTracerRingBuffer;
   private sharedMaterials: Material[] = [];
   private bluePalette: OperatorPalette | null = null;
   private redPalette: OperatorPalette | null = null;
-  private blueTracerMat!: StandardMaterial;
-  private redTracerMat!: StandardMaterial;
+  private blueTracerMat: StandardMaterial;
+  private redTracerMat: StandardMaterial;
   private readonly spawnGroundRay = new Ray(Vector3.Zero(), new Vector3(0, -1, 0), 3);
   private readonly collisionPickPredicate = (mesh: AbstractMesh): boolean =>
     mesh.checkCollisions && mesh.isEnabled() && !mesh.metadata?.isBot;
@@ -142,6 +137,29 @@ export class BotManager {
     this.scene = scene;
     this.match = match;
     this.callbacks = callbacks;
+
+    this.tracerPool = new PooledTracerRingBuffer(this.scene, 'botTracerPool', 32);
+
+    this.blueTracerMat = new StandardMaterial('botTracerBlue', this.scene);
+    this.blueTracerMat.disableLighting = true;
+    this.blueTracerMat.diffuseColor = Color3.Black();
+    this.blueTracerMat.emissiveColor = new Color3(0.45, 1.05, 1.9);
+    this.blueTracerMat.alpha = 0.94;
+    this.blueTracerMat.alphaMode = Constants.ALPHA_ADD;
+    this.blueTracerMat.disableDepthWrite = true;
+
+    this.redTracerMat = new StandardMaterial('botTracerRed', this.scene);
+    this.redTracerMat.disableLighting = true;
+    this.redTracerMat.diffuseColor = Color3.Black();
+    this.redTracerMat.emissiveColor = new Color3(1.95, 0.68, 0.35);
+    this.redTracerMat.alpha = 0.94;
+    this.redTracerMat.alphaMode = Constants.ALPHA_ADD;
+    this.redTracerMat.disableDepthWrite = true;
+  }
+
+  public setGraphicsQuality(quality: GraphicsQuality): void {
+    const budget = getVfxQualityBudget(quality);
+    this.tracerPool.setMaxActive(budget.maxTracers);
   }
 
   public spawnBotsForMatch(
@@ -151,7 +169,6 @@ export class BotManager {
   ): void {
     this.clearBots();
     this.mapDef = mapDef;
-    this.ensureSharedTracerMaterials();
     this.ensureOperatorPalettes();
 
     const blueWeaponNames = ['AK-47 Heavy Rifle', 'Vector-9 SMG', 'M870 Combat Shotgun', 'AWP-50 Sniper'];
@@ -191,26 +208,8 @@ export class BotManager {
     }
   }
 
-  private ensureSharedTracerMaterials(): void {
-    if (!this.blueTracerMat || this.blueTracerMat.getScene() !== this.scene) {
-      this.blueTracerMat = new StandardMaterial('botTracerBlue', this.scene);
-      this.blueTracerMat.disableLighting = true;
-      this.blueTracerMat.emissiveColor = new Color3(0.45, 1.0, 1.85);
-      this.sharedMaterials.push(this.blueTracerMat);
-    }
-    if (!this.redTracerMat || this.redTracerMat.getScene() !== this.scene) {
-      this.redTracerMat = new StandardMaterial('botTracerRed', this.scene);
-      this.redTracerMat.disableLighting = true;
-      this.redTracerMat.emissiveColor = new Color3(1.9, 0.65, 0.35);
-      this.sharedMaterials.push(this.redTracerMat);
-    }
-  }
-
   public clearBots(): void {
-    for (const t of this.tracers) {
-      t.mesh.dispose();
-    }
-    this.tracers = [];
+    this.tracerPool.clear();
 
     for (const bot of this.bots) {
       bot.bodyMat.dispose();
@@ -374,7 +373,7 @@ export class BotManager {
 
   public update(dt: number): void {
     const clampedDt = Math.min(dt, 0.05);
-    this.updateTracers(clampedDt);
+    this.tracerPool.update(clampedDt);
 
     if (this.match.getPhase() !== 'playing') return;
 
@@ -738,7 +737,10 @@ export class BotManager {
     }
 
     bot.muzzleFlash.isVisible = true;
-    bot.muzzleFlashTimer = 0.04;
+    bot.muzzleFlash.rotation.z = Math.random() * Math.PI * 2;
+    const flashScale = 0.8 + Math.random() * 0.45;
+    bot.muzzleFlash.scaling.setAll(flashScale);
+    bot.muzzleFlashTimer = 0.045;
 
     const muzzleWorld = bot.muzzlePoint.getAbsolutePosition();
     const endPoint = bot.shotTargetScratch;
@@ -790,40 +792,17 @@ export class BotManager {
   }
 
   private spawnBotTracer(start: Vector3, end: Vector3, team: TeamId): void {
-    this.ensureSharedTracerMaterials();
-    const delta = end.subtract(start);
-    const fullDist = delta.length();
-    if (fullDist < 0.3) return;
-    const beamLen = Math.min(fullDist, 24);
-    const dir = delta.scale(1 / fullDist);
-    const mid = start.add(dir.scale(beamLen * 0.5));
-
-    const beam = MeshBuilder.CreateBox(
-      'botTracer',
-      { width: 0.018, height: 0.018, depth: beamLen },
-      this.scene
-    );
-    beam.position.copyFrom(mid);
-    beam.lookAt(end);
-    beam.material = team === 'blue' ? this.blueTracerMat : this.redTracerMat;
-    beam.isPickable = false;
-    beam.checkCollisions = false;
-    this.tracers.push({ mesh: beam, life: 0.055, maxLife: 0.055 });
-  }
-
-  private updateTracers(dt: number): void {
-    for (let i = this.tracers.length - 1; i >= 0; i--) {
-      const t = this.tracers[i];
-      t.life -= dt;
-      if (t.life <= 0) {
-        t.mesh.dispose();
-        this.tracers.splice(i, 1);
-      } else {
-        const ratio = t.life / t.maxLife;
-        t.mesh.scaling.x = ratio;
-        t.mesh.scaling.y = ratio;
+    this.tracerPool.spawn(
+      start,
+      end,
+      team === 'blue' ? this.blueTracerMat : this.redTracerMat,
+      {
+        thickness: 0.018,
+        duration: 0.058,
+        maxLength: 24,
+        startLead: 0.05,
       }
-    }
+    );
   }
 
   private respawnBot(bot: BotAgent): void {
@@ -987,5 +966,8 @@ export class BotManager {
 
   public dispose(): void {
     this.clearBots();
+    this.tracerPool.dispose();
+    this.blueTracerMat.dispose();
+    this.redTracerMat.dispose();
   }
 }

@@ -73,9 +73,16 @@ import {
 import { DEFAULT_KEYBINDINGS, formatKeyCode } from '../settings/keybindings';
 import { WeaponSystem } from './WeaponSystem';
 
+export interface InitProgressState {
+  active: boolean;
+  progress: number;
+  stage: string;
+}
+
 export interface EngineCallbacks {
   onHudUpdate: (hud: HudState) => void;
   onContextLost: (lost: boolean) => void;
+  onInitProgress?: (state: InitProgressState) => void;
   onMultiplayerShot?: (payload: {
     muzzleX: number;
     muzzleY: number;
@@ -156,6 +163,7 @@ export class EngineManager {
 
   private elapsedTime = 0;
   private lastHudEmitTime = 0;
+  private initFallbackTimer: number | null = null;
   private disposed = false;
 
   private playerHealth = 100;
@@ -229,6 +237,11 @@ export class EngineManager {
     this.scene.setRenderingAutoClearDepthStencil(1, false, false, false);
 
     this.setupLighting();
+    this.callbacks.onInitProgress?.({
+      active: true,
+      progress: 25,
+      stage: 'Initializing 3D renderer & audio',
+    });
 
     this.audio = new AudioEngine();
     this.audio.setVolumes(
@@ -287,21 +300,27 @@ export class EngineManager {
         if (this.sessionMode === 'offline') {
           if (!locked && this.matchManager.getPhase() === 'playing') {
             this.matchManager.setPhase('paused');
+            this.weapons.cancelTransientActions();
           } else if (locked && this.matchManager.getPhase() === 'paused') {
             this.matchManager.setPhase('playing');
           }
         } else if (this.mpSnapshot?.phase === 'playing') {
           this.mpPaused = !locked;
+          if (!locked) {
+            this.weapons.cancelTransientActions();
+          }
         }
         this.emitHudState(true);
       },
       onFocusLost: () => {
         if (this.sessionMode === 'offline' && this.matchManager.getPhase() === 'playing') {
           this.matchManager.setPhase('paused');
+          this.weapons.cancelTransientActions();
           this.player.exitPointerLock();
           this.emitHudState(true);
         } else if (this.sessionMode === 'multiplayer' && this.mpSnapshot?.phase === 'playing') {
           this.mpPaused = true;
+          this.weapons.cancelTransientActions();
           this.player.exitPointerLock();
           this.emitHudState(true);
         }
@@ -379,11 +398,46 @@ export class EngineManager {
       normalizeKnifeCharmId(initialSettings.knifeCharmId)
     );
 
+    this.callbacks.onInitProgress?.({
+      active: true,
+      progress: 55,
+      stage: 'Building weapon & operator models',
+    });
     this.setupMenuShowcase();
     this.setupPostProcessing();
     this.applyGraphicsQuality(initialSettings.graphicsQuality);
     this.bindLifecycleEvents();
+    this.callbacks.onInitProgress?.({
+      active: true,
+      progress: 78,
+      stage: 'Loading tactical arena assets',
+    });
     this.previewMap('urban');
+    this.callbacks.onInitProgress?.({
+      active: true,
+      progress: 92,
+      stage: 'Compiling WebGL shaders',
+    });
+
+    let initSettled = false;
+    const finishInit = () => {
+      if (initSettled || this.disposed) return;
+      initSettled = true;
+      if (this.initFallbackTimer !== null) {
+        window.clearTimeout(this.initFallbackTimer);
+        this.initFallbackTimer = null;
+      }
+      this.callbacks.onInitProgress?.({
+        active: false,
+        progress: 100,
+        stage: 'Ready',
+      });
+    };
+
+    this.initFallbackTimer = window.setTimeout(finishInit, 1800);
+    this.scene.executeWhenReady(() => {
+      window.requestAnimationFrame(finishInit);
+    });
 
     this.engine.runRenderLoop(() => {
       if (this.disposed) return;
@@ -431,6 +485,7 @@ export class EngineManager {
     this.player.exitPointerLock();
     this.player.setCanControl(false);
     this.player.setOrbitPreview(true);
+    this.weapons.cancelTransientActions();
     this.weapons.setViewModelVisible(false);
     this.botManager.clearBots();
     this.matchManager.setPhase('menu');
@@ -582,6 +637,7 @@ export class EngineManager {
       this.mpPaused = false;
       this.player.setCanControl(false);
       this.player.exitPointerLock();
+      this.weapons.cancelTransientActions();
       this.weapons.setViewModelVisible(false);
       this.remoteRenderer.syncPlayers(snapshot.players, snapshot.localPlayerId);
       const local = snapshot.players.find((p) => p.id === snapshot.localPlayerId);
@@ -719,6 +775,14 @@ export class EngineManager {
     this.menuShowcaseFocus = focus;
     this.showcaseTargetOffsetX = offsetX;
     this.updateMenuShowcaseVisuals();
+  }
+
+  public playUiAudioCue(cue: 'click' | 'toggle' | 'sfx_preview' = 'click'): void {
+    if (cue === 'sfx_preview') {
+      this.audio.playWeaponEquip();
+      return;
+    }
+    this.audio.playUiClick(cue);
   }
 
   private setupMenuShowcase(): void {
@@ -1297,6 +1361,8 @@ export class EngineManager {
       }
     }
     this.weapons.setGraphicsQuality(quality);
+    this.botManager.setGraphicsQuality(quality);
+    this.remoteRenderer.setGraphicsQuality(quality);
   }
 
   private getCurrentMatchPhase(): MatchPhase {
@@ -1463,6 +1529,7 @@ export class EngineManager {
       this.awardMatchCompletionXp(snap.winner === 'blue');
       this.player.setCanControl(false);
       this.player.exitPointerLock();
+      this.weapons.cancelTransientActions();
       this.weapons.setViewModelVisible(false);
       this.emitHudState(true);
       return;
@@ -1855,6 +1922,10 @@ export class EngineManager {
 
   public dispose(): void {
     this.disposed = true;
+    if (this.initFallbackTimer !== null) {
+      window.clearTimeout(this.initFallbackTimer);
+      this.initFallbackTimer = null;
+    }
     window.removeEventListener('resize', this.onResize);
     this.canvas.removeEventListener('webglcontextlost', this.onWebGLContextLost);
     this.canvas.removeEventListener('webglcontextrestored', this.onWebGLContextRestored);

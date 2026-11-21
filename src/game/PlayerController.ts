@@ -116,6 +116,7 @@ export class PlayerController {
   private invertY = false;
   private baseFovRad = (78 * Math.PI) / 180;
   private currentFovRad = (78 * Math.PI) / 180;
+  private fovKick = 0;
   private lastAdsFovRatio = 0.74;
 
   private stepAccum = 0;
@@ -196,10 +197,13 @@ export class PlayerController {
       this.coyoteTimer = 0;
       this.slideJumpCarryTimer = 0;
       this.currentFovRad = this.baseFovRad;
+      this.fovKick = 0;
       this.camera.fov = this.baseFovRad;
       this.currentEyeOffset = STAND_EYE_OFFSET;
       this.currentRoll = 0;
       this.landDip = 0;
+      this.recoilPitch = 0;
+      this.recoilYaw = 0;
       this.callbacks.onFireRelease();
       this.callbacks.onAdsChange(false);
       this.callbacks.onScoreboardChange(false);
@@ -237,8 +241,11 @@ export class PlayerController {
       this.coyoteTimer = 0;
       this.slideJumpCarryTimer = 0;
       this.currentFovRad = this.baseFovRad;
+      this.fovKick = 0;
       this.camera.fov = this.baseFovRad;
       this.currentRoll = 0;
+      this.recoilPitch = 0;
+      this.recoilYaw = 0;
       this.callbacks.onFireRelease();
       this.callbacks.onAdsChange(false);
       this.callbacks.onScoreboardChange(false);
@@ -267,6 +274,7 @@ export class PlayerController {
     this.deathLookTarget = null;
     this.isGrounded = false;
     this.currentFovRad = this.baseFovRad;
+    this.fovKick = 0;
     this.camera.fov = this.baseFovRad;
     this.stepAccum = 0;
     this.landDip = 0;
@@ -650,6 +658,29 @@ export class PlayerController {
     this.recoilYaw += yawKick;
   }
 
+  public addFovKick(amountRad: number): void {
+    if (this.isDead || !this.canControl) return;
+    if (typeof amountRad !== 'number' || !Number.isFinite(amountRad) || amountRad <= 0) return;
+    this.fovKick = Math.min(0.055, this.fovKick + amountRad);
+  }
+
+  public resetTransientMotion(): void {
+    this.fovKick = 0;
+    this.recoilPitch = 0;
+    this.recoilYaw = 0;
+    this.shakeIntensity = 0;
+    this.flinchPitch = 0;
+    this.flinchRoll = 0;
+    this.flinchYaw = 0;
+    this.landDip = 0;
+    this.camera.fov = this.currentFovRad;
+    this.syncCameraTransform();
+  }
+
+  public getLandDip(): number {
+    return this.landDip;
+  }
+
   public getStance(): Stance {
     if (this.isSliding) return 'slide';
     if (this.isCrouching) return 'crouch';
@@ -944,7 +975,11 @@ export class PlayerController {
     const zoomDepth = 1 - Math.max(0.08, Math.min(1, targetAdsFovRatio));
     const fovRate = this.isAds ? 9.5 + zoomDepth * 4.5 : 13.5;
     this.currentFovRad += (desiredFov - this.currentFovRad) * (1 - Math.exp(-fovRate * clampedDt));
-    this.camera.fov = this.currentFovRad;
+    this.fovKick *= Math.exp(-18 * clampedDt);
+    if (this.fovKick < 0.0001) {
+      this.fovKick = 0;
+    }
+    this.camera.fov = this.currentFovRad + this.fovKick;
 
     this.syncCameraTransform();
   }
