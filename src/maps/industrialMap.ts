@@ -1,4 +1,4 @@
-import { Color3, MeshBuilder, Vector3 } from '@babylonjs/core';
+import { Color3, DynamicTexture, MeshBuilder, PBRMaterial, Vector3 } from '@babylonjs/core';
 import { MapBuildContext } from './mapHelpers';
 import { MapDefinition } from './types';
 
@@ -12,15 +12,15 @@ export const INDUSTRIAL_MAP_DEF: MapDefinition = {
   skyZenithHex: '#121821',
   skyHorizonHex: '#354354',
   fogHex: '#222a34',
-  fogDensity: 0.007,
+  fogDensity: 0.011,
   sunDirection: new Vector3(-0.35, -0.88, 0.32),
   sunPosition: new Vector3(18, 38, -16),
   sunColorHex: '#d5e5f7',
-  sunIntensity: 1.58,
-  ambientIntensity: 0.5,
+  sunIntensity: 1.45,
+  ambientIntensity: 0.68,
   ambientGroundHex: '#282320',
   accentHex: '#06b6d4',
-  exposure: 1.15,
+  exposure: 1.08,
   contrast: 1.24,
   blueSpawns: [
     new Vector3(-21, 1.0, -21),
@@ -59,67 +59,51 @@ export const INDUSTRIAL_MAP_DEF: MapDefinition = {
 };
 
 export function buildIndustrialMap(ctx: MapBuildContext): void {
-  const floorMat = ctx.createProceduralMaterial('indFloorMat', 'concrete', {
-    size: 256,
-    baseHex: '#333a44',
-    accentHex: '#1f242b',
-    uScale: 10,
-    vScale: 10,
-    bumpLevel: 0.9,
-  });
+  const floorTex = ctx.trackTexture(
+    new DynamicTexture('indFloorTex', { width: 512, height: 512 }, ctx.scene, true)
+  );
+  const fctx = floorTex.getContext();
+  fctx.fillStyle = '#2d333b';
+  fctx.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 4500; i++) {
+    fctx.fillStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.09)';
+    fctx.fillRect(Math.random() * 512, Math.random() * 512, 3, 3);
+  }
+  fctx.strokeStyle = 'rgba(234, 179, 8, 0.42)';
+  fctx.lineWidth = 8;
+  fctx.strokeRect(8, 8, 496, 496);
+  floorTex.update();
+  floorTex.uScale = 10;
+  floorTex.vScale = 10;
+
+  const floorBump = ctx.createNormalTexture(
+    'indFloorNrm',
+    128,
+    (u, v) => (u < 0.03 || u > 0.97 || v < 0.03 || v > 0.97 ? -0.45 : Math.sin(u * 40) * Math.cos(v * 40) * 0.08),
+    2.0,
+    10,
+    10
+  );
+
+  const floorMat = ctx.trackMaterial(new PBRMaterial('indFloorMat', ctx.scene));
+  floorMat.albedoColor = Color3.White();
+  floorMat.albedoTexture = floorTex;
+  floorMat.bumpTexture = floorBump;
+  floorMat.metallic = 0.14;
+  floorMat.roughness = 0.62;
+
   const wallMat = ctx.createCorrugatedMaterial('indWallMat', '#3f4752', '#2b323b');
-  const steelMat = ctx.createProceduralMaterial('indSteelMat', 'brushedMetal', {
-    size: 128,
-    baseHex: '#4f5d6e',
-    accentHex: '#2f3844',
-    metallicOverride: 0.82,
-    uScale: 2,
-    vScale: 2,
+  const steelMat = ctx.createFlatMaterial('indSteelMat', '#4c5a6b', 0.78, 0.36);
+  const catwalkMat = ctx.createGridTextureMaterial('indCatwalkMat', '#38404b', '#1c2128', 6, 2, false, {
+    metallic: 0.72,
+    roughness: 0.4,
+    bumpStrength: 2.6,
   });
-  const catwalkMat = ctx.createProceduralMaterial('indCatwalkMat', 'diamondPlate', {
-    size: 128,
-    baseHex: '#3a424d',
-    accentHex: '#1e242c',
-    metallicOverride: 0.78,
-    uScale: 6,
-    vScale: 2,
-    bumpLevel: 1.0,
-  });
-  const machineMat = ctx.createProceduralMaterial('indMachineMat', 'anodizedMetal', {
-    size: 128,
-    baseHex: '#38584c',
-    accentHex: '#21352d',
-    metallicOverride: 0.58,
-    clearCoat: 0.25,
-  });
-  const tankMat = ctx.createProceduralMaterial('indTankMat', 'brushedMetal', {
-    size: 128,
-    baseHex: '#768799',
-    accentHex: '#4f5c6b',
-    metallicOverride: 0.88,
-  });
-  const hazardMat = ctx.createProceduralMaterial('indHazardMat', 'hazard', {
-    size: 128,
-    baseHex: '#d97706',
-    accentHex: '#181a1f',
-    uScale: 4,
-    vScale: 1,
-  });
-  const crateMat = ctx.createProceduralMaterial('indCrateMat', 'crate', {
-    size: 128,
-    baseHex: '#6c5840',
-    accentHex: '#413323',
-    uScale: 2,
-    vScale: 2,
-  });
-  const pipeRustMat = ctx.createProceduralMaterial('indPipeMat', 'anodizedMetal', {
-    size: 64,
-    baseHex: '#6e4c36',
-    accentHex: '#3d2a1d',
-    metallicOverride: 0.65,
-  });
+  const machineMat = ctx.createFlatMaterial('indMachineMat', '#3b564b', 0.55, 0.44);
+  const tankMat = ctx.createFlatMaterial('indTankMat', '#718193', 0.85, 0.32);
+  const hazardMat = ctx.createFlatMaterial('indHazardMat', '#c25e0a', 0.35, 0.55);
   const amberBayGlow = ctx.createEmissiveMaterial('indAmberBayGlow', '#ff9d3b', 2.4);
-  const cyanPanelGlow = ctx.createEmissiveMaterial('indCyanPanelGlow', '#22d3ee', 2.0);
+  const cyanPanelGlow = ctx.createEmissiveMaterial('indCyanPanelGlow', '#22d3ee', 1.8);
 
   // Factory floor + enclosing corrugated perimeter walls
   ctx.createBox('ind_ground', new Vector3(0, -0.2, 0), new Vector3(60, 0.4, 60), floorMat, {
@@ -137,31 +121,9 @@ export function buildIndustrialMap(ctx: MapBuildContext): void {
       ctx.createBox(`bay_lamp_${zPos}_${lx}`, new Vector3(lx, 7.75, zPos), new Vector3(1.6, 0.16, 0.55), amberBayGlow, {
         collisions: false,
         castShadow: false,
-        pickable: false,
       });
-      ctx.addAreaPointLight(
-        `bay_pt_${zPos}_${lx}`,
-        new Vector3(lx, 6.6, zPos),
-        Color3.FromHexString('#ffb45a'),
-        0.55,
-        11
-      );
     }
   }
-
-  // Overhead refinery pipes & center gantry crane trolley (purely visual, non-colliding)
-  ctx.buildPipeRun('ind_pipe_overhead_w', new Vector3(-22, 6.2, -14), new Vector3(-22, 6.2, 14), 0.34, pipeRustMat, steelMat);
-  ctx.buildPipeRun('ind_pipe_overhead_e', new Vector3(22, 6.2, -14), new Vector3(22, 6.2, 14), 0.34, pipeRustMat, steelMat);
-  ctx.buildPipeRun('ind_pipe_cross_n', new Vector3(-22, 6.2, 14), new Vector3(22, 6.2, 14), 0.26, steelMat, hazardMat);
-  ctx.createBox('ind_gantry_trolley', new Vector3(3.5, 7.65, 0), new Vector3(2.2, 0.55, 1.3), hazardMat, {
-    collisions: false,
-    pickable: false,
-  });
-  ctx.createBox('ind_gantry_beacon', new Vector3(3.5, 7.35, 0), new Vector3(0.32, 0.12, 0.32), cyanPanelGlow, {
-    collisions: false,
-    castShadow: false,
-    pickable: false,
-  });
 
   // Elevated Central Cross Catwalk with East/West Ramps
   ctx.createBox('catwalk_bridge', new Vector3(0, 3.0, 0), new Vector3(18, 0.25, 3.2), catwalkMat);
@@ -171,20 +133,6 @@ export function buildIndustrialMap(ctx: MapBuildContext): void {
   ctx.createBox('catwalk_sup_e', new Vector3(8, 1.5, 0), new Vector3(0.6, 3.0, 2.8), steelMat);
   ctx.createRamp('catwalk_ramp_w', new Vector3(-15.5, 0, 0), 2.6, 3.0, 6.5, Math.PI * 0.5, catwalkMat);
   ctx.createRamp('catwalk_ramp_e', new Vector3(15.5, 0, 0), 2.6, 3.0, 6.5, -Math.PI * 0.5, catwalkMat);
-
-  // Catwalk beacon stanchion caps (non-colliding visual polish)
-  for (const bx of [-8.8, 0, 8.8]) {
-    ctx.createBox(`catwalk_cap_${bx}`, new Vector3(bx, 4.02, 1.5), new Vector3(0.18, 0.1, 0.18), cyanPanelGlow, {
-      collisions: false,
-      castShadow: false,
-      pickable: false,
-    });
-    ctx.createBox(`catwalk_cap_s_${bx}`, new Vector3(bx, 4.02, -1.5), new Vector3(0.18, 0.1, 0.18), cyanPanelGlow, {
-      collisions: false,
-      castShadow: false,
-      pickable: false,
-    });
-  }
 
   // Close-quarters Warehouse Partition Bays
   ctx.createBox('bay_nw_1', new Vector3(-11, 1.8, 10), new Vector3(7.5, 3.6, 0.8), wallMat);
@@ -203,21 +151,14 @@ export function buildIndustrialMap(ctx: MapBuildContext): void {
     ctx.createBox(name, pos, size, machineMat);
     ctx.createBox(`${name}_manifold`, new Vector3(pos.x, pos.y + size.y * 0.5 + 0.25, pos.z), new Vector3(size.x * 0.7, 0.45, size.z * 0.5), steelMat, {
       collisions: false,
-      pickable: false,
     });
     ctx.createBox(`${name}_screen`, new Vector3(pos.x, pos.y + 0.2, pos.z + size.z * 0.5 + 0.04), new Vector3(0.8, 0.45, 0.05), cyanPanelGlow, {
       collisions: false,
       castShadow: false,
-      pickable: false,
-    });
-    ctx.createBox(`${name}_floor_pad`, new Vector3(pos.x, 0.008, pos.z), new Vector3(size.x + 0.7, 0.015, size.z + 0.7), hazardMat, {
-      collisions: false,
-      castShadow: false,
-      pickable: false,
     });
   });
 
-  // Cylindrical Pressurized Silo Tanks with steel pressure rings & top manifold pipes
+  // Cylindrical Pressurized Silo Tanks with steel pressure rings & domes
   for (const [idx, pos] of [
     [1, new Vector3(-21, 2.2, 11)],
     [2, new Vector3(-21, 2.2, 15.5)],
@@ -244,26 +185,12 @@ export function buildIndustrialMap(ctx: MapBuildContext): void {
       );
       band.position.set(pos.x, pos.y + ry, pos.z);
       band.material = hazardMat;
-      band.checkCollisions = false;
       band.isPickable = false;
       ctx.trackNode(band);
     }
-
-    ctx.buildPipeRun(
-      `ind_tank_${idx}_pipe`,
-      new Vector3(pos.x, 4.5, pos.z),
-      new Vector3(pos.x < 0 ? -22 : 22, 6.2, pos.z),
-      0.22,
-      steelMat,
-      hazardMat
-    );
   }
 
-  // Barrel clusters beside silo bays (purely visual)
-  ctx.buildBarrelCluster('ind_drums_nw', new Vector3(-18.2, 0, 13.2), pipeRustMat, hazardMat);
-  ctx.buildBarrelCluster('ind_drums_se', new Vector3(18.2, 0, -13.2), machineMat, hazardMat);
-
   // Shipping Crates & Forklift Pallets
-  ctx.buildCrateCluster('ind_crate_1', new Vector3(-4.5, 0, -4.5), 0.2, crateMat, steelMat);
-  ctx.buildCrateCluster('ind_crate_2', new Vector3(4.5, 0, 4.5), -0.35, crateMat, steelMat);
+  ctx.buildCrateCluster('ind_crate_1', new Vector3(-4.5, 0, -4.5), 0.2, hazardMat, steelMat);
+  ctx.buildCrateCluster('ind_crate_2', new Vector3(4.5, 0, 4.5), -0.35, hazardMat, steelMat);
 }
