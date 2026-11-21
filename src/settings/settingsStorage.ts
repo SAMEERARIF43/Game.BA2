@@ -1,4 +1,8 @@
-import { normalizeGunId, normalizeKnifeCharmId } from '../game/loadoutRules';
+import {
+  normalizeCharacterId,
+  normalizeGunId,
+  normalizeKnifeCharmId,
+} from '../game/loadoutRules';
 import { GameSettings, GraphicsQuality } from '../game/types';
 
 export const SETTINGS_STORAGE_KEY = 'strike_force_profile_v1';
@@ -21,6 +25,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   killLimit: 30,
   botsPerTeam: 4,
   screenShakeScale: 1.0,
+  selectedCharacterId: 'assault',
   selectedGunId: 'ak47',
   knifeCharmId: 'tactical_tag',
 };
@@ -66,6 +71,10 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     killLimit: Math.round(clampNumber(obj.killLimit, 5, 100, fallback.killLimit)),
     botsPerTeam: Math.round(clampNumber(obj.botsPerTeam, 1, 6, fallback.botsPerTeam)),
     screenShakeScale: clampNumber(obj.screenShakeScale, 0, 1, fallback.screenShakeScale ?? 1.0),
+    selectedCharacterId: normalizeCharacterId(
+      obj.selectedCharacterId,
+      fallback.selectedCharacterId ?? 'assault'
+    ),
     selectedGunId: normalizeGunId(obj.selectedGunId, fallback.selectedGunId ?? 'ak47'),
     knifeCharmId: normalizeKnifeCharmId(obj.knifeCharmId, fallback.knifeCharmId ?? 'tactical_tag'),
   };

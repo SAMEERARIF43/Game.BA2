@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Lock, LogOut, Play, RotateCcw, Settings, Sparkles } from 'lucide-react';
+import { Lock, LogOut, Play, RotateCcw, Settings, Sparkles, UserCheck } from 'lucide-react';
 import { GUN_LOCKED_WHILE_ALIVE_MESSAGE } from '../game/loadoutRules';
 import {
+  CHARACTERS,
+  CHARACTER_IDS,
+  CharacterId,
   GUN_IDS,
   GameSettings,
   GunId,
@@ -20,6 +23,7 @@ interface PauseMenuProps {
   onResume: () => void;
   onRestartMatch: () => void;
   onLeaveToMenu: () => void;
+  onSelectCharacter: (id: CharacterId, equipSignatureGun?: boolean) => void;
   onSelectGun: (id: GunId) => void;
   onSelectKnifeCharm: (id: KnifeCharmId) => void;
   onUpdateSettings: (next: GameSettings) => void;
@@ -33,6 +37,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   onResume,
   onRestartMatch,
   onLeaveToMenu,
+  onSelectCharacter,
   onSelectGun,
   onSelectKnifeCharm,
   onUpdateSettings,
@@ -66,6 +71,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
     }
   }, [showSettings]);
 
+  const activeCharacter = CHARACTERS[hud.selectedCharacterId];
   const equippedGun = WEAPONS[hud.equippedGunId];
   const queuedGun = WEAPONS[hud.queuedGunId];
   const selectedCharm = KNIFE_CHARMS[hud.knifeCharmId];
@@ -173,6 +179,52 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                   <span>{hud.gunLockMessage ?? GUN_LOCKED_WHILE_ALIVE_MESSAGE}</span>
                 </div>
               )}
+
+              {/* 4-Character Operator Selector */}
+              <div className="mt-3 border border-white/10 bg-black/30 p-2.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="inline-flex items-center gap-1.5 font-medium text-slate-200">
+                    <UserCheck className="h-3.5 w-3.5 text-amber-400" />
+                    Operator · {activeCharacter.fullName}
+                  </span>
+                  <span className="font-mono-tabular text-[10px] text-slate-400">
+                    {activeCharacter.role}
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                  {CHARACTER_IDS.map((charId) => {
+                    const c = CHARACTERS[charId];
+                    const sigGun = WEAPONS[c.signatureGunId];
+                    const active = hud.selectedCharacterId === charId;
+                    return (
+                      <button
+                        key={charId}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => onSelectCharacter(charId, true)}
+                        className={`min-w-0 cursor-pointer border px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
+                          active
+                            ? 'border-amber-400/85 bg-amber-400/16 text-white'
+                            : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:bg-white/[0.07]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="truncate font-display text-xs font-semibold">
+                            {c.callsign}
+                          </span>
+                          <span
+                            className="h-2 w-2 shrink-0 border border-white/30"
+                            style={{ backgroundColor: c.accentHex }}
+                          />
+                        </div>
+                        <div className="truncate font-mono-tabular text-[10px] text-slate-400">
+                          {c.role} · {sigGun.shortName}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
               <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-5">
                 {GUN_IDS.map((id) => {

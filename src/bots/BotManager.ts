@@ -11,7 +11,13 @@ import {
   TransformNode,
   Vector3,
 } from '@babylonjs/core';
-import { HitZone, MatchParticipant } from '../game/types';
+import {
+  OperatorPalette,
+  buildOperatorRig,
+  createOperatorPalette,
+} from '../game/OperatorMeshBuilder';
+import { getCharacterForWeaponId } from '../game/loadoutRules';
+import { HitZone, MatchParticipant, WeaponId } from '../game/types';
 import { MapDefinition, TeamId } from '../maps/types';
 import { MatchManager, RESPAWN_DELAY_SEC } from '../match/MatchManager';
 
@@ -124,6 +130,8 @@ export class BotManager {
   private bots: BotAgent[] = [];
   private tracers: BotTracer[] = [];
   private sharedMaterials: Material[] = [];
+  private bluePalette: OperatorPalette | null = null;
+  private redPalette: OperatorPalette | null = null;
   private blueTracerMat!: StandardMaterial;
   private redTracerMat!: StandardMaterial;
   private readonly spawnGroundRay = new Ray(Vector3.Zero(), new Vector3(0, -1, 0), 3);
@@ -144,9 +152,10 @@ export class BotManager {
     this.clearBots();
     this.mapDef = mapDef;
     this.ensureSharedTracerMaterials();
+    this.ensureOperatorPalettes();
 
-    const blueWeaponNames = ['AK-47 Heavy Rifle', 'Vector-9 SMG', 'M870 Combat Shotgun'];
-    const redWeaponNames = ['AK-47 Heavy Rifle', 'Vector-9 SMG', 'M870 Combat Shotgun'];
+    const blueWeaponNames = ['AK-47 Heavy Rifle', 'Vector-9 SMG', 'M870 Combat Shotgun', 'AWP-50 Sniper'];
+    const redWeaponNames = ['AK-47 Heavy Rifle', 'Vector-9 SMG', 'M870 Combat Shotgun', 'AWP-50 Sniper'];
 
     blueBots.forEach((p, idx) => {
       const spawn = mapDef.blueSpawns[idx % mapDef.blueSpawns.length] ?? new Vector3(-16, 1, -20);
@@ -171,6 +180,15 @@ export class BotManager {
         Math.PI
       );
     });
+  }
+
+  private ensureOperatorPalettes(): void {
+    if (!this.bluePalette) {
+      this.bluePalette = createOperatorPalette(this.scene, 'blue', 'botBluePal');
+    }
+    if (!this.redPalette) {
+      this.redPalette = createOperatorPalette(this.scene, 'red', 'botRedPal');
+    }
   }
 
   private ensureSharedTracerMaterials(): void {
@@ -205,6 +223,11 @@ export class BotManager {
       m.dispose();
     }
     this.sharedMaterials = [];
+
+    this.bluePalette?.dispose();
+    this.bluePalette = null;
+    this.redPalette?.dispose();
+    this.redPalette = null;
   }
 
   public getRadarActors(): { id: string; x: number; z: number; team: TeamId; isAlive: boolean }[] {
@@ -859,6 +882,14 @@ export class BotManager {
     return a + diff * t;
   }
 
+  private mapWeaponNameToId(weaponName: string): WeaponId {
+    if (weaponName.includes('SMG')) return 'smg';
+    if (weaponName.includes('Shotgun')) return 'shotgun';
+    if (weaponName.includes('Sniper')) return 'sniper';
+    if (weaponName.includes('Pistol') || weaponName.includes('USP')) return 'pistol';
+    return 'ak47';
+  }
+
   private createBotAgent(
     id: string,
     name: string,
@@ -867,210 +898,44 @@ export class BotManager {
     spawnPos: Vector3,
     yaw: number
   ): void {
-    const root = new TransformNode(`bot_root_${id}`, this.scene);
+    this.ensureOperatorPalettes();
+    const palette = (team === 'blue' ? this.bluePalette : this.redPalette)!;
+    const weaponId = this.mapWeaponNameToId(weaponName);
+    const characterId = getCharacterForWeaponId(weaponId);
+
+    const rig = buildOperatorRig(this.scene, {
+      id: `bot_${id}`,
+      team,
+      palette,
+      characterId,
+      initialWeaponId: weaponId,
+      buildAllWeapons: false,
+      isPickableHitboxes: true,
+      hitboxMetadata: {
+        isBot: true,
+        botId: id,
+        team,
+      },
+    });
+
     const groundY = this.sampleGroundY(null, spawnPos.x, spawnPos.y + 1.0, spawnPos.z) ?? 0;
-    root.position.set(spawnPos.x, groundY, spawnPos.z);
-    root.rotation.y = yaw;
-
-    const pivot = new TransformNode(`bot_pivot_${id}`, this.scene);
-    pivot.parent = root;
-
-    const bodyMat = new PBRMaterial(`botBody_${id}`, this.scene);
-    bodyMat.albedoColor = Color3.FromHexString(team === 'blue' ? '#1e40af' : '#991b1b');
-    bodyMat.metallic = 0.18;
-    bodyMat.roughness = 0.65;
-
-    const headMat = new PBRMaterial(`botHead_${id}`, this.scene);
-    headMat.albedoColor = Color3.FromHexString(team === 'blue' ? '#3b82f6' : '#dc2626');
-    headMat.metallic = 0.28;
-    headMat.roughness = 0.45;
-
-    const gearMat = new PBRMaterial(`botGear_${id}`, this.scene);
-    gearMat.albedoColor = Color3.FromHexString('#1e222a');
-    gearMat.metallic = 0.22;
-    gearMat.roughness = 0.72;
-
-    const gunMat = new PBRMaterial(`botGun_${id}`, this.scene);
-    gunMat.albedoColor = Color3.FromHexString('#2b313c');
-    gunMat.metallic = 0.85;
-    gunMat.roughness = 0.34;
-
-    const visorMat = new StandardMaterial(`botVisor_${id}`, this.scene);
-    visorMat.disableLighting = true;
-    visorMat.emissiveColor =
-      team === 'blue' ? new Color3(0.4, 1.1, 1.8) : new Color3(1.6, 0.55, 0.25);
-
-    const shoulderBeaconMat = new StandardMaterial(`botBeacon_${id}`, this.scene);
-    shoulderBeaconMat.disableLighting = true;
-    shoulderBeaconMat.emissiveColor =
-      team === 'blue' ? new Color3(0.25, 0.85, 1.85) : new Color3(1.85, 0.25, 0.3);
-
-    const flashMat = new StandardMaterial(`botFlash_${id}`, this.scene);
-    flashMat.disableLighting = true;
-    flashMat.emissiveColor = new Color3(1.6, 1.15, 0.45);
-
-    this.sharedMaterials.push(gearMat, gunMat, visorMat, shoulderBeaconMat, flashMat);
-
-    // Hip-pivoted articulated legs + boots
-    const legLPivot = new TransformNode(`bot_legLPivot_${id}`, this.scene);
-    legLPivot.parent = pivot;
-    legLPivot.position.set(-0.14, 0.78, 0);
-
-    const legL = MeshBuilder.CreateBox(`bot_legL_${id}`, { width: 0.19, height: 0.66, depth: 0.21 }, this.scene);
-    legL.position.set(0, -0.33, 0);
-    legL.parent = legLPivot;
-    legL.material = gearMat;
-    legL.isPickable = false;
-
-    const bootL = MeshBuilder.CreateBox(`bot_bootL_${id}`, { width: 0.2, height: 0.14, depth: 0.28 }, this.scene);
-    bootL.position.set(0, -0.71, 0.03);
-    bootL.parent = legLPivot;
-    bootL.material = gunMat;
-    bootL.isPickable = false;
-
-    const legRPivot = new TransformNode(`bot_legRPivot_${id}`, this.scene);
-    legRPivot.parent = pivot;
-    legRPivot.position.set(0.14, 0.78, 0);
-
-    const legR = MeshBuilder.CreateBox(`bot_legR_${id}`, { width: 0.19, height: 0.66, depth: 0.21 }, this.scene);
-    legR.position.set(0, -0.33, 0);
-    legR.parent = legRPivot;
-    legR.material = gearMat;
-    legR.isPickable = false;
-
-    const bootR = MeshBuilder.CreateBox(`bot_bootR_${id}`, { width: 0.2, height: 0.14, depth: 0.28 }, this.scene);
-    bootR.position.set(0, -0.71, 0.03);
-    bootR.parent = legRPivot;
-    bootR.material = gunMat;
-    bootR.isPickable = false;
-
-    // Upper body pivot (tilts with aim pitch)
-    const upperBodyPivot = new TransformNode(`bot_upper_${id}`, this.scene);
-    upperBodyPivot.parent = pivot;
-    upperBodyPivot.position.set(0, 0.8, 0);
-
-    // Armored Torso Hitbox (remains pickable with exact metadata)
-    const bodyMesh = MeshBuilder.CreateBox(`bot_body_${id}`, { width: 0.54, height: 0.72, depth: 0.3 }, this.scene);
-    bodyMesh.position.set(0, 0.36, 0);
-    bodyMesh.parent = upperBodyPivot;
-    bodyMesh.material = bodyMat;
-    bodyMesh.isPickable = true;
-    bodyMesh.metadata = {
-      isBot: true,
-      botId: id,
-      team,
-      zone: 'body' as HitZone,
-    };
-
-    // Tactical chest plate & backpack rig (cosmetic)
-    const vest = MeshBuilder.CreateBox(`bot_vest_${id}`, { width: 0.48, height: 0.44, depth: 0.34 }, this.scene);
-    vest.position.set(0, 0.41, 0);
-    vest.parent = upperBodyPivot;
-    vest.material = gearMat;
-    vest.isPickable = false;
-
-    // Shoulder pads + Glowing Team Shoulder Beacons
-    for (const side of [-1, 1]) {
-      const pad = MeshBuilder.CreateBox(`bot_pad_${id}_${side}`, { width: 0.14, height: 0.18, depth: 0.24 }, this.scene);
-      pad.position.set(side * 0.33, 0.62, 0);
-      pad.parent = upperBodyPivot;
-      pad.material = bodyMat;
-      pad.isPickable = false;
-
-      const beacon = MeshBuilder.CreateBox(`bot_beacon_${id}_${side}`, { width: 0.05, height: 0.07, depth: 0.16 }, this.scene);
-      beacon.position.set(side * 0.39, 0.65, 0);
-      beacon.parent = upperBodyPivot;
-      beacon.material = shoulderBeaconMat;
-      beacon.isPickable = false;
-    }
-
-    // Head Hitbox (remains pickable with exact metadata)
-    const headMesh = MeshBuilder.CreateBox(`bot_head_${id}`, { width: 0.3, height: 0.3, depth: 0.3 }, this.scene);
-    headMesh.position.set(0, 0.9, 0);
-    headMesh.parent = upperBodyPivot;
-    headMesh.material = headMat;
-    headMesh.isPickable = true;
-    headMesh.metadata = {
-      isBot: true,
-      botId: id,
-      team,
-      zone: 'head' as HitZone,
-    };
-
-    // Ballistic Helmet Dome + Glowing Visor
-    const helmet = MeshBuilder.CreateBox(`bot_helmet_${id}`, { width: 0.34, height: 0.16, depth: 0.35 }, this.scene);
-    helmet.position.set(0, 0.99, -0.01);
-    helmet.parent = upperBodyPivot;
-    helmet.material = gearMat;
-    helmet.isPickable = false;
-
-    const visor = MeshBuilder.CreateBox(`bot_visor_${id}`, { width: 0.25, height: 0.075, depth: 0.05 }, this.scene);
-    visor.position.set(0, 0.92, 0.155);
-    visor.parent = upperBodyPivot;
-    visor.material = visorMat;
-    visor.isPickable = false;
-
-    // Articulated Arms holding rifle
-    const armR = MeshBuilder.CreateBox(`bot_armR_${id}`, { width: 0.13, height: 0.13, depth: 0.44 }, this.scene);
-    armR.position.set(0.32, 0.5, 0.18);
-    armR.rotation.x = 0.22;
-    armR.parent = upperBodyPivot;
-    armR.material = gearMat;
-    armR.isPickable = false;
-
-    const armL = MeshBuilder.CreateBox(`bot_armL_${id}`, { width: 0.13, height: 0.13, depth: 0.48 }, this.scene);
-    armL.position.set(-0.08, 0.46, 0.28);
-    armL.rotation.y = 0.65;
-    armL.rotation.x = 0.16;
-    armL.parent = upperBodyPivot;
-    armL.material = gearMat;
-    armL.isPickable = false;
-
-    // Detailed Held Rifle + Barrel + Magazine + Muzzle Point
-    const rifle = MeshBuilder.CreateBox(`bot_rifle_${id}`, { width: 0.075, height: 0.11, depth: 0.62 }, this.scene);
-    rifle.position.set(0.24, 0.48, 0.38);
-    rifle.parent = upperBodyPivot;
-    rifle.material = gunMat;
-    rifle.isPickable = false;
-
-    const barrel = MeshBuilder.CreateCylinder(`bot_barrel_${id}`, { height: 0.28, diameter: 0.032, tessellation: 8 }, this.scene);
-    barrel.rotation.x = Math.PI * 0.5;
-    barrel.position.set(0.24, 0.5, 0.78);
-    barrel.parent = upperBodyPivot;
-    barrel.material = gunMat;
-    barrel.isPickable = false;
-
-    const mag = MeshBuilder.CreateBox(`bot_mag_${id}`, { width: 0.04, height: 0.14, depth: 0.08 }, this.scene);
-    mag.position.set(0.24, 0.37, 0.45);
-    mag.rotation.x = 0.18;
-    mag.parent = upperBodyPivot;
-    mag.material = gearMat;
-    mag.isPickable = false;
-
-    const muzzlePoint = new TransformNode(`bot_muzzle_${id}`, this.scene);
-    muzzlePoint.parent = upperBodyPivot;
-    muzzlePoint.position.set(0.24, 0.5, 0.94);
-
-    const muzzleFlash = MeshBuilder.CreatePolyhedron(`bot_flash_${id}`, { type: 1, size: 0.08 }, this.scene);
-    muzzleFlash.parent = muzzlePoint;
-    muzzleFlash.material = flashMat;
-    muzzleFlash.isPickable = false;
-    muzzleFlash.isVisible = false;
+    rig.root.position.set(spawnPos.x, groundY, spawnPos.z);
+    rig.root.rotation.y = yaw;
 
     const bot: BotAgent = {
       id,
       name,
       team,
       weaponName,
-      root,
-      pivot,
-      upperBodyPivot,
-      legLPivot,
-      legRPivot,
-      headMesh,
-      bodyMesh,
-      muzzlePoint,
-      muzzleFlash,
+      root: rig.root,
+      pivot: rig.pivot,
+      upperBodyPivot: rig.upperBodyPivot,
+      legLPivot: rig.legLPivot,
+      legRPivot: rig.legRPivot,
+      headMesh: rig.headMesh,
+      bodyMesh: rig.bodyMesh,
+      muzzlePoint: rig.muzzlePoint,
+      muzzleFlash: rig.muzzleFlash,
       muzzleFlashTimer: 0,
       hp: 100,
       maxHp: 100,
@@ -1080,7 +945,7 @@ export class BotManager {
       yaw,
       aimPitch: 0,
       walkPhase: 0,
-      prevPos: root.position.clone(),
+      prevPos: rig.root.position.clone(),
       movementScratch: new Vector3(),
       directionScratch: new Vector3(),
       moveDirectionScratch: new Vector3(),
@@ -1099,7 +964,7 @@ export class BotManager {
       losRay: new Ray(Vector3.Zero(), new Vector3(0, 0, 1), BOT_DETECT_RANGE),
       shotRay: new Ray(Vector3.Zero(), new Vector3(0, 0, 1), 90),
       deathRollDir: 1,
-      currentWaypoint: this.pickRandomWaypoint(root.position),
+      currentWaypoint: this.pickRandomWaypoint(rig.root.position),
       strafeDir: Math.random() > 0.5 ? 1 : -1,
       strafeSwitchTimer: 1.0,
       losScanTimer: Math.random() * 0.14,
@@ -1112,8 +977,8 @@ export class BotManager {
       fireCooldown: 0,
       burstPauseTimer: 0,
       hitFlashTimer: 0,
-      bodyMat,
-      headMat,
+      bodyMat: rig.bodyMat,
+      headMat: rig.headMat,
     };
 
     this.restoreBotColors(bot);

@@ -24,11 +24,15 @@ export interface CreateRoomOptions {
   friendlyFire?: boolean;
   botCount?: number;
   password?: string;
+  characterId?: string;
+  weaponId?: string;
 }
 
 export interface JoinRoomOptions {
   playerName?: string;
   password?: string;
+  characterId?: string;
+  weaponId?: string;
 }
 
 export interface PublicRoomSummary {
@@ -74,6 +78,26 @@ function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
 }
 
+const VALID_CHARACTER_IDS = new Set(['assault', 'vanguard', 'breacher', 'marksman']);
+const VALID_GUN_IDS = new Set(['shotgun', 'ak47', 'smg', 'sniper', 'pistol']);
+
+function normalizeCharacterId(raw: unknown): string {
+  return typeof raw === 'string' && VALID_CHARACTER_IDS.has(raw) ? raw : 'assault';
+}
+
+function getBotCharacterForWeapon(weaponId: string): string {
+  switch (weaponId) {
+    case 'smg':
+      return 'vanguard';
+    case 'shotgun':
+      return 'breacher';
+    case 'sniper':
+      return 'marksman';
+    default:
+      return 'assault';
+  }
+}
+
 function sanitizeName(raw: unknown, fallback: string): string {
   if (typeof raw !== 'string') return fallback;
   const trimmed = raw.trim().slice(0, 20);
@@ -86,6 +110,8 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
   private roomPassword = '';
   private spawnProtectionUntil = new Map<string, number>();
   private lastShotAt = new Map<string, number>();
+  private equippedGunByPlayer = new Map<string, string>();
+  private queuedGunByPlayer = new Map<string, string>();
   private botBrains = new Map<string, BotBrain>();
   private killFeedSeq = 0;
 
@@ -161,7 +187,16 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     player.ready = isFirstHuman;
     player.isAlive = true;
     player.respawnTimer = 0;
-    player.weaponId = 'ak47';
+    player.characterId = normalizeCharacterId(options.characterId);
+    const hasExplicitGun = typeof options.weaponId === 'string' && VALID_GUN_IDS.has(options.weaponId);
+    const initialGun = hasExplicitGun ? String(options.weaponId) : 'ak47';
+    player.weaponId = initialGun;
+    if (hasExplicitGun) {
+      this.equippedGunByPlayer.set(client.sessionId, initialGun);
+    } else {
+      this.equippedGunByPlayer.delete(client.sessionId);
+    }
+    this.queuedGunByPlayer.delete(client.sessionId);
     player.health = 100;
     player.kills = 0;
     player.deaths = 0;
@@ -191,6 +226,8 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     }
     this.spawnProtectionUntil.delete(client.sessionId);
     this.lastShotAt.delete(client.sessionId);
+    this.equippedGunByPlayer.delete(client.sessionId);
+    this.queuedGunByPlayer.delete(client.sessionId);
 
     // Host migration if host disconnected
     if (this.state.hostId === client.sessionId) {
@@ -220,6 +257,18 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     this.botBrains.clear();
     this.spawnProtectionUntil.clear();
     this.lastShotAt.clear();
+    this.equippedGunByPlayer.clear();
+    this.queuedGunByPlayer.clear();
+  }
+
+  private resolvePlayerEquippedGun(p: PlayerSchemaType): string {
+    const tracked = this.equippedGunByPlayer.get(p.id);
+    if (tracked && VALID_GUN_IDS.has(tracked)) {
+      return tracked;
+    }
+    const inferred = VALID_GUN_IDS.has(p.weaponId) ? p.weaponId : 'ak47';
+    this.equippedGunByPlayer.set(p.id, inferred);
+    return inferred;
   }
 
   private registerMessageHandlers(): void {
@@ -316,11 +365,43 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       this.resetToLobby();
     });
 
+    this.onMessage('select_character', (client, payload: { characterId?: string }) => {
+      const p = this.state.players.get(client.sessionId);
+      if (!p) return;
+      p.characterId = normalizeCharacterId(payload?.characterId);
+    });
+
+    this.onMessage('select_loadout', (client, payload: { weaponId?: string; characterId?: string }) => {
+      const p = this.state.players.get(client.sessionId);
+      if (!p) return;
+      if (typeof payload?.characterId === 'string' && VALID_CHARACTER_IDS.has(payload.characterId)) {
+        p.characterId = payload.characterId;
+      }
+      if (typeof payload?.weaponId === 'string' && VALID_GUN_IDS.has(payload.weaponId)) {
+        const nextGun = payload.weaponId;
+        if (this.state.phase !== 'playing' || !p.isAlive) {
+          this.equippedGunByPlayer.set(client.sessionId, nextGun);
+          this.queuedGunByPlayer.delete(client.sessionId);
+          p.weaponId = nextGun;
+        } else {
+          this.queuedGunByPlayer.set(client.sessionId, nextGun);
+        }
+      }
+    });
+
     this.onMessage(
       'player_move',
       (
         client,
-        payload: { x: number; y: number; z: number; rotY: number; pitch: number; weaponId: string }
+        payload: {
+          x: number;
+          y: number;
+          z: number;
+          rotY: number;
+          pitch: number;
+          weaponId: string;
+          characterId?: string;
+        }
       ) => {
         if (this.state.phase !== 'playing') return;
         const p = this.state.players.get(client.sessionId);
@@ -344,8 +425,19 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
           // VULN-5: clamp pitch to match client camera limits [-1.46, +1.46] + small margin
           p.pitch = clamp(payload.pitch, -1.48, 1.48);
         }
-        if (typeof payload.weaponId === 'string' && SERVER_WEAPONS[payload.weaponId]) {
-          p.weaponId = payload.weaponId;
+        if (typeof payload.weaponId === 'string') {
+          if (!this.equippedGunByPlayer.has(p.id) && VALID_GUN_IDS.has(payload.weaponId)) {
+            this.equippedGunByPlayer.set(p.id, payload.weaponId);
+            p.weaponId = payload.weaponId;
+          } else {
+            const allowedGun = this.resolvePlayerEquippedGun(p);
+            if (payload.weaponId === allowedGun || payload.weaponId === 'knife') {
+              p.weaponId = payload.weaponId;
+            }
+          }
+        }
+        if (typeof payload.characterId === 'string' && VALID_CHARACTER_IDS.has(payload.characterId)) {
+          p.characterId = payload.characterId;
         }
       }
     );
@@ -377,7 +469,14 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         const shooter = this.state.players.get(client.sessionId);
         if (!shooter || !shooter.isAlive) return;
 
-        const weapon = SERVER_WEAPONS[payload.weaponId] ?? SERVER_WEAPONS.ak47;
+        const allowedGun = this.resolvePlayerEquippedGun(shooter);
+        const requestedWeaponId = typeof payload.weaponId === 'string' ? payload.weaponId : '';
+        if (requestedWeaponId !== allowedGun && requestedWeaponId !== 'knife') {
+          return;
+        }
+
+        const weapon = SERVER_WEAPONS[requestedWeaponId];
+        if (!weapon) return;
         const now = Date.now();
         const prevShot = this.lastShotAt.get(shooter.id) ?? 0;
         if (now - prevShot < weapon.minFireIntervalMs * 0.72) {
@@ -458,6 +557,15 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       p.isAlive = true;
       p.respawnTimer = 0;
 
+      if (!p.isBot) {
+        const queued = this.queuedGunByPlayer.get(p.id);
+        if (queued && VALID_GUN_IDS.has(queued)) {
+          this.equippedGunByPlayer.set(p.id, queued);
+          this.queuedGunByPlayer.delete(p.id);
+        }
+        p.weaponId = this.resolvePlayerEquippedGun(p);
+      }
+
       const spawn = this.pickTeamSpawn(p.team as 'blue' | 'red');
       p.x = spawn.x;
       p.y = spawn.y;
@@ -485,6 +593,14 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       p.health = 100;
       p.isAlive = true;
       p.respawnTimer = 0;
+      if (!p.isBot) {
+        const queued = this.queuedGunByPlayer.get(p.id);
+        if (queued && VALID_GUN_IDS.has(queued)) {
+          this.equippedGunByPlayer.set(p.id, queued);
+          this.queuedGunByPlayer.delete(p.id);
+        }
+        p.weaponId = this.resolvePlayerEquippedGun(p);
+      }
       if (!p.isHost && !p.isBot) {
         p.ready = false;
       }
@@ -651,6 +767,12 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     this.spawnProtectionUntil.set(p.id, now + 1500);
 
     if (!p.isBot) {
+      const queued = this.queuedGunByPlayer.get(p.id);
+      if (queued && VALID_GUN_IDS.has(queued)) {
+        this.equippedGunByPlayer.set(p.id, queued);
+        this.queuedGunByPlayer.delete(p.id);
+      }
+      p.weaponId = this.resolvePlayerEquippedGun(p);
       const c = this.clients.find((cl) => cl.sessionId === p.id);
       c?.send('player_respawn', { x: p.x, y: p.y, z: p.z, rotY: p.rotY });
     }
@@ -782,8 +904,9 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       bot.ready = true;
       bot.isAlive = true;
       bot.respawnTimer = 0;
-      const botWeapons = ['ak47', 'smg', 'shotgun'];
+      const botWeapons = ['ak47', 'smg', 'shotgun', 'sniper'];
       bot.weaponId = botWeapons[i % botWeapons.length];
+      bot.characterId = getBotCharacterForWeapon(bot.weaponId);
       bot.health = 100;
       bot.kills = 0;
       bot.deaths = 0;

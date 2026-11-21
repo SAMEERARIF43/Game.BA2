@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EngineManager } from './game/EngineManager';
-import { GameSettings, GunId, HudState, KnifeCharmId, WEAPONS } from './game/types';
+import { CharacterId, GameSettings, GunId, HudState, KnifeCharmId, WEAPONS } from './game/types';
 import { MapId } from './maps/types';
 import { DEFAULT_KILL_LIMIT, MATCH_DURATION_SEC } from './match/MatchManager';
 import { NetworkManager } from './multiplayer/NetworkManager';
@@ -51,6 +51,7 @@ const INITIAL_HUD: HudState = {
   speed: 0,
   headingDeg: 0,
   activeWeapon: WEAPONS.ak47,
+  selectedCharacterId: 'assault',
   equippedGunId: 'ak47',
   queuedGunId: 'ak47',
   knifeCharmId: 'tactical_tag',
@@ -126,6 +127,7 @@ export default function App() {
     return {
       ...INITIAL_HUD,
       activeWeapon: gun,
+      selectedCharacterId: persisted.selectedCharacterId,
       equippedGunId: persisted.selectedGunId,
       queuedGunId: persisted.selectedGunId,
       knifeCharmId: persisted.knifeCharmId,
@@ -213,8 +215,12 @@ export default function App() {
       onMultiplayerShot: (payload) => {
         networkRef.current?.sendFire(payload);
       },
-      onMultiplayerMove: (x, y, z, rotY, pitch, weaponId) => {
-        networkRef.current?.sendMove(x, y, z, rotY, pitch, weaponId);
+      onMultiplayerMove: (x, y, z, rotY, pitch, weaponId, characterId) => {
+        networkRef.current?.sendMove(x, y, z, rotY, pitch, weaponId, characterId);
+      },
+      onGunPersistedChange: (gunId) => {
+        networkRef.current?.selectLoadout(gunId);
+        setSettings((prev) => savePersistedSettings({ ...prev, selectedGunId: gunId }));
       },
     });
 
@@ -253,6 +259,13 @@ export default function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, [applyRouteToEngine]);
+
+  useEffect(() => {
+    engineRef.current?.setMenuShowcaseVisible(route.view === 'menu');
+    if (route.view !== 'menu') {
+      engineRef.current?.setMenuShowcaseFocus('gun', 0);
+    }
+  }, [route.view]);
 
   useEffect(() => {
     const onGlobalKeyDown = (e: KeyboardEvent) => {
@@ -339,9 +352,27 @@ export default function App() {
     engineRef.current?.restartMatch();
   }, []);
 
+  const handleSelectCharacter = useCallback(
+    (id: CharacterId, equipSignatureGun = true) => {
+      const outcome = engineRef.current?.selectCharacter(id, equipSignatureGun);
+      const nextGun =
+        equipSignatureGun && outcome?.signatureGunId ? outcome.signatureGunId : undefined;
+      networkRef.current?.selectLoadout(nextGun, id);
+      setSettings((prev) =>
+        savePersistedSettings({
+          ...prev,
+          selectedCharacterId: id,
+          selectedGunId: nextGun ?? prev.selectedGunId,
+        })
+      );
+    },
+    []
+  );
+
   const handleSelectGun = useCallback(
     (id: GunId) => {
       engineRef.current?.selectGun(id);
+      networkRef.current?.selectLoadout(id);
       setSettings((prev) => savePersistedSettings({ ...prev, selectedGunId: id }));
     },
     []
@@ -350,6 +381,10 @@ export default function App() {
   const handleSelectKnifeCharm = useCallback((id: KnifeCharmId) => {
     engineRef.current?.selectKnifeCharm(id);
     setSettings((prev) => savePersistedSettings({ ...prev, knifeCharmId: id }));
+  }, []);
+
+  const handlePreviewShowcase = useCallback((focus: 'gun' | 'knife', offsetX = 0) => {
+    engineRef.current?.setMenuShowcaseFocus(focus, offsetX);
   }, []);
 
   const handleLookupRoom = useCallback(
@@ -362,27 +397,17 @@ export default function App() {
     []
   );
 
-  const handleCreatePrivateMatch = useCallback(async (options: CreatePrivateMatchOptions) => {
-    if (!networkRef.current) {
-      throw new Error('Network client not initialized.');
-    }
-    setDisconnectError(null);
-    const snapshot = await networkRef.current.createPrivateMatch(options);
-    setLobbySnapshot(snapshot);
-    setSelectedMapId(snapshot.mapId);
-    const nextRoute: AppRoute = { view: 'custom' };
-    navigateToRoute(nextRoute);
-    setRoute(nextRoute);
-    engineRef.current?.syncMultiplayerState(snapshot);
-  }, []);
-
-  const handleJoinPrivateMatch = useCallback(
-    async (roomCode: string, playerName: string, password?: string) => {
+  const handleCreatePrivateMatch = useCallback(
+    async (options: CreatePrivateMatchOptions) => {
       if (!networkRef.current) {
         throw new Error('Network client not initialized.');
       }
       setDisconnectError(null);
-      const snapshot = await networkRef.current.joinPrivateMatch(roomCode, playerName, password);
+      const snapshot = await networkRef.current.createPrivateMatch({
+        ...options,
+        characterId: settings.selectedCharacterId,
+        weaponId: settings.selectedGunId,
+      });
       setLobbySnapshot(snapshot);
       setSelectedMapId(snapshot.mapId);
       const nextRoute: AppRoute = { view: 'custom' };
@@ -390,7 +415,30 @@ export default function App() {
       setRoute(nextRoute);
       engineRef.current?.syncMultiplayerState(snapshot);
     },
-    []
+    [settings.selectedCharacterId, settings.selectedGunId]
+  );
+
+  const handleJoinPrivateMatch = useCallback(
+    async (roomCode: string, playerName: string, password?: string) => {
+      if (!networkRef.current) {
+        throw new Error('Network client not initialized.');
+      }
+      setDisconnectError(null);
+      const snapshot = await networkRef.current.joinPrivateMatch(
+        roomCode,
+        playerName,
+        password,
+        settings.selectedCharacterId,
+        settings.selectedGunId
+      );
+      setLobbySnapshot(snapshot);
+      setSelectedMapId(snapshot.mapId);
+      const nextRoute: AppRoute = { view: 'custom' };
+      navigateToRoute(nextRoute);
+      setRoute(nextRoute);
+      engineRef.current?.syncMultiplayerState(snapshot);
+    },
+    [settings.selectedCharacterId, settings.selectedGunId]
   );
 
   const handleLeaveMultiplayer = useCallback(async () => {
@@ -446,12 +494,16 @@ export default function App() {
       {!contextLost && route.view === 'menu' && (
         <MainMenu
           selectedMapId={selectedMapId}
+          selectedCharacterId={hud.selectedCharacterId}
           selectedGunId={hud.equippedGunId}
           knifeCharmId={hud.knifeCharmId}
           settings={settings}
           xp={hud.xp}
+          onSelectCharacter={handleSelectCharacter}
           onSelectGun={handleSelectGun}
           onSelectKnifeCharm={handleSelectKnifeCharm}
+          onPreviewMap={handlePreviewMap}
+          onPreviewShowcase={handlePreviewShowcase}
           onPlayOfflineTdm={handlePlayOfflineTdm}
           onOpenCustomMatch={handleOpenCustomMatch}
           onOpenMapSelect={handleOpenMapSelect}
@@ -515,6 +567,7 @@ export default function App() {
               onLeaveToMenu={() => {
                 void handleLeaveMultiplayer();
               }}
+              onSelectCharacter={handleSelectCharacter}
               onSelectGun={handleSelectGun}
               onSelectKnifeCharm={handleSelectKnifeCharm}
               onUpdateSettings={handleUpdateSettings}
@@ -551,6 +604,7 @@ export default function App() {
               onResume={handleResumeMatch}
               onRestartMatch={handleRestartMatch}
               onLeaveToMenu={handleBackToMenu}
+              onSelectCharacter={handleSelectCharacter}
               onSelectGun={handleSelectGun}
               onSelectKnifeCharm={handleSelectKnifeCharm}
               onUpdateSettings={handleUpdateSettings}

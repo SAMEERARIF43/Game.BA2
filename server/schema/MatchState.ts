@@ -14,6 +14,7 @@ export const PlayerSchema = schema({
   z: t.number(),
   rotY: t.number(),
   pitch: t.number(),
+  characterId: t.string(),
   weaponId: t.string(),
   health: t.number(),
   kills: t.number(),

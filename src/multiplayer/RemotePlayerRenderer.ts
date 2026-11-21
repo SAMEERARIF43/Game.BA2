@@ -10,7 +10,13 @@ import {
   TransformNode,
   Vector3,
 } from '@babylonjs/core';
-import { HitZone, WeaponId } from '../game/types';
+import {
+  OperatorPalette,
+  OperatorRig,
+  buildOperatorRig,
+  createOperatorPalette,
+} from '../game/OperatorMeshBuilder';
+import { CharacterId, WeaponId } from '../game/types';
 import { TeamId } from '../maps/types';
 import { LobbyPlayerInfo, RemoteFireEvent } from './types';
 
@@ -18,6 +24,7 @@ interface RemoteAvatar {
   id: string;
   name: string;
   team: TeamId;
+  characterId: CharacterId;
   root: TransformNode;
   pivot: TransformNode;
   upperBodyPivot: TransformNode;
@@ -28,7 +35,7 @@ interface RemoteAvatar {
   nameplateMesh: Mesh;
   nameplateMat: StandardMaterial;
   nameplateTex: DynamicTexture;
-  rifleAssembly: TransformNode;
+  rig: OperatorRig;
   muzzlePoint: TransformNode;
   muzzleFlash: Mesh;
   muzzleFlashTimer: number;
@@ -54,28 +61,16 @@ export class RemotePlayerRenderer {
   private avatars = new Map<string, RemoteAvatar>();
   private tracers: RemoteTracer[] = [];
   private sharedMaterials: Material[] = [];
-  private gearMat: PBRMaterial;
-  private gunMat: PBRMaterial;
-  private flashMat: StandardMaterial;
+  private bluePalette: OperatorPalette;
+  private redPalette: OperatorPalette;
   private blueTracerMat: StandardMaterial;
   private redTracerMat: StandardMaterial;
 
   constructor(scene: Scene) {
     this.scene = scene;
 
-    this.gearMat = new PBRMaterial('remoteGearMat', this.scene);
-    this.gearMat.albedoColor = Color3.FromHexString('#1e222a');
-    this.gearMat.metallic = 0.22;
-    this.gearMat.roughness = 0.72;
-
-    this.gunMat = new PBRMaterial('remoteGunMat', this.scene);
-    this.gunMat.albedoColor = Color3.FromHexString('#2b313c');
-    this.gunMat.metallic = 0.85;
-    this.gunMat.roughness = 0.34;
-
-    this.flashMat = new StandardMaterial('remoteFlashMat', this.scene);
-    this.flashMat.disableLighting = true;
-    this.flashMat.emissiveColor = new Color3(1.6, 1.15, 0.45);
+    this.bluePalette = createOperatorPalette(this.scene, 'blue', 'remBluePal');
+    this.redPalette = createOperatorPalette(this.scene, 'red', 'remRedPal');
 
     this.blueTracerMat = new StandardMaterial('remoteTracerBlue', this.scene);
     this.blueTracerMat.disableLighting = true;
@@ -86,9 +81,6 @@ export class RemotePlayerRenderer {
     this.redTracerMat.emissiveColor = new Color3(1.9, 0.65, 0.35);
 
     this.sharedMaterials.push(
-      this.gearMat,
-      this.gunMat,
-      this.flashMat,
       this.blueTracerMat,
       this.redTracerMat
     );
@@ -102,7 +94,7 @@ export class RemotePlayerRenderer {
       activeIds.add(p.id);
 
       let avatar = this.avatars.get(p.id);
-      if (!avatar || avatar.team !== p.team) {
+      if (!avatar || avatar.team !== p.team || avatar.characterId !== p.characterId) {
         if (avatar) {
           this.disposeAvatar(avatar);
         }
@@ -120,21 +112,7 @@ export class RemotePlayerRenderer {
 
       if (avatar.weaponId !== p.weaponId) {
         avatar.weaponId = p.weaponId;
-        if (p.weaponId === 'knife') {
-          avatar.rifleAssembly.scaling.set(0.55, 0.55, 0.32);
-        } else {
-          const scaleZ =
-            p.weaponId === 'pistol'
-              ? 0.44
-              : p.weaponId === 'smg'
-                ? 0.78
-                : p.weaponId === 'shotgun'
-                  ? 0.96
-                  : p.weaponId === 'sniper'
-                    ? 1.24
-                    : 1.0;
-          avatar.rifleAssembly.scaling.set(1, 1, scaleZ);
-        }
+        avatar.rig.setWeapon(p.weaponId);
       }
     }
 
@@ -272,6 +250,8 @@ export class RemotePlayerRenderer {
 
   public dispose(): void {
     this.clear();
+    this.bluePalette.dispose();
+    this.redPalette.dispose();
     for (const mat of this.sharedMaterials) {
       mat.dispose();
     }
@@ -279,173 +259,23 @@ export class RemotePlayerRenderer {
   }
 
   private createAvatar(p: LobbyPlayerInfo): RemoteAvatar {
-    const root = new TransformNode(`remote_root_${p.id}`, this.scene);
-    root.position.set(p.x, p.y, p.z);
-    root.rotation.y = p.rotY;
-
-    const pivot = new TransformNode(`remote_pivot_${p.id}`, this.scene);
-    pivot.parent = root;
-
-    const bodyMat = new PBRMaterial(`remoteBody_${p.id}`, this.scene);
-    bodyMat.albedoColor = Color3.FromHexString(p.team === 'blue' ? '#1e40af' : '#991b1b');
-    bodyMat.emissiveColor =
-      p.team === 'blue' ? new Color3(0.02, 0.06, 0.14) : new Color3(0.14, 0.03, 0.03);
-    bodyMat.metallic = 0.18;
-    bodyMat.roughness = 0.65;
-
-    const headMat = new PBRMaterial(`remoteHead_${p.id}`, this.scene);
-    headMat.albedoColor = Color3.FromHexString(p.team === 'blue' ? '#3b82f6' : '#dc2626');
-    headMat.emissiveColor =
-      p.team === 'blue' ? new Color3(0.04, 0.1, 0.24) : new Color3(0.22, 0.05, 0.04);
-    headMat.metallic = 0.28;
-    headMat.roughness = 0.45;
-
-    const beaconMat = new StandardMaterial(`remoteBeacon_${p.id}`, this.scene);
-    beaconMat.disableLighting = true;
-    beaconMat.emissiveColor =
-      p.team === 'blue' ? new Color3(0.25, 0.85, 1.85) : new Color3(1.85, 0.25, 0.3);
-    this.sharedMaterials.push(beaconMat);
-
-    const visorMat = new StandardMaterial(`remoteVisor_${p.id}`, this.scene);
-    visorMat.disableLighting = true;
-    visorMat.emissiveColor =
-      p.team === 'blue' ? new Color3(0.4, 1.1, 1.8) : new Color3(1.6, 0.55, 0.25);
-    this.sharedMaterials.push(visorMat);
-
-    // Hip-pivoted legs + boots
-    const legLPivot = new TransformNode(`rem_legLPivot_${p.id}`, this.scene);
-    legLPivot.parent = pivot;
-    legLPivot.position.set(-0.14, 0.78, 0);
-
-    const legL = MeshBuilder.CreateBox(`rem_legL_${p.id}`, { width: 0.19, height: 0.66, depth: 0.21 }, this.scene);
-    legL.position.set(0, -0.33, 0);
-    legL.parent = legLPivot;
-    legL.material = this.gearMat;
-    legL.isPickable = false;
-
-    const bootL = MeshBuilder.CreateBox(`rem_bootL_${p.id}`, { width: 0.2, height: 0.14, depth: 0.28 }, this.scene);
-    bootL.position.set(0, -0.71, 0.03);
-    bootL.parent = legLPivot;
-    bootL.material = this.gunMat;
-    bootL.isPickable = false;
-
-    const legRPivot = new TransformNode(`rem_legRPivot_${p.id}`, this.scene);
-    legRPivot.parent = pivot;
-    legRPivot.position.set(0.14, 0.78, 0);
-
-    const legR = MeshBuilder.CreateBox(`rem_legR_${p.id}`, { width: 0.19, height: 0.66, depth: 0.21 }, this.scene);
-    legR.position.set(0, -0.33, 0);
-    legR.parent = legRPivot;
-    legR.material = this.gearMat;
-    legR.isPickable = false;
-
-    const bootR = MeshBuilder.CreateBox(`rem_bootR_${p.id}`, { width: 0.2, height: 0.14, depth: 0.28 }, this.scene);
-    bootR.position.set(0, -0.71, 0.03);
-    bootR.parent = legRPivot;
-    bootR.material = this.gunMat;
-    bootR.isPickable = false;
-
-    // Upper body pivot (tilts with aim pitch)
-    const upperBodyPivot = new TransformNode(`rem_upper_${p.id}`, this.scene);
-    upperBodyPivot.parent = pivot;
-    upperBodyPivot.position.set(0, 0.8, 0);
-
-    const bodyMesh = MeshBuilder.CreateBox(`rem_body_${p.id}`, { width: 0.54, height: 0.72, depth: 0.3 }, this.scene);
-    bodyMesh.position.set(0, 0.36, 0);
-    bodyMesh.parent = upperBodyPivot;
-    bodyMesh.material = bodyMat;
-    bodyMesh.isPickable = p.isAlive;
-    bodyMesh.metadata = {
-      isRemotePlayer: true,
-      playerId: p.id,
+    const palette = p.team === 'blue' ? this.bluePalette : this.redPalette;
+    const rig = buildOperatorRig(this.scene, {
+      id: `rem_${p.id}`,
       team: p.team,
-      zone: 'body' as HitZone,
-    };
-
-    const vest = MeshBuilder.CreateBox(`rem_vest_${p.id}`, { width: 0.48, height: 0.44, depth: 0.34 }, this.scene);
-    vest.position.set(0, 0.41, 0);
-    vest.parent = upperBodyPivot;
-    vest.material = this.gearMat;
-    vest.isPickable = false;
-
-    for (const side of [-1, 1]) {
-      const pad = MeshBuilder.CreateBox(`rem_pad_${p.id}_${side}`, { width: 0.14, height: 0.18, depth: 0.24 }, this.scene);
-      pad.position.set(side * 0.33, 0.62, 0);
-      pad.parent = upperBodyPivot;
-      pad.material = bodyMat;
-      pad.isPickable = false;
-
-      const beacon = MeshBuilder.CreateBox(`rem_beacon_${p.id}_${side}`, { width: 0.05, height: 0.07, depth: 0.16 }, this.scene);
-      beacon.position.set(side * 0.39, 0.65, 0);
-      beacon.parent = upperBodyPivot;
-      beacon.material = beaconMat;
-      beacon.isPickable = false;
-    }
-
-    const headMesh = MeshBuilder.CreateBox(`rem_head_${p.id}`, { width: 0.3, height: 0.3, depth: 0.3 }, this.scene);
-    headMesh.position.set(0, 0.9, 0);
-    headMesh.parent = upperBodyPivot;
-    headMesh.material = headMat;
-    headMesh.isPickable = p.isAlive;
-    headMesh.metadata = {
-      isRemotePlayer: true,
-      playerId: p.id,
-      team: p.team,
-      zone: 'head' as HitZone,
-    };
-
-    const helmet = MeshBuilder.CreateBox(`rem_helmet_${p.id}`, { width: 0.34, height: 0.16, depth: 0.35 }, this.scene);
-    helmet.position.set(0, 0.99, -0.01);
-    helmet.parent = upperBodyPivot;
-    helmet.material = this.gearMat;
-    helmet.isPickable = false;
-
-    const visor = MeshBuilder.CreateBox(`rem_visor_${p.id}`, { width: 0.25, height: 0.075, depth: 0.05 }, this.scene);
-    visor.position.set(0, 0.92, 0.155);
-    visor.parent = upperBodyPivot;
-    visor.material = visorMat;
-    visor.isPickable = false;
-
-    const armR = MeshBuilder.CreateBox(`rem_armR_${p.id}`, { width: 0.13, height: 0.13, depth: 0.44 }, this.scene);
-    armR.position.set(0.32, 0.5, 0.18);
-    armR.rotation.x = 0.22;
-    armR.parent = upperBodyPivot;
-    armR.material = this.gearMat;
-    armR.isPickable = false;
-
-    const armL = MeshBuilder.CreateBox(`rem_armL_${p.id}`, { width: 0.13, height: 0.13, depth: 0.48 }, this.scene);
-    armL.position.set(-0.08, 0.46, 0.28);
-    armL.rotation.y = 0.65;
-    armL.rotation.x = 0.16;
-    armL.parent = upperBodyPivot;
-    armL.material = this.gearMat;
-    armL.isPickable = false;
-
-    const rifleAssembly = new TransformNode(`rem_weapon_${p.id}`, this.scene);
-    rifleAssembly.parent = upperBodyPivot;
-    rifleAssembly.position.set(0.24, 0.48, 0.38);
-
-    const rifleMesh = MeshBuilder.CreateBox(`rem_rifle_${p.id}`, { width: 0.075, height: 0.11, depth: 0.62 }, this.scene);
-    rifleMesh.parent = rifleAssembly;
-    rifleMesh.material = this.gunMat;
-    rifleMesh.isPickable = false;
-
-    const barrel = MeshBuilder.CreateCylinder(`rem_barrel_${p.id}`, { height: 0.28, diameter: 0.032, tessellation: 8 }, this.scene);
-    barrel.rotation.x = Math.PI * 0.5;
-    barrel.position.set(0, 0.02, 0.4);
-    barrel.parent = rifleAssembly;
-    barrel.material = this.gunMat;
-    barrel.isPickable = false;
-
-    const muzzlePoint = new TransformNode(`rem_muzzle_${p.id}`, this.scene);
-    muzzlePoint.parent = rifleAssembly;
-    muzzlePoint.position.set(0, 0.02, 0.56);
-
-    const muzzleFlash = MeshBuilder.CreatePolyhedron(`rem_flash_${p.id}`, { type: 1, size: 0.08 }, this.scene);
-    muzzleFlash.parent = muzzlePoint;
-    muzzleFlash.material = this.flashMat;
-    muzzleFlash.isPickable = false;
-    muzzleFlash.isVisible = false;
+      palette,
+      characterId: p.characterId,
+      initialWeaponId: p.weaponId,
+      buildAllWeapons: true,
+      isPickableHitboxes: p.isAlive,
+      hitboxMetadata: {
+        isRemotePlayer: true,
+        playerId: p.id,
+        team: p.team,
+      },
+    });
+    rig.root.position.set(p.x, p.y, p.z);
+    rig.root.rotation.y = p.rotY;
 
     // Floating Nameplate Billboard (named rem_np_* so GlowLayer excludes it)
     const nameplateTex = new DynamicTexture(`rem_np_tex_${p.id}`, { width: 256, height: 64 }, this.scene, true);
@@ -471,7 +301,7 @@ export class RemotePlayerRenderer {
     nameplateMat.backFaceCulling = false;
 
     const nameplateMesh = MeshBuilder.CreatePlane(`rem_np_${p.id}`, { width: 1.35, height: 0.34 }, this.scene);
-    nameplateMesh.parent = root;
+    nameplateMesh.parent = rig.root;
     nameplateMesh.position.set(0, 2.22, 0);
     nameplateMesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
     nameplateMesh.material = nameplateMat;
@@ -482,19 +312,20 @@ export class RemotePlayerRenderer {
       id: p.id,
       name: p.name,
       team: p.team,
-      root,
-      pivot,
-      upperBodyPivot,
-      legLPivot,
-      legRPivot,
-      headMesh,
-      bodyMesh,
+      characterId: rig.characterId,
+      root: rig.root,
+      pivot: rig.pivot,
+      upperBodyPivot: rig.upperBodyPivot,
+      legLPivot: rig.legLPivot,
+      legRPivot: rig.legRPivot,
+      headMesh: rig.headMesh,
+      bodyMesh: rig.bodyMesh,
       nameplateMesh,
       nameplateMat,
       nameplateTex,
-      rifleAssembly,
-      muzzlePoint,
-      muzzleFlash,
+      rig,
+      muzzlePoint: rig.muzzlePoint,
+      muzzleFlash: rig.muzzleFlash,
       muzzleFlashTimer: 0,
       targetPos: new Vector3(p.x, p.y, p.z),
       targetRotY: p.rotY,
@@ -503,8 +334,8 @@ export class RemotePlayerRenderer {
       prevPos: new Vector3(p.x, p.y, p.z),
       isAlive: p.isAlive,
       weaponId: p.weaponId,
-      bodyMat,
-      headMat,
+      bodyMat: rig.bodyMat,
+      headMat: rig.headMat,
     };
   }
 

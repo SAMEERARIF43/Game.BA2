@@ -9,9 +9,11 @@ import {
   ImageProcessingConfiguration,
   Mesh,
   MeshBuilder,
+  PointLight,
   Scene,
   ShadowGenerator,
   StandardMaterial,
+  TransformNode,
   Vector3,
 } from '@babylonjs/core';
 import { BotManager } from '../bots/BotManager';
@@ -34,13 +36,22 @@ import {
 import { AudioEngine } from './AudioEngine';
 import {
   GUN_LOCKED_WHILE_ALIVE_MESSAGE,
+  applyCharacterSelection,
   applyGunSelection,
   canSwitchGunImmediately,
+  normalizeCharacterId,
   normalizeGunId,
   normalizeKnifeCharmId,
 } from './loadoutRules';
+import {
+  OperatorPalette,
+  OperatorRig,
+  buildOperatorRig,
+  createOperatorPalette,
+} from './OperatorMeshBuilder';
 import { PlayerController } from './PlayerController';
 import {
+  CharacterId,
   DamageIndicator,
   GUN_IDS,
   GameSettings,
@@ -88,8 +99,10 @@ export interface EngineCallbacks {
     z: number,
     rotY: number,
     pitch: number,
-    weaponId: WeaponId
+    weaponId: WeaponId,
+    characterId: CharacterId
   ) => void;
+  onGunPersistedChange?: (gunId: GunId) => void;
 }
 
 interface BarrageShell {
@@ -182,9 +195,20 @@ export class EngineManager {
   private sessionXpEarned = 0;
   private matchEndXpAwarded = false;
 
+  private selectedCharacterId: CharacterId;
+  private showcasePivot: TransformNode | null = null;
+  private showcasePalette: OperatorPalette | null = null;
+  private showcaseRig: OperatorRig | null = null;
+  private showcaseFillLight: PointLight | null = null;
+  private showcaseRimLight: PointLight | null = null;
+  private menuShowcaseVisible = true;
+  private menuShowcaseFocus: 'gun' | 'knife' = 'gun';
+  private showcaseTargetOffsetX = 0;
+
   constructor(canvas: HTMLCanvasElement, initialSettings: GameSettings, callbacks: EngineCallbacks) {
     this.canvas = canvas;
     this.settings = { ...initialSettings };
+    this.selectedCharacterId = normalizeCharacterId(initialSettings.selectedCharacterId);
     this.callbacks = callbacks;
     this.xpTotal = loadProgression().xp;
 
@@ -353,6 +377,7 @@ export class EngineManager {
       normalizeKnifeCharmId(initialSettings.knifeCharmId)
     );
 
+    this.setupMenuShowcase();
     this.setupPostProcessing();
     this.applyGraphicsQuality(initialSettings.graphicsQuality);
     this.bindLifecycleEvents();
@@ -370,6 +395,7 @@ export class EngineManager {
         if (phase === 'menu') {
           const target = this.mapManager.getCurrentDefinition().previewCameraTarget;
           this.player.updateOrbitCamera(target, this.elapsedTime);
+          this.animateMenuShowcase(dt);
         } else {
           this.updateOfflineMatchTick(dt);
           const activeCfg = this.weapons.getActiveConfig();
@@ -388,8 +414,16 @@ export class EngineManager {
     this.sessionMode = 'offline';
     this.mpSnapshot = null;
     this.mpPaused = false;
+    this.playerHealth = this.playerMaxHealth;
+    this.playerIsAlive = true;
+    this.playerRespawnTimer = 0;
+    this.playerSpawnProtection = 0;
+    this.lastKillerName = null;
+    this.lastKillerWeapon = null;
+    this.player.setDeadState(false);
     this.resetCombatArcadeState(true);
     this.remoteRenderer.clear();
+    this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
     this.weapons.resetForNewMatch();
     this.weapons.setMultiplayerContext(false, 'blue', false);
     this.player.exitPointerLock();
@@ -400,6 +434,7 @@ export class EngineManager {
     this.matchManager.setPhase('menu');
     this.mapManager.loadMap(mapId);
     this.audio.setAmbientEnvironment('menu');
+    this.updateMenuShowcaseVisuals();
     this.emitHudState(true);
   }
 
@@ -438,6 +473,7 @@ export class EngineManager {
     this.player.setOrbitPreview(false);
     this.player.setCanControl(true);
     this.weapons.setViewModelVisible(true);
+    this.updateMenuShowcaseVisuals();
     this.showScoreboard = false;
     this.showOnboarding = !this.onboardingDismissed;
     this.heartbeatCooldown = 0;
@@ -479,6 +515,7 @@ export class EngineManager {
     this.player.setOrbitPreview(false);
     this.player.setCanControl(true);
     this.weapons.setViewModelVisible(true);
+    this.updateMenuShowcaseVisuals();
     this.showScoreboard = false;
     this.showOnboarding = !this.onboardingDismissed;
     this.heartbeatCooldown = 0;
@@ -498,6 +535,15 @@ export class EngineManager {
         this.mapManager.loadMap(snapshot.mapId);
       }
       this.audio.setAmbientEnvironment('menu');
+      this.mpPaused = false;
+      this.playerHealth = this.playerMaxHealth;
+      this.playerIsAlive = true;
+      this.playerRespawnTimer = 0;
+      this.playerSpawnProtection = 0;
+      this.lastKillerName = null;
+      this.lastKillerWeapon = null;
+      this.player.setDeadState(false);
+      this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
       if (this.sessionMode === 'multiplayer') {
         this.remoteRenderer.clear();
         this.resetCombatArcadeState(true);
@@ -593,6 +639,7 @@ export class EngineManager {
     this.resetPlayerForLife(new Vector3(pos.x, pos.y + 0.95, pos.z), pos.rotY);
     this.weapons.applyQueuedGunOnRespawn();
     this.weapons.setViewModelVisible(true);
+    this.lastMoveSendTime = 0;
     this.emitHudState(true);
   }
 
@@ -647,6 +694,118 @@ export class EngineManager {
     if (settings.knifeCharmId !== this.weapons.getKnifeCharmId()) {
       this.weapons.setKnifeCharm(settings.knifeCharmId);
     }
+    const nextChar = normalizeCharacterId(settings.selectedCharacterId);
+    if (nextChar !== this.selectedCharacterId) {
+      this.selectedCharacterId = nextChar;
+      this.rebuildMenuShowcaseRig();
+    }
+    this.updateMenuShowcaseVisuals();
+  }
+
+  public setMenuShowcaseVisible(visible: boolean): void {
+    this.menuShowcaseVisible = visible;
+    this.updateMenuShowcaseVisuals();
+  }
+
+  public setMenuShowcaseFocus(focus: 'gun' | 'knife', offsetX = 0): void {
+    this.menuShowcaseFocus = focus;
+    this.showcaseTargetOffsetX = offsetX;
+    this.updateMenuShowcaseVisuals();
+  }
+
+  private setupMenuShowcase(): void {
+    const pivot = new TransformNode('menuShowcasePivot', this.scene);
+    pivot.parent = this.player.camera;
+    pivot.position.set(0, -0.84, 2.38);
+
+    const palette = createOperatorPalette(this.scene, 'blue', 'showcaseOp');
+
+    const fill = new PointLight('menuShowcaseFillLight', new Vector3(0.85, 1.38, -0.9), this.scene);
+    fill.parent = pivot;
+    fill.diffuse = new Color3(1.0, 0.96, 0.9);
+    fill.specular = new Color3(0.55, 0.56, 0.6);
+    fill.intensity = 2.4;
+    fill.range = 6.0;
+    fill.shadowEnabled = false;
+
+    const rim = new PointLight('menuShowcaseRimLight', new Vector3(-1.05, 1.48, 0.95), this.scene);
+    rim.parent = pivot;
+    rim.diffuse = new Color3(0.45, 0.75, 1.0);
+    rim.specular = new Color3(0.35, 0.45, 0.62);
+    rim.intensity = 2.1;
+    rim.range = 6.0;
+    rim.shadowEnabled = false;
+
+    this.showcasePivot = pivot;
+    this.showcasePalette = palette;
+    this.showcaseFillLight = fill;
+    this.showcaseRimLight = rim;
+
+    this.rebuildMenuShowcaseRig();
+  }
+
+  private rebuildMenuShowcaseRig(): void {
+    if (!this.showcasePivot || !this.showcasePalette) return;
+
+    if (this.showcaseRig) {
+      this.showcaseRig.root.dispose();
+      this.showcaseRig.bodyMat.dispose();
+      this.showcaseRig.headMat.dispose();
+      this.showcaseRig = null;
+    }
+
+    const rig = buildOperatorRig(this.scene, {
+      id: `menu_showcase_${this.selectedCharacterId}`,
+      team: 'blue',
+      palette: this.showcasePalette,
+      characterId: this.selectedCharacterId,
+      buildAllWeapons: true,
+      initialWeaponId: this.weapons.getEquippedGunId(),
+      initialCharmId: this.weapons.getKnifeCharmId(),
+      isPickableHitboxes: false,
+      renderingGroupId: 0,
+    });
+    rig.root.parent = this.showcasePivot;
+    rig.root.rotation.y = Math.PI - 0.34;
+
+    const showcaseMeshes = rig.root.getChildMeshes(false);
+    if (this.showcaseFillLight) {
+      this.showcaseFillLight.includedOnlyMeshes = showcaseMeshes;
+    }
+    if (this.showcaseRimLight) {
+      this.showcaseRimLight.includedOnlyMeshes = showcaseMeshes;
+    }
+
+    this.showcaseRig = rig;
+  }
+
+  private updateMenuShowcaseVisuals(): void {
+    if (!this.showcasePivot || !this.showcaseRig) return;
+    const active =
+      this.menuShowcaseVisible &&
+      this.sessionMode === 'offline' &&
+      this.matchManager.getPhase() === 'menu';
+
+    this.showcasePivot.setEnabled(active);
+    this.showcaseFillLight?.setEnabled(active);
+    this.showcaseRimLight?.setEnabled(active);
+
+    if (active) {
+      const displayWeapon =
+        this.menuShowcaseFocus === 'knife' ? 'knife' : this.weapons.getEquippedGunId();
+      this.showcaseRig.setWeapon(displayWeapon);
+      this.showcaseRig.setCharm(this.weapons.getKnifeCharmId());
+    }
+  }
+
+  private animateMenuShowcase(dt: number): void {
+    if (!this.showcasePivot || !this.showcaseRig || !this.showcasePivot.isEnabled()) return;
+    const lerp = 1 - Math.exp(-8 * dt);
+    this.showcasePivot.position.x +=
+      (this.showcaseTargetOffsetX - this.showcasePivot.position.x) * lerp;
+    this.showcaseRig.upperBodyPivot.position.y = 0.8 + Math.sin(this.elapsedTime * 1.9) * 0.012;
+    this.showcaseRig.root.rotation.y =
+      Math.PI - 0.34 + Math.sin(this.elapsedTime * 0.6) * 0.16;
   }
 
   private handlePlayerKillCredit(
@@ -951,6 +1110,7 @@ export class EngineManager {
     this.player.setDeathLookTarget(attackerPos);
     this.player.setDeadState(true);
     this.weapons.setViewModelVisible(false);
+    this.weapons.cancelTransientActions();
     this.weapons.clearTransientEffects();
   }
 
@@ -1135,12 +1295,58 @@ export class EngineManager {
     } else {
       this.weapons.setQueuedGun(outcome.loadout.queuedGunId);
     }
+    this.updateMenuShowcaseVisuals();
     this.emitHudState(true);
     return { switchedImmediately: outcome.switchedImmediately };
   }
 
+  public selectCharacter(
+    id: CharacterId,
+    equipSignatureGun = true
+  ): { characterId: CharacterId; signatureGunId: GunId; switchedImmediately: boolean } {
+    const normalized = normalizeCharacterId(id);
+    if (normalized !== this.selectedCharacterId) {
+      this.selectedCharacterId = normalized;
+      this.rebuildMenuShowcaseRig();
+    }
+
+    const phase = this.getCurrentMatchPhase();
+    const outcome = applyCharacterSelection(
+      {
+        equippedGunId: this.weapons.getEquippedGunId(),
+        queuedGunId: this.weapons.getQueuedGunId(),
+        activeSlot: this.weapons.getActiveSlot(),
+      },
+      normalized,
+      equipSignatureGun,
+      phase,
+      this.playerIsAlive
+    );
+
+    if (outcome.gunOutcome) {
+      if (outcome.gunOutcome.switchedImmediately) {
+        this.weapons.setEquippedGun(outcome.gunOutcome.loadout.equippedGunId);
+      } else {
+        this.weapons.setQueuedGun(outcome.gunOutcome.loadout.queuedGunId);
+      }
+    }
+
+    this.updateMenuShowcaseVisuals();
+    this.emitHudState(true);
+    return {
+      characterId: outcome.characterId,
+      signatureGunId: outcome.signatureGunId,
+      switchedImmediately: outcome.gunOutcome?.switchedImmediately ?? false,
+    };
+  }
+
+  public getSelectedCharacterId(): CharacterId {
+    return this.selectedCharacterId;
+  }
+
   public selectKnifeCharm(id: KnifeCharmId): void {
     this.weapons.setKnifeCharm(normalizeKnifeCharmId(id));
+    this.updateMenuShowcaseVisuals();
     this.emitHudState(true);
   }
 
@@ -1158,6 +1364,7 @@ export class EngineManager {
     if (canSwitchGunImmediately(phase, this.playerIsAlive) && gunIndex >= 1 && gunIndex <= GUN_IDS.length) {
       const nextGun = GUN_IDS[gunIndex - 1];
       this.selectGun(nextGun);
+      this.callbacks.onGunPersistedChange?.(nextGun);
       this.audio.playReloadMagIn();
     }
   }
@@ -1190,7 +1397,8 @@ export class EngineManager {
         pos.z,
         this.player.camera.rotation.y,
         this.player.camera.rotation.x,
-        activeCfg.id
+        activeCfg.id,
+        this.selectedCharacterId
       );
     }
   }
@@ -1550,6 +1758,7 @@ export class EngineManager {
       speed: Math.round(this.player.getHorizontalSpeed() * 10) / 10,
       headingDeg: Math.round(this.player.getHeadingDeg()),
       activeWeapon: this.weapons.getActiveConfig(),
+      selectedCharacterId: this.selectedCharacterId,
       equippedGunId: this.weapons.getEquippedGunId(),
       queuedGunId: this.weapons.getQueuedGunId(),
       knifeCharmId: this.weapons.getKnifeCharmId(),
@@ -1615,6 +1824,20 @@ export class EngineManager {
     this.canvas.removeEventListener('webglcontextrestored', this.onWebGLContextRestored);
 
     this.resetCombatArcadeState(true);
+    if (this.showcaseRig) {
+      this.showcaseRig.root.dispose();
+      this.showcaseRig.bodyMat.dispose();
+      this.showcaseRig.headMat.dispose();
+      this.showcaseRig = null;
+    }
+    this.showcaseFillLight?.dispose();
+    this.showcaseFillLight = null;
+    this.showcaseRimLight?.dispose();
+    this.showcaseRimLight = null;
+    this.showcasePivot?.dispose();
+    this.showcasePivot = null;
+    this.showcasePalette?.dispose();
+    this.showcasePalette = null;
     this.weapons.dispose();
     this.remoteRenderer.dispose();
     this.botManager.dispose();

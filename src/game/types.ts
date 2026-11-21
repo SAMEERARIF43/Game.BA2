@@ -8,6 +8,69 @@ export const GUN_IDS: readonly GunId[] = ['shotgun', 'ak47', 'smg', 'sniper', 'p
 
 export const WEAPON_IDS: readonly WeaponId[] = ['shotgun', 'ak47', 'smg', 'sniper', 'pistol', 'knife'];
 
+export type CharacterId = 'assault' | 'vanguard' | 'breacher' | 'marksman';
+
+export const CHARACTER_IDS: readonly CharacterId[] = [
+  'assault',
+  'vanguard',
+  'breacher',
+  'marksman',
+];
+
+export interface CharacterConfig {
+  id: CharacterId;
+  callsign: string;
+  fullName: string;
+  role: string;
+  silhouetteLabel: string;
+  signatureGunId: GunId;
+  accentHex: string;
+  gearSummary: string;
+}
+
+export const CHARACTERS: Record<CharacterId, CharacterConfig> = {
+  assault: {
+    id: 'assault',
+    callsign: 'Kodiak',
+    fullName: 'Vance "Kodiak" Ortiz',
+    role: 'Assault',
+    silhouetteLabel: 'Male · Tactical Rifleman',
+    signatureGunId: 'ak47',
+    accentHex: '#f59e0b',
+    gearSummary: 'Cropped hair, boom headset, tactical scarf & medium rifleman carrier',
+  },
+  vanguard: {
+    id: 'vanguard',
+    callsign: 'Valkyrie',
+    fullName: 'Kira "Valkyrie" Lin',
+    role: 'Vanguard',
+    silhouetteLabel: 'Female · Agile Skirmisher',
+    signatureGunId: 'smg',
+    accentHex: '#38bdf8',
+    gearSummary: 'Ponytail silhouette, wrap glasses, light agility vest & SMG rig',
+  },
+  breacher: {
+    id: 'breacher',
+    callsign: 'Titan',
+    fullName: 'Marcus "Titan" Cole',
+    role: 'Breacher',
+    silhouetteLabel: 'Male · Heavy Enforcer',
+    signatureGunId: 'shotgun',
+    accentHex: '#ef4444',
+    gearSummary: 'Full ballistic visor helmet, mandible guard, wide pauldrons & shell loops',
+  },
+  marksman: {
+    id: 'marksman',
+    callsign: 'Spectre',
+    fullName: 'Soren "Spectre" Falk',
+    role: 'Marksman',
+    silhouetteLabel: 'Recon · Hooded Sniper',
+    signatureGunId: 'sniper',
+    accentHex: '#10b981',
+    gearSummary: 'Draped stealth hood, single-eye rangefinder optic & long recon cloak',
+  },
+};
+
 export type KnifeCharmId =
   | 'tactical_tag'
   | 'crimson_fang'
@@ -369,6 +432,7 @@ export interface HudState {
   speed: number;
   headingDeg: number;
   activeWeapon: WeaponConfig;
+  selectedCharacterId: CharacterId;
   equippedGunId: GunId;
   queuedGunId: GunId;
   knifeCharmId: KnifeCharmId;
@@ -422,6 +486,7 @@ export interface GameSettings {
   killLimit: number;
   botsPerTeam: number;
   screenShakeScale: number;
+  selectedCharacterId: CharacterId;
   selectedGunId: GunId;
   knifeCharmId: KnifeCharmId;
 }

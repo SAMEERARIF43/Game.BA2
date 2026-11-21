@@ -21,6 +21,7 @@ import {
   loadPersistedSettings,
   resetPersistedSettings,
   savePersistedSettings,
+  SETTINGS_STORAGE_KEY,
 } from '../src/settings/settingsStorage.ts';
 import { MatchRoom } from '../server/rooms/MatchRoom.ts';
 import { PlayerSchema } from '../server/schema/MatchState.ts';
@@ -144,7 +145,7 @@ test('Batch 10 (b): Knife Charm Selection & Settings Storage Persistence', async
 
       // Corrupted values fall back safely to defaults
       store.set(
-        'strike_force_settings_v1',
+        SETTINGS_STORAGE_KEY,
         JSON.stringify({ selectedGunId: 'plasma_cannon', knifeCharmId: 'broken_charm' })
       );
       const sanitized = loadPersistedSettings();
@@ -306,9 +307,13 @@ test('Batch 10 (d): MatchRoom Shotgun Multi-Pellet & Knife Authoritative Combat'
     });
 
     assert.strictEqual(target.health, 36, 'Target health should be 100 - (4 * 16) = 36');
-    const hitConfirm = shooterClient.sentMessages.find((m) => m.type === 'hit_confirm');
-    assert.ok(hitConfirm);
-    assert.strictEqual(hitConfirm.data.damage, 64);
+    const hitConfirms = shooterClient.sentMessages.filter((m) => m.type === 'hit_confirm');
+    assert.strictEqual(hitConfirms.length, 4);
+    const totalConfirmedDamage = hitConfirms.reduce(
+      (sum, msg) => sum + Number(msg.data?.damage ?? 0),
+      0
+    );
+    assert.strictEqual(totalConfirmedDamage, 64);
 
     cleanup();
   });

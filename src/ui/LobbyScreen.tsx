@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   Check,
@@ -40,6 +40,15 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   onLeaveLobby,
 }) => {
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
 
   const localPlayer = lobby.players.find((p) => p.id === lobby.localPlayerId);
   const isHost = lobby.hostId === lobby.localPlayerId;
@@ -51,7 +60,13 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
 
   const showToast = (msg: string) => {
     setToast(msg);
-    window.setTimeout(() => setToast(null), 2400);
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 2400);
   };
 
   const handleCopyCode = async () => {

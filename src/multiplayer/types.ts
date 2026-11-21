@@ -1,4 +1,4 @@
-import { WeaponId } from '../game/types';
+import { CharacterId, GunId, WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 
 export interface CreatePrivateMatchOptions {
@@ -11,6 +11,8 @@ export interface CreatePrivateMatchOptions {
   friendlyFire: boolean;
   botCount: number;
   password?: string;
+  characterId?: CharacterId;
+  weaponId?: GunId;
 }
 
 export interface RoomLookupSummary {
@@ -37,6 +39,7 @@ export interface LobbyPlayerInfo {
   z: number;
   rotY: number;
   pitch: number;
+  characterId: CharacterId;
   weaponId: WeaponId;
   health: number;
   kills: number;

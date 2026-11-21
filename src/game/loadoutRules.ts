@@ -1,4 +1,7 @@
 import {
+  CHARACTER_IDS,
+  CHARACTERS,
+  CharacterId,
   GUN_IDS,
   GunId,
   KNIFE_CHARM_IDS,
@@ -14,6 +17,7 @@ export const GUN_LOCKED_WHILE_ALIVE_MESSAGE =
 const GUN_ID_SET = new Set<string>(GUN_IDS);
 const WEAPON_ID_SET = new Set<string>(WEAPON_IDS);
 const CHARM_ID_SET = new Set<string>(KNIFE_CHARM_IDS);
+const CHARACTER_ID_SET = new Set<string>(CHARACTER_IDS);
 
 export interface LoadoutSelectionState {
   equippedGunId: GunId;
@@ -28,6 +32,12 @@ export interface GunSelectionOutcome {
   lockMessage: string | null;
 }
 
+export interface CharacterSelectionOutcome {
+  characterId: CharacterId;
+  signatureGunId: GunId;
+  gunOutcome: GunSelectionOutcome | null;
+}
+
 export function isGunId(value: unknown): value is GunId {
   return typeof value === 'string' && GUN_ID_SET.has(value);
 }
@@ -38,6 +48,10 @@ export function isWeaponId(value: unknown): value is WeaponId {
 
 export function isKnifeCharmId(value: unknown): value is KnifeCharmId {
   return typeof value === 'string' && CHARM_ID_SET.has(value);
+}
+
+export function isCharacterId(value: unknown): value is CharacterId {
+  return typeof value === 'string' && CHARACTER_ID_SET.has(value);
 }
 
 export function normalizeGunId(value: unknown, fallback: GunId = 'ak47'): GunId {
@@ -53,6 +67,33 @@ export function normalizeKnifeCharmId(
   fallback: KnifeCharmId = 'tactical_tag'
 ): KnifeCharmId {
   return isKnifeCharmId(value) ? value : fallback;
+}
+
+export function normalizeCharacterId(
+  value: unknown,
+  fallback: CharacterId = 'assault'
+): CharacterId {
+  return isCharacterId(value) ? value : fallback;
+}
+
+export function getSignatureGunForCharacter(characterId: CharacterId): GunId {
+  return CHARACTERS[normalizeCharacterId(characterId)].signatureGunId;
+}
+
+export function getCharacterForWeaponId(weaponId: WeaponId): CharacterId {
+  switch (weaponId) {
+    case 'smg':
+      return 'vanguard';
+    case 'shotgun':
+      return 'breacher';
+    case 'sniper':
+      return 'marksman';
+    case 'ak47':
+    case 'pistol':
+    case 'knife':
+    default:
+      return 'assault';
+  }
 }
 
 export function canSwitchGunImmediately(phase: MatchPhase, isAlive: boolean): boolean {
@@ -87,6 +128,25 @@ export function applyGunSelection(
     switchedImmediately: false,
     queuedForNextSpawn: true,
     lockMessage: GUN_LOCKED_WHILE_ALIVE_MESSAGE,
+  };
+}
+
+export function applyCharacterSelection(
+  loadout: LoadoutSelectionState,
+  nextCharacterId: CharacterId,
+  equipSignatureGun: boolean,
+  phase: MatchPhase,
+  isAlive: boolean
+): CharacterSelectionOutcome {
+  const characterId = normalizeCharacterId(nextCharacterId);
+  const signatureGunId = getSignatureGunForCharacter(characterId);
+  const gunOutcome = equipSignatureGun
+    ? applyGunSelection(loadout, signatureGunId, phase, isAlive)
+    : null;
+  return {
+    characterId,
+    signatureGunId,
+    gunOutcome,
   };
 }
 

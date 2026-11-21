@@ -1,6 +1,6 @@
 import { Client, Room } from '@colyseus/sdk';
-import { normalizeWeaponId } from '../game/loadoutRules';
-import { WeaponId } from '../game/types';
+import { normalizeCharacterId, normalizeWeaponId } from '../game/loadoutRules';
+import { CharacterId, GunId, WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 import {
   CreatePrivateMatchOptions,
@@ -79,7 +79,9 @@ export class NetworkManager {
   public async joinPrivateMatch(
     roomCode: string,
     playerName: string,
-    password?: string
+    password?: string,
+    characterId?: CharacterId,
+    weaponId?: GunId
   ): Promise<LobbyRoomSnapshot> {
     await this.leaveRoom();
     this.intentionalLeave = false;
@@ -93,6 +95,8 @@ export class NetworkManager {
       const room = await this.client.joinById(normalized, {
         playerName,
         password: password ?? '',
+        characterId,
+        weaponId,
       });
       this.attachRoomListeners(room);
       return this.extractSnapshot(room);
@@ -133,15 +137,24 @@ export class NetworkManager {
     this.room?.send('return_to_lobby');
   }
 
+  public selectCharacter(characterId: CharacterId): void {
+    this.room?.send('select_character', { characterId });
+  }
+
+  public selectLoadout(weaponId?: GunId, characterId?: CharacterId): void {
+    this.room?.send('select_loadout', { weaponId, characterId });
+  }
+
   public sendMove(
     x: number,
     y: number,
     z: number,
     rotY: number,
     pitch: number,
-    weaponId: WeaponId
+    weaponId: WeaponId,
+    characterId?: CharacterId
   ): void {
-    this.room?.send('player_move', { x, y, z, rotY, pitch, weaponId });
+    this.room?.send('player_move', { x, y, z, rotY, pitch, weaponId, characterId });
   }
 
   public sendFire(payload: {
@@ -265,6 +278,7 @@ export class NetworkManager {
         z: Number(p.z) || 0,
         rotY: Number(p.rotY) || 0,
         pitch: Number(p.pitch) || 0,
+        characterId: normalizeCharacterId(p.characterId, 'assault'),
         weaponId: normalizeWeaponId(p.weaponId, 'ak47'),
         health: Number(p.health) ?? 100,
         kills: Number(p.kills) || 0,

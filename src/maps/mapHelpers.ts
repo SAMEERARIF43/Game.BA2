@@ -276,7 +276,7 @@ export class MapBuildContext {
     this.trackNode(skyDome);
 
     // 2. Procedural IBL Environment Cube Texture (6 RGBA faces for PBR reflections)
-    const size = 32;
+    const size = 48;
     const faces: Uint8Array[] = [];
     const faceDirs = [
       (u: number, v: number) => new Vector3(1, -v, -u), // +X
@@ -300,7 +300,7 @@ export class MapBuildContext {
           let g: number;
           let b: number;
           if (d.y >= 0) {
-            const t = Math.pow(d.y, 0.55);
+            const t = Math.pow(d.y, 0.52);
             r = horizon.r + (zenith.r - horizon.r) * t;
             g = horizon.g + (zenith.g - horizon.g) * t;
             b = horizon.b + (zenith.b - horizon.b) * t;
@@ -313,7 +313,7 @@ export class MapBuildContext {
 
           // Directional sun specular highlight lobe in IBL
           const sunDot = Math.max(0, Vector3.Dot(d, sunTo));
-          const sunLobe = Math.pow(sunDot, 14) * 1.15;
+          const sunLobe = Math.pow(sunDot, 16) * 1.28;
           r = Math.min(1, r + sunCol.r * sunLobe);
           g = Math.min(1, g + sunCol.g * sunLobe);
           b = Math.min(1, b + sunCol.b * sunLobe);
@@ -341,7 +341,7 @@ export class MapBuildContext {
       )
     );
     this.scene.environmentTexture = envCube;
-    this.scene.environmentIntensity = 1.02;
+    this.scene.environmentIntensity = 1.12;
   }
 
   public createNormalTexture(

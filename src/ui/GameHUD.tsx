@@ -83,8 +83,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false, onSelect
   const sniperScopeBlend =
     hud.activeWeapon.id === 'sniper' && hud.isAlive ? hud.adsBlend : 0;
   const showSniperOverlay =
-    sniperScopeBlend > 0.18 && hud.isPointerLocked && !hud.showScoreboard;
-  const hideHipReticle = showSniperOverlay && sniperScopeBlend > 0.42;
+    hud.match.phase === 'playing' &&
+    sniperScopeBlend > 0.18 &&
+    hud.isPointerLocked &&
+    !hud.showScoreboard;
+  const akRedDotBlend =
+    hud.activeWeapon.id === 'ak47' && hud.isAlive ? hud.adsBlend : 0;
+  const showAkRedDotOverlay =
+    hud.match.phase === 'playing' &&
+    akRedDotBlend > 0.28 &&
+    hud.isPointerLocked &&
+    !hud.showScoreboard;
+  const hideHipReticle =
+    (showSniperOverlay && sniperScopeBlend > 0.42) ||
+    (showAkRedDotOverlay && akRedDotBlend > 0.48);
   const swayX = showSniperOverlay ? Math.sin(now * 0.003) * (hud.speed > 0.5 ? 3.2 : 0.8) : 0;
   const swayY = showSniperOverlay ? Math.cos(now * 0.0025) * (hud.speed > 0.5 ? 3.2 : 0.8) : 0;
 
@@ -141,6 +153,41 @@ export const GameHUD: React.FC<GameHUDProps> = ({ hud, showFps = false, onSelect
               <div className="text-[9px] text-emerald-500/70">[B] 4X / 6X / 8X</div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* AK-47 Reflex Red Dot ADS Reticle */}
+      {showAkRedDotOverlay && (
+        <div
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
+          style={{ opacity: Math.min(1, (akRedDotBlend - 0.28) / 0.55) }}
+        >
+          <div className="relative flex items-center justify-center">
+            <div
+              className="h-12 w-12 rounded-full border border-red-400/20"
+              style={{
+                background:
+                  'radial-gradient(circle, rgba(239,68,68,0.08) 0%, rgba(56,189,248,0.04) 68%, transparent 100%)',
+              }}
+            />
+            <span
+              className="absolute h-1.5 w-1.5 rounded-full bg-red-500"
+              style={{
+                boxShadow:
+                  '0 0 6px 2px rgba(239, 68, 68, 0.95), 0 0 14px 4px rgba(239, 68, 68, 0.45)',
+              }}
+            />
+            <span className="absolute h-[3px] w-[3px] rounded-full bg-rose-100" />
+            {hud.rangeDistanceMeters !== null && (
+              <span
+                className={`absolute top-8 font-mono-tabular text-[10px] ${
+                  hud.targetingEnemy ? 'text-red-400' : 'text-slate-300/75'
+                }`}
+              >
+                {hud.rangeDistanceMeters}m
+              </span>
+            )}
+          </div>
         </div>
       )}
 
