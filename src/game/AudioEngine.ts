@@ -687,3 +687,22 @@ export class AudioEngine {
     }
   }
 }
+
+let sharedAudioEngineInstance: AudioEngine | null = null;
+export function getSharedAudioEngine(): AudioEngine {
+  if (!sharedAudioEngineInstance) {
+    sharedAudioEngineInstance = new AudioEngine();
+  }
+  return sharedAudioEngineInstance;
+}
+
+export function previewMapAmbient(mapId: MapId): void {
+  try {
+    const engine = getSharedAudioEngine();
+    engine.unlock();
+    engine.setAmbientEnvironment(mapId);
+  } catch {
+    // Ignore audio restrictions
+  }
+}
+

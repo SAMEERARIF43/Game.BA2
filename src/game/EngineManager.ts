@@ -2070,8 +2070,10 @@ export class EngineManager {
     this.lastKillerName = null;
     this.lastKillerWeapon = null;
     this.killerBanner = null;
+    this.damageIndicators = [];
     this.player.setDeathLookTarget(null);
     this.player.spawnAt(spawnPos, yawRad);
+    this.weapons.setViewModelVisible(true);
     if (this.sessionMode === 'offline') {
       this.matchManager.setParticipantAlive('player', true, 0);
     }

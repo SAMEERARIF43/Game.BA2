@@ -96,7 +96,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       return;
     }
 
-    if (hud.isAds) {
+    if (hud.isAds || hud.speed > 0.2 || hud.isReloading) {
       setOnboardingVisible(false);
       setOnboardingDismissed(true);
       return;
@@ -118,7 +118,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       window.clearTimeout(fadeTimeout);
       if (dismissTimeout !== undefined) window.clearTimeout(dismissTimeout);
     };
-  }, [hud.isAds, hud.match.phase, hud.showOnboarding, onboardingDismissed]);
+  }, [hud.isAds, hud.speed, hud.isReloading, hud.match.phase, hud.showOnboarding, onboardingDismissed]);
 
   useEffect(() => {
     if (chatOpen) {

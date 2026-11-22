@@ -338,6 +338,7 @@ export class PlayerController {
     this.currentEyeOffset = STAND_EYE_OFFSET;
     this.slideCameraRoll = 0;
     this.prevSlideGroundY = null;
+    this.camera.rotation.z = 0;
     this.syncColliderStanceHeight();
     this.callbacks.onFireRelease();
     this.callbacks.onAdsChange(false);

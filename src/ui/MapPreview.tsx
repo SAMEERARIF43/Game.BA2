@@ -8,6 +8,7 @@ import {
 } from '../game/minimap';
 import { MAP_REGISTRY } from '../maps/MapManager';
 import { MapId } from '../maps/types';
+import { previewMapAmbient } from '../game/AudioEngine';
 
 export type MapPreviewVariant = 'card' | 'banner';
 export type MapPreviewMode = 'scenic' | 'tactical';
@@ -330,6 +331,7 @@ export const MapPreview: React.FC<MapPreviewProps> = ({
     <div
       data-map-preview={mapDef.id}
       data-map-view-mode={viewMode}
+      onMouseEnter={() => previewMapAmbient(mapDef.id)}
       className={`relative overflow-hidden border bg-[#070b12] transition-colors duration-200 ${
         selected ? 'border-amber-400/80' : 'border-white/12'
       } ${containerSize}`}
