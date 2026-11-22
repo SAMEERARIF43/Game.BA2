@@ -6,6 +6,12 @@ interface ScoreboardOverlayProps {
   match: MatchSnapshot;
   embedded?: boolean;
   mvpId?: string;
+  playerStats?: {
+    kills: number;
+    deaths: number;
+    accuracyPct: number;
+    headshots: number;
+  };
 }
 
 export function formatMatchTime(seconds: number): string {

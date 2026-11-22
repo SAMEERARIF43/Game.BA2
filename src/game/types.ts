@@ -602,4 +602,6 @@ export interface GameSettings {
   jumpCancelsSlide: boolean;
   slideCameraIntensity: number;
   keybindings: KeybindingsConfig;
+  allyTeamColor: string;
+  enemyTeamColor: string;
 }

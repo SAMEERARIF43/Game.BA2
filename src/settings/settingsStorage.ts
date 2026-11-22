@@ -48,6 +48,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   jumpCancelsSlide: true,
   slideCameraIntensity: 1.0,
   keybindings: { ...DEFAULT_KEYBINDINGS },
+  allyTeamColor: '#3b82f6',
+  enemyTeamColor: '#ef4444',
 };
 
 function clampNumber(val: unknown, min: number, max: number, fallback: number): number {
@@ -204,6 +206,8 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     jumpCancelsSlide: resolvedJumpCancel,
     slideCameraIntensity: resolvedCameraIntensity,
     keybindings: validateKeybindings(obj.keybindings, fallback.keybindings ?? DEFAULT_KEYBINDINGS),
+    allyTeamColor: typeof obj.allyTeamColor === 'string' && obj.allyTeamColor.startsWith('#') ? obj.allyTeamColor : (fallback.allyTeamColor ?? '#3b82f6'),
+    enemyTeamColor: typeof obj.enemyTeamColor === 'string' && obj.enemyTeamColor.startsWith('#') ? obj.enemyTeamColor : (fallback.enemyTeamColor ?? '#ef4444'),
   };
 }
 

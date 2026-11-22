@@ -598,6 +598,68 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             {renderToggle('Show FPS', settings.showFps, () =>
               onUpdateSettings({ ...settings, showFps: !settings.showFps })
             )}
+            <div className="border border-white/10 bg-black/25 p-3.5 space-y-3">
+              <div className="text-xs font-semibold text-slate-200">Team Color Customization</div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="border border-white/10 bg-black/40 p-2.5">
+                  <div className="flex items-center justify-between text-xs text-slate-300 mb-1.5">
+                    <span>Ally / Friendly Color</span>
+                    <span className="font-mono-tabular text-[10px]" style={{ color: settings.allyTeamColor ?? '#3b82f6' }}>
+                      {settings.allyTeamColor ?? '#3b82f6'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={settings.allyTeamColor ?? '#3b82f6'}
+                      onChange={(e) => onUpdateSettings({ ...settings, allyTeamColor: e.target.value })}
+                      className="h-7 w-10 cursor-pointer bg-transparent border border-white/20"
+                    />
+                    <div className="flex gap-1.5 flex-wrap">
+                      {['#3b82f6', '#06b6d4', '#10b981', '#8b5cf6'].map((hex) => (
+                        <button
+                          key={hex}
+                          type="button"
+                          onClick={() => onUpdateSettings({ ...settings, allyTeamColor: hex })}
+                          className="h-5 w-5 border border-white/30 transition-transform hover:scale-110 cursor-pointer"
+                          style={{ backgroundColor: hex }}
+                          title={`Preset ${hex}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border border-white/10 bg-black/40 p-2.5">
+                  <div className="flex items-center justify-between text-xs text-slate-300 mb-1.5">
+                    <span>Enemy / Hostile Color</span>
+                    <span className="font-mono-tabular text-[10px]" style={{ color: settings.enemyTeamColor ?? '#ef4444' }}>
+                      {settings.enemyTeamColor ?? '#ef4444'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={settings.enemyTeamColor ?? '#ef4444'}
+                      onChange={(e) => onUpdateSettings({ ...settings, enemyTeamColor: e.target.value })}
+                      className="h-7 w-10 cursor-pointer bg-transparent border border-white/20"
+                    />
+                    <div className="flex gap-1.5 flex-wrap">
+                      {['#ef4444', '#f97316', '#dc2626', '#eab308'].map((hex) => (
+                        <button
+                          key={hex}
+                          type="button"
+                          onClick={() => onUpdateSettings({ ...settings, enemyTeamColor: hex })}
+                          className="h-5 w-5 border border-white/30 transition-transform hover:scale-110 cursor-pointer"
+                          style={{ backgroundColor: hex }}
+                          title={`Preset ${hex}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div className="flex items-center justify-between gap-3 border border-white/10 bg-black/25 px-3 py-2.5">
               <span className="text-xs text-slate-300">Display</span>
               <button
