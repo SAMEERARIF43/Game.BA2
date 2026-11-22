@@ -558,6 +558,7 @@ test('RES-3: Complete Production Firing-Path Integration Test (MatchRoom -> appl
     // 2. Restore mapId to registered 'urban' map and reset fire cooldown
     room.state.mapId = 'urban';
     (room as any).lastShotAt.delete(shooter.id);
+    (room as any).playerValidationStates?.delete(shooter.id);
 
     (room as any).onMessageEvents.emit('player_fire', shooterClient, {
       weaponId: 'ak47',

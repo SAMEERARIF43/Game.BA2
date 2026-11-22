@@ -206,6 +206,7 @@ export class EngineManager {
   private prevMpRoundNumber = 1;
   private lastBombPhase: BombPhase = 'unplanted';
   private bombBeepCooldown = 0;
+  private pingMs = 24;
 
   private bombSiteVisualRoot: TransformNode | null = null;
   private bombSiteVisualMaterials: StandardMaterial[] = [];
@@ -559,6 +560,10 @@ export class EngineManager {
       this.scene.render();
       this.emitHudState(false);
     });
+  }
+
+  public updatePing(pingMs: number): void {
+    this.pingMs = pingMs;
   }
 
   public setCustomChatEnabled(enabled: boolean): void {
@@ -1810,7 +1815,7 @@ export class EngineManager {
 
     const now = performance.now();
     if (this.mpKillFeed.length > 0) {
-      this.mpKillFeed = this.mpKillFeed.filter((k) => now - k.timestamp < 4500);
+      this.mpKillFeed = this.mpKillFeed.filter((k) => now - k.timestamp < 4000);
     }
 
     if (phase === 'playing' && this.playerIsAlive && now - this.lastMoveSendTime >= 50) {
@@ -2829,6 +2834,7 @@ export class EngineManager {
       showOnboarding: this.showOnboarding,
       lowHealthPulse: this.playerIsAlive && this.playerHealth <= 25,
       fps: Math.round(this.engine.getFps()),
+      ping: this.pingMs,
       gameMode: match.mode,
       localTeam,
       bombSites:

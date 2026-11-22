@@ -182,6 +182,7 @@ export const INITIAL_HUD: HudState = {
   },
   scopeMagnification: 4,
   fps: 0,
+  ping: 0,
 };
 
 export interface CreateInitialMatchStateOptions {
@@ -310,6 +311,14 @@ export function derivePostMatchStats(hud: HudState): PostMatchStats {
   };
 }
 
+export function calculateCombatScore(
+  kills: number,
+  headshots: number = 0,
+  accuracyPct: number = 0
+): number {
+  return kills * 100 + headshots * 50 + (kills > 0 ? Math.round(accuracyPct * 0.5) : 0);
+}
+
 export function selectMatchMvp(
   participants: readonly MatchParticipant[],
   playerStats: PostMatchStats
@@ -318,10 +327,11 @@ export function selectMatchMvp(
     if (playerStats.kills === 0 && playerStats.deaths === 0 && playerStats.headshots === 0) {
       return null;
     }
-    const combatScore =
-      playerStats.kills * 100 +
-      playerStats.headshots * 50 +
-      (playerStats.kills > 0 ? Math.round(playerStats.accuracyPct * 0.5) : 0);
+    const combatScore = calculateCombatScore(
+      playerStats.kills,
+      playerStats.headshots,
+      playerStats.accuracyPct
+    );
     const kdRatio =
       playerStats.deaths > 0
         ? Math.round((playerStats.kills / playerStats.deaths) * 100) / 100
@@ -346,10 +356,11 @@ export function selectMatchMvp(
     const deaths = participant.isPlayer ? playerStats.deaths : participant.deaths;
     const headshots = participant.isPlayer ? playerStats.headshots : null;
     const accuracyPct = participant.isPlayer ? playerStats.accuracyPct : null;
-    const combatScore =
-      kills * 100 +
-      (headshots !== null ? headshots * 50 : 0) +
-      (accuracyPct !== null && kills > 0 ? Math.round(accuracyPct * 0.5) : 0);
+    const combatScore = calculateCombatScore(
+      kills,
+      headshots ?? 0,
+      accuracyPct ?? 0
+    );
     const kdRatio = deaths > 0 ? Math.round((kills / deaths) * 100) / 100 : kills;
 
     return {

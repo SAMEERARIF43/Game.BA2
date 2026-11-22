@@ -59,6 +59,7 @@ export default function App() {
           onPlayOfflineTdm={actions.playOfflineTdm}
           onOpenCustomMatch={actions.openCustomMatch}
           onOpenMapSelect={actions.openMapSelect}
+          onQuickMatch={actions.quickMatch}
           onUpdateSettings={actions.updateSettings}
           onResetSettings={actions.resetSettings}
         />

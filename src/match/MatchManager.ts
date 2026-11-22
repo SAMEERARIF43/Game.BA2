@@ -343,7 +343,7 @@ export class MatchManager {
 
     const now = performance.now();
     if (this.killFeed.length > 0) {
-      this.killFeed = this.killFeed.filter((k) => now - k.timestamp < 4500);
+      this.killFeed = this.killFeed.filter((k) => now - k.timestamp < 4000);
     }
 
     if (this.mode === 'bomb') {

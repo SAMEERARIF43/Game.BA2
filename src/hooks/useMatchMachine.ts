@@ -147,6 +147,7 @@ export interface MatchMachineActions {
   previewShowcase: (focus: 'gun' | 'knife', offsetX?: number) => void;
   lookupRoom: (roomCode: string) => Promise<RoomLookupSummary>;
   createPrivateMatch: (options: CreatePrivateMatchOptions) => Promise<void>;
+  quickMatch: (modeFilter?: string) => Promise<void>;
   createSoloCustomLobby: (options: CreatePrivateMatchOptions) => void;
   joinPrivateMatch: (roomCode: string, playerName: string, password?: string) => Promise<void>;
   cancelMpConnect: () => void;
@@ -241,6 +242,9 @@ export function useMatchMachine() {
       },
       onTeamPing: (event) => {
         engineRef.current?.handleNetworkPing(event);
+      },
+      onPingUpdate: (pingMs) => {
+        engineRef.current?.updatePing(pingMs);
       },
       onChatUpdate: (messages) => {
         setChatMessages(messages);
@@ -420,6 +424,48 @@ export function useMatchMachine() {
       const saved = savePersistedSettings(next);
       dispatchAction({ type: 'SETTINGS_UPDATED', settings: saved });
       engineRef.current?.updateSettings(saved);
+    },
+    [dispatchAction]
+  );
+
+  const quickMatch = useCallback(
+    async (modeFilter: string = 'any') => {
+      const network = networkRef.current;
+      if (!network) {
+        throw new Error('Network client not initialized.');
+      }
+      const started = dispatchAction({ type: 'MP_CONNECT_START' });
+      if (started.status !== 'mp_connecting') {
+        throw new Error('A multiplayer connection attempt is already in progress.');
+      }
+      setConnectStage('Finding quick match room...');
+      const epoch = started.connectionEpoch;
+      const latestSettings = stateRef.current.settings;
+
+      try {
+        const snapshot = await network.quickMatch(
+          modeFilter,
+          latestSettings.callsign || 'Operator-101',
+          latestSettings.selectedCharacterId,
+          latestSettings.selectedGunId
+        );
+
+        if (stateRef.current.connectionEpoch !== epoch) {
+          await network.leaveRoom();
+          return;
+        }
+
+        const synced = dispatchAction({ type: 'MP_CONNECT_SUCCESS', epoch, snapshot });
+        setConnectStage(null);
+        navigateToRoute(deriveActiveRoute(synced));
+        engineRef.current?.syncMultiplayerState(snapshot);
+      } catch (err) {
+        if (stateRef.current.connectionEpoch === epoch) {
+          setConnectStage(null);
+          dispatchAction({ type: 'MP_CONNECT_FAILURE', epoch });
+          throw err;
+        }
+      }
     },
     [dispatchAction]
   );
@@ -942,6 +988,7 @@ export function useMatchMachine() {
       previewShowcase,
       lookupRoom,
       createPrivateMatch,
+      quickMatch,
       createSoloCustomLobby,
       joinPrivateMatch,
       cancelMpConnect,

@@ -558,6 +558,7 @@ export interface HudState {
   showOnboarding: boolean;
   lowHealthPulse: boolean;
   fps: number;
+  ping: number;
   gameMode: GameMode;
   localTeam: TeamId;
   bombSites: BombSiteHudMarker[];

@@ -166,6 +166,8 @@ test('Batch 23: GameHUD renders top-right kill feed overlay with weapon icons, k
 
   assert.ok(html.includes('data-killfeed-overlay="true"'), 'Top-right kill feed overlay should render');
   assert.ok(html.includes('right-4 top-28') && html.includes('md:top-4'), 'Kill feed must anchor in top-right corner');
+  assert.ok(html.includes('killfeed-item'), 'Kill feed items must include killfeed-item class');
+  assert.ok(html.includes('killfeed-item-enter'), 'Recent kills must include killfeed-item-enter class');
   assert.ok(html.includes('data-killfeed-killer="Striker"'));
   assert.ok(html.includes('data-killfeed-victim="Viper-1"'));
   assert.ok(html.includes('data-killfeed-killer="Reaper-2"'));
@@ -176,6 +178,49 @@ test('Batch 23: GameHUD renders top-right kill feed overlay with weapon icons, k
   assert.ok(html.includes('data-weapon-art="knife"'), 'Kill feed must render SVG weapon icon for Knife');
   assert.ok(html.includes('data-killfeed-icon="ordnance"'), 'Ordnance/Airstrike kills must render ordnance SVG icon');
   assert.ok(html.includes('HS'), 'Headshot eliminations must render HS badge');
+
+  // Verify exiting animation and 4-second fadeout pruning
+  const exitingHtml = renderToStaticMarkup(
+    React.createElement(GameHUD, {
+      hud: {
+        ...INITIAL_HUD,
+        isAlive: true,
+        match: {
+          ...INITIAL_HUD.match,
+          phase: 'playing',
+          killFeed: [
+            {
+              id: 10,
+              killerName: 'Ghost',
+              killerTeam: 'blue',
+              victimName: 'Phantom',
+              victimTeam: 'red',
+              weaponName: WEAPONS.ak47.name,
+              headshot: false,
+              distanceMeters: 12.0,
+              timestamp: now - 3400, // in exit phase (3.2s - 4.0s)
+            },
+            {
+              id: 11,
+              killerName: 'OldKill',
+              killerTeam: 'red',
+              victimName: 'Expired',
+              victimTeam: 'blue',
+              weaponName: WEAPONS.smg.name,
+              headshot: false,
+              distanceMeters: 5.0,
+              timestamp: now - 4200, // expired (> 4s)
+            },
+          ],
+        },
+      },
+    })
+  );
+
+  assert.ok(exitingHtml.includes('killfeed-item-exit'), 'Kill feed entry older than 3.2s must have killfeed-item-exit class');
+  assert.ok(exitingHtml.includes('data-killfeed-status="exit"'));
+  assert.ok(exitingHtml.includes('data-killfeed-killer="Ghost"'));
+  assert.ok(!exitingHtml.includes('data-killfeed-killer="OldKill"'), 'Kill feed entry older than 4 seconds must be pruned and not rendered');
 });
 
 test('Batch 23: GameHUD weapon display updates dynamic ammo counter colors and meter for normal, low, and empty magazines', () => {

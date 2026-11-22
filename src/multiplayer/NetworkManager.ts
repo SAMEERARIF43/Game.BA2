@@ -17,6 +17,7 @@ import {
   NetworkHitConfirmEvent,
   NetworkKillFeedEvent,
   NetworkPingEvent,
+  PublicRoomSummary,
   RemoteFireEvent,
   RoomLookupSummary,
 } from './types';
@@ -33,6 +34,7 @@ export interface NetworkManagerCallbacks {
   onChatUpdate?: (messages: ChatMessage[]) => void;
   onSystemNotice: (message: string) => void;
   onDisconnected: (reason: string) => void;
+  onPingUpdate?: (pingMs: number) => void;
 }
 
 function getColyseusEndpoint(): string {
@@ -55,6 +57,10 @@ export class NetworkManager {
   private intentionalLeave = false;
   private chatHistory: ChatMessage[] = [];
   private localChatSeq = 0;
+  private reconnectionToken: string | null = null;
+  private currentPingMs = 24;
+  private pingIntervalId: any = null;
+  private lastPingSentTime = 0;
 
   constructor(callbacks: NetworkManagerCallbacks) {
     this.callbacks = callbacks;
@@ -67,6 +73,16 @@ export class NetworkManager {
 
   public getLocalSessionId(): string {
     return this.room?.sessionId ?? '';
+  }
+
+  public getPing(): number {
+    return this.currentPingMs;
+  }
+
+  public getConnectionQuality(): 'green' | 'amber' | 'red' {
+    if (this.currentPingMs < 60) return 'green';
+    if (this.currentPingMs <= 120) return 'amber';
+    return 'red';
   }
 
   public getChatMessages(): ChatMessage[] {
@@ -100,6 +116,47 @@ export class NetworkManager {
     this.chatHistory = [...this.chatHistory.slice(-(CHAT_HISTORY_LIMIT - 1)), msg];
     this.callbacks.onChatMessage?.(msg);
     this.callbacks.onChatUpdate?.([...this.chatHistory]);
+  }
+
+  public async fetchPublicRooms(modeFilter?: string): Promise<PublicRoomSummary[]> {
+    const res = await fetch('/api/rooms/public');
+    const body = (await res.json().catch(() => ({}))) as { rooms?: PublicRoomSummary[] };
+    const rooms = body.rooms || [];
+    if (!modeFilter || modeFilter === 'any') return rooms;
+    return rooms.filter((r) => r.mode === modeFilter);
+  }
+
+  public async quickMatch(
+    modeFilter: string = 'any',
+    playerName: string = 'Operator-101',
+    characterId: CharacterId = 'assault',
+    weaponId: GunId = 'ak47'
+  ): Promise<LobbyRoomSnapshot> {
+    await this.leaveRoom();
+    this.intentionalLeave = false;
+    this.clearChatMessages();
+
+    const rooms = await this.fetchPublicRooms(modeFilter);
+    const bestRoom = rooms.find(
+      (r) => r.phase === 'lobby' && !r.hasPassword && r.playerCount < r.maxPlayers
+    );
+    if (bestRoom) {
+      return this.joinPrivateMatch(bestRoom.roomCode, playerName, undefined, characterId, weaponId);
+    }
+
+    return this.createPrivateMatch({
+      playerName,
+      roomName: `Strike Force Public (${modeFilter.toUpperCase()})`,
+      mapId: 'urban',
+      mode: (modeFilter === 'any' ? 'tdm' : modeFilter) as any,
+      killLimit: modeFilter === 'bomb' ? 5 : 30,
+      timeLimit: 300,
+      respawnDelay: 3,
+      friendlyFire: false,
+      botCount: 4,
+      characterId,
+      weaponId,
+    });
   }
 
   public async lookupRoom(code: string): Promise<RoomLookupSummary> {
@@ -212,7 +269,6 @@ export class NetworkManager {
       return null;
     }
 
-    // Local / Solo Custom Match offline fallback
     const msg: ChatMessage = {
       id: `local_chat_${++this.localChatSeq}`,
       senderId: localSender?.id ?? 'local_player',
@@ -282,9 +338,11 @@ export class NetworkManager {
   public async leaveRoom(): Promise<void> {
     const active = this.room;
     this.clearChatMessages();
+    this.stopPingLoop();
     if (!active) return;
     this.intentionalLeave = true;
     this.room = null;
+    this.reconnectionToken = null;
     try {
       await active.leave(true);
     } catch {
@@ -292,12 +350,45 @@ export class NetworkManager {
     }
   }
 
+  private startPingLoop(room: Room): void {
+    this.stopPingLoop();
+    this.pingIntervalId = setInterval(() => {
+      if (this.room !== room) {
+        this.stopPingLoop();
+        return;
+      }
+      this.lastPingSentTime = Date.now();
+      try {
+        room.send('ping');
+      } catch {
+        // ignore
+      }
+    }, 3000);
+  }
+
+  private stopPingLoop(): void {
+    if (this.pingIntervalId) {
+      clearInterval(this.pingIntervalId);
+      this.pingIntervalId = null;
+    }
+  }
+
   private attachRoomListeners(room: Room): void {
     this.room = room;
+    this.reconnectionToken = room.reconnectionToken ?? null;
+    this.startPingLoop(room);
 
     room.onStateChange(() => {
       if (this.room !== room) return;
       this.callbacks.onStateUpdate(this.extractSnapshot(room));
+    });
+
+    room.onMessage('pong', () => {
+      if (this.lastPingSentTime > 0) {
+        const rtt = Date.now() - this.lastPingSentTime;
+        this.currentPingMs = Math.round(rtt);
+        this.callbacks.onPingUpdate?.(this.currentPingMs);
+      }
     });
 
     room.onMessage('remote_fire', (msg: RemoteFireEvent) => {
@@ -338,14 +429,33 @@ export class NetworkManager {
     room.onMessage('kicked', (msg: { reason?: string }) => {
       this.intentionalLeave = true;
       this.room = null;
+      this.reconnectionToken = null;
+      this.stopPingLoop();
       this.callbacks.onDisconnected(msg?.reason || 'Removed from room by host.');
     });
 
-    room.onLeave((code) => {
+    room.onLeave(async (code) => {
       if (this.room === room) {
         this.room = null;
       }
-      if (!this.intentionalLeave) {
+      this.stopPingLoop();
+
+      if (!this.intentionalLeave && this.reconnectionToken) {
+        this.callbacks.onSystemNotice('Connection lost. Reconnecting to match...');
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await new Promise((r) => setTimeout(r, attempt * 1200));
+            if (this.intentionalLeave) return;
+            const reconnectedRoom = await this.client.reconnect(this.reconnectionToken);
+            this.attachRoomListeners(reconnectedRoom);
+            this.callbacks.onSystemNotice('Successfully reconnected to match!');
+            return;
+          } catch {
+            // Retry reconnect
+          }
+        }
+        this.callbacks.onDisconnected('Disconnected from multiplayer server (reconnection failed).');
+      } else if (!this.intentionalLeave) {
         const reason =
           code === 4001 ? 'Removed from room by host.' : 'Disconnected from multiplayer server.';
         this.callbacks.onDisconnected(reason);

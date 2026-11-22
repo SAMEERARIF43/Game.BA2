@@ -126,9 +126,51 @@
 @media (prefers-reduced-motion: reduce) {
   .map-card-enter,
   .blueprint-fade-in,
-  .blueprint-inset-reveal {
+  .blueprint-inset-reveal,
+  .killfeed-item-enter,
+  .killfeed-item-exit {
     animation: none !important;
   }
+}
+
+/* Tactical Kill Feed Entry and Exit Animations */
+@keyframes killfeed-slide-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(28px, 0, 0) scale(0.96);
+  }
+  65% {
+    transform: translate3d(-2px, 0, 0) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes killfeed-slide-out {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(24px, 0, 0) scale(0.96);
+  }
+}
+
+.killfeed-item {
+  transform-origin: right center;
+  will-change: transform, opacity;
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), opacity 200ms ease-out;
+}
+
+.killfeed-item-enter {
+  animation: killfeed-slide-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.killfeed-item-exit {
+  animation: killfeed-slide-out 800ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 canvas {
