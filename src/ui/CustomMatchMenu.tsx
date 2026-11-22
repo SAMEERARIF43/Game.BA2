@@ -10,6 +10,7 @@ import {
 import { MAP_LIST } from '../maps/MapManager';
 import { MapId } from '../maps/types';
 import { CreatePrivateMatchOptions, RoomLookupSummary } from '../multiplayer/types';
+import { MapPreview, MapPreviewMode, MapViewModeToggle } from './MapPreview';
 
 interface CustomMatchMenuProps {
   initialJoinCode?: string;
@@ -46,6 +47,7 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
   // Create form state
   const [roomName, setRoomName] = useState('Strike Force Private');
   const [mapId, setMapId] = useState<MapId>(initialMapId);
+  const [mapViewMode, setMapViewMode] = useState<MapPreviewMode>('scenic');
   const [mode, setMode] = useState<GameMode>(resolvedInitialMode);
   const [killLimit, setKillLimit] = useState(initialDefaults.killLimit);
   const [timeLimit, setTimeLimit] = useState(initialDefaults.timeLimitSec);
@@ -174,8 +176,8 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
   };
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/80 p-6 backdrop-blur-sm md:p-10">
-      <div className="w-full max-w-5xl border border-white/15 bg-[#0e131b]/95 p-7 shadow-2xl">
+    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/80 p-3 backdrop-blur-sm sm:p-5">
+      <div className="my-auto max-h-[calc(100vh-1.5rem)] w-full max-w-5xl overflow-y-auto border border-white/15 bg-[#0e131b]/95 p-4 shadow-2xl sm:p-6">
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
           <div>
@@ -272,22 +274,64 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
                 </div>
               </div>
 
-              <label className="block">
-                <span className="text-xs text-slate-300">Map</span>
-                <select
-                  value={mapId}
-                  onChange={(e) => setMapId(e.target.value as MapId)}
-                  className="mt-1.5 w-full border border-white/15 bg-[#0b1017] px-3 py-2 text-xs text-white outline-none focus:border-amber-400"
+              <div className="sm:col-span-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-300">Operation Map</span>
+                  <MapViewModeToggle value={mapViewMode} onChange={setMapViewMode} />
+                </div>
+                <div
+                  className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2"
+                  role="radiogroup"
+                  aria-label="Select custom match map"
                 >
-                  {MAP_LIST.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  {MAP_LIST.map((m) => {
+                    const active = mapId === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        data-map-card={m.id}
+                        onClick={() => setMapId(m.id)}
+                        className={`flex min-w-0 cursor-pointer flex-col border p-2 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
+                          active
+                            ? 'border-amber-400 bg-amber-400/14 shadow-[0_0_16px_rgba(245,158,11,0.16)]'
+                            : 'border-white/10 bg-black/45 hover:border-white/25 hover:bg-white/[0.05]'
+                        }`}
+                      >
+                        <div className="relative">
+                          <MapPreview
+                            mapId={m.id}
+                            variant="card"
+                            viewMode={mapViewMode}
+                            selected={active}
+                            className="h-20 w-full"
+                          />
+                          {active && (
+                            <span className="absolute left-1.5 top-1.5 bg-amber-400 px-1.5 py-0.5 font-mono-tabular text-[9px] font-bold tracking-wider text-slate-950">
+                              SELECTED
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-between gap-1.5">
+                          <span className="truncate font-display text-xs font-bold text-white">
+                            {m.name}
+                          </span>
+                          <span className="shrink-0 border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-mono-tabular text-[9px] text-amber-300">
+                            {m.engagementRange}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 line-clamp-1 text-[10px] text-slate-400">
+                          {m.tagline}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
-              <label className="block">
+              <label className="block sm:col-span-2">
                 <span className="text-xs text-slate-300">Optional Password</span>
                 <input
                   type="password"

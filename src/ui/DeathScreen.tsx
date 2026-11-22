@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { Crosshair, RotateCcw, ShieldAlert, Sparkles } from 'lucide-react';
+import { resolveWeaponIdFromName } from '../game/ammoDisplay';
 import {
   GUN_IDS,
   GunId,
@@ -7,7 +8,6 @@ import {
   KNIFE_CHARMS,
   KNIFE_CHARM_IDS,
   KnifeCharmId,
-  resolveWeaponIdFromName,
   TeamColorsConfig,
   WEAPONS,
 } from '../game/types';

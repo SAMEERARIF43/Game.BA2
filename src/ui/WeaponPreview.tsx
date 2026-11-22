@@ -1,10 +1,9 @@
 import React, { useId } from 'react';
 import { Crosshair } from 'lucide-react';
+import { isOrdnanceKillName, resolveWeaponIdFromName } from '../game/ammoDisplay';
 import {
-  isOrdnanceKillName,
   KNIFE_CHARMS,
   KnifeCharmId,
-  resolveWeaponIdFromName,
   WeaponId,
 } from '../game/types';
 

@@ -58,6 +58,9 @@ export const MatchState = schema({
   roundWinner: t.string(), // '' | 'blue' | 'red'
   roundEndReason: t.string(),
   roundTransitionTimer: t.number(),
+  mapVoteActive: t.boolean(),
+  mapVoteOptionsCsv: t.string(),
+  mapVoteTalliesJson: t.string(),
   players: t.map(PlayerSchema),
 });
 

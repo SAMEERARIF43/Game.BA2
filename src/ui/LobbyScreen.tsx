@@ -22,7 +22,6 @@ import {
   normalizeGameMode,
 } from '../game/gameModeRules';
 import { MAP_LIST } from '../maps/MapManager';
-import { MapId } from '../maps/types';
 import {
   CHAT_MAX_LENGTH,
   ChatChannel,
@@ -31,6 +30,7 @@ import {
   formatChatTimestamp,
 } from '../multiplayer/chat';
 import { CreatePrivateMatchOptions, LobbyPlayerInfo, LobbyRoomSnapshot } from '../multiplayer/types';
+import { MapPreview, MapPreviewMode, MapViewModeToggle } from './MapPreview';
 
 interface LobbyScreenProps {
   lobby: LobbyRoomSnapshot;
@@ -62,6 +62,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   const [toast, setToast] = useState<string | null>(null);
   const [chatText, setChatText] = useState('');
   const [chatChannel, setChatChannel] = useState<ChatChannel>('all');
+  const [mapViewMode, setMapViewMode] = useState<MapPreviewMode>('scenic');
   const toastTimerRef = useRef<number | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -465,23 +466,83 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
         {/* Host Rules & Player Controls */}
         <div className="mt-4 grid grid-cols-1 gap-4 border-t border-white/10 pt-4 lg:grid-cols-12">
           <div className="space-y-3 lg:col-span-8">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium text-slate-400">
                 {isHost ? 'Host Match Configuration' : 'Match Configuration (Host Controlled)'}
               </span>
-              {isHost && mode !== 'ffa' && (
-                <button
-                  type="button"
-                  onClick={onBalanceTeams}
-                  className="inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-1 text-xs text-slate-200 hover:bg-white/10"
-                >
-                  <Scale className="h-3.5 w-3.5" />
-                  Balance Teams
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <MapViewModeToggle value={mapViewMode} onChange={setMapViewMode} />
+                {isHost && mode !== 'ffa' && (
+                  <button
+                    type="button"
+                    onClick={onBalanceTeams}
+                    className="inline-flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-3 py-1 text-xs text-slate-200 hover:bg-white/10"
+                  >
+                    <Scale className="h-3.5 w-3.5" />
+                    Balance Teams
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            {/* Visual Map Selector Grid */}
+            <div>
+              <div className="flex items-center justify-between text-[11px] text-slate-400">
+                <span>
+                  Operation Map {!isHost && <span className="text-slate-500">· Host Selected</span>}
+                </span>
+                <span className="font-mono-tabular text-amber-300">
+                  {MAP_LIST.find((m) => m.id === lobby.mapId)?.name ?? lobby.mapId}
+                </span>
+              </div>
+              <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {MAP_LIST.map((m) => {
+                  const active = lobby.mapId === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      disabled={!isHost}
+                      aria-pressed={active}
+                      data-map-card={m.id}
+                      onClick={() => onUpdateConfig({ mapId: m.id })}
+                      className={`flex min-w-0 flex-col border p-1.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
+                        isHost ? 'cursor-pointer' : 'cursor-default'
+                      } ${
+                        active
+                          ? 'border-amber-400 bg-amber-400/14 shadow-[0_0_16px_rgba(245,158,11,0.15)]'
+                          : isHost
+                            ? 'border-white/10 bg-black/45 hover:border-white/30 hover:bg-white/[0.05]'
+                            : 'border-white/10 bg-black/35 opacity-70'
+                      }`}
+                    >
+                      <div className="relative">
+                        <MapPreview
+                          mapId={m.id}
+                          variant="card"
+                          viewMode={mapViewMode}
+                          selected={active}
+                          className="h-16 w-full"
+                        />
+                        {active && (
+                          <span className="absolute left-1 top-1 bg-amber-400 px-1 py-0.5 font-mono-tabular text-[8px] font-bold tracking-wider text-slate-950">
+                            ACTIVE
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 truncate font-display text-[11px] font-bold text-white">
+                        {m.name}
+                      </div>
+                      <div className="truncate font-mono-tabular text-[9px] text-slate-400">
+                        {m.engagementRange}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <label className="block text-xs">
                 <span className="text-slate-400">Mode</span>
                 <select
@@ -503,22 +564,6 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                   {GAME_MODE_IDS.map((m) => (
                     <option key={m} value={m}>
                       {GAME_MODE_META[m].label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block text-xs">
-                <span className="text-slate-400">Map</span>
-                <select
-                  disabled={!isHost}
-                  value={lobby.mapId}
-                  onChange={(e) => onUpdateConfig({ mapId: e.target.value as MapId })}
-                  className="mt-1 w-full border border-white/15 bg-[#0b1017] px-2.5 py-1.5 text-xs text-white disabled:opacity-60"
-                >
-                  {MAP_LIST.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
                     </option>
                   ))}
                 </select>

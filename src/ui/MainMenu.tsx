@@ -32,6 +32,7 @@ import {
   WEAPONS,
 } from '../game/types';
 import { MAP_LIST, MAP_REGISTRY } from '../maps/MapManager';
+import { MapPreview, MapPreviewMode, MapViewModeToggle } from './MapPreview';
 import { WeaponPreview } from './WeaponPreview';
 import { MapId } from '../maps/types';
 import { getRankSummary } from '../settings/progressionStorage';
@@ -80,6 +81,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<MenuTab>('play');
   const [showcaseFocus, setShowcaseFocus] = useState<'gun' | 'knife'>('gun');
+  const [mapViewMode, setMapViewMode] = useState<MapPreviewMode>('scenic');
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -252,6 +254,26 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       {selectedMap.name} →
                     </button>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('maps')}
+                    aria-label={`Change map from ${selectedMap.name}`}
+                    className="group mt-1.5 block w-full cursor-pointer overflow-hidden border border-white/12 bg-black/40 text-left transition-colors hover:border-amber-400/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                  >
+                    <div className="relative">
+                      <MapPreview
+                        mapId={selectedMapId}
+                        variant="banner"
+                        viewMode="scenic"
+                        showCornerBlueprint={false}
+                        className="h-14 w-full border-0"
+                      />
+                      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/85 via-black/45 to-transparent px-2 py-1 font-mono-tabular text-[9px]">
+                        <span className="font-semibold text-white">{selectedMap.environmentLabel}</span>
+                        <span className="text-amber-300">{selectedMap.engagementRange}</span>
+                      </div>
+                    </div>
+                  </button>
                   <div className="mt-1 flex items-center justify-between font-mono-tabular text-[11px] text-slate-400">
                     <span>Rules</span>
                     <span className="text-slate-200">
@@ -743,8 +765,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
         {activeTab === 'maps' && (
           <div className="flex min-h-0 flex-1 items-start">
-            <div className="flex max-h-full w-full max-w-2xl flex-col overflow-y-auto border border-white/15 bg-[#0b1017]/90 p-5 backdrop-blur-md">
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+            <div className="flex max-h-full w-full max-w-3xl flex-col overflow-y-auto border border-white/15 bg-[#0b1017]/92 p-4 backdrop-blur-md sm:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
                 <div>
                   <div className="font-mono-tabular text-[10px] font-bold tracking-widest text-amber-400">
                     COMBAT THEATERS
@@ -753,42 +775,69 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     Choose Operational Arena
                   </h2>
                 </div>
-                <button
-                  type="button"
-                  onClick={onOpenMapSelect}
-                  className="cursor-pointer border border-white/15 bg-white/[0.05] px-3 py-1.5 font-display text-xs font-semibold text-slate-200 transition-colors hover:border-amber-400/50 hover:text-white"
-                >
-                  Full Map Intel
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <MapViewModeToggle value={mapViewMode} onChange={setMapViewMode} />
+                  <button
+                    type="button"
+                    onClick={onOpenMapSelect}
+                    className="cursor-pointer border border-white/15 bg-white/[0.05] px-3 py-1.5 font-display text-xs font-semibold text-slate-200 transition-colors hover:border-amber-400/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                  >
+                    Full Map Intel
+                  </button>
+                </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                {MAP_LIST.map((map) => {
+              <div className="mt-3.5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {MAP_LIST.map((map, index) => {
                   const active = map.id === selectedMapId;
+                  const staggerDelayMs = index * 75;
                   return (
                     <button
                       key={map.id}
                       type="button"
+                      aria-pressed={active}
+                      data-map-card={map.id}
+                      data-stagger-index={index}
+                      style={{ animationDelay: `${staggerDelayMs}ms` }}
                       onClick={() => onPreviewMap?.(map.id)}
-                      className={`cursor-pointer border p-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
+                      className={`group map-card-enter flex min-w-0 cursor-pointer flex-col border p-2.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
                         active
-                          ? 'border-amber-400/85 bg-amber-400/14'
-                          : 'border-white/10 bg-black/40 hover:border-white/25 hover:bg-white/[0.05]'
+                          ? 'scale-[1.01] border-amber-400 bg-amber-400/12 shadow-[0_0_24px_rgba(245,158,11,0.18)]'
+                          : 'border-white/10 bg-black/45 hover:border-white/30 hover:bg-white/[0.05]'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-display text-sm font-bold text-white">
+                      <div className="relative">
+                        <MapPreview
+                          mapId={map.id}
+                          variant="card"
+                          viewMode={mapViewMode}
+                          blueprintRevealDelayMs={staggerDelayMs + 140}
+                          selected={active}
+                          className="h-28 w-full"
+                        />
+                        <span
+                          className="absolute left-1.5 top-1.5 border bg-[#070b12]/90 px-1.5 py-0.5 font-mono-tabular text-[9px] font-bold tracking-wider"
+                          style={{ borderColor: `${map.accentHex}85`, color: map.accentHex }}
+                        >
+                          {map.environmentLabel.toUpperCase()}
+                        </span>
+                        {active && (
+                          <span className="absolute right-1.5 top-1.5 bg-amber-400 px-1.5 py-0.5 font-mono-tabular text-[9px] font-bold tracking-wider text-slate-950">
+                            SELECTED
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-2.5 flex items-center justify-between gap-2">
+                        <span className="truncate font-display text-sm font-bold text-white">
                           {map.name}
                         </span>
-                        <span
-                          className="h-2.5 w-2.5 shrink-0 border border-white/30"
-                          style={{ backgroundColor: map.accentHex }}
-                        />
+                        <span className="shrink-0 border border-white/12 bg-white/[0.05] px-1.5 py-0.5 font-mono-tabular text-[9px] text-amber-300">
+                          {map.engagementRange}
+                        </span>
                       </div>
-                      <div className="mt-1 font-mono-tabular text-[10px] text-amber-300">
-                        {map.environmentLabel} · {map.engagementRange}
-                      </div>
-                      <p className="mt-1.5 line-clamp-2 text-xs text-slate-400">
+
+                      <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-slate-400">
                         {map.tagline}
                       </p>
                     </button>
@@ -796,14 +845,17 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 })}
               </div>
 
-              <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3">
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
                 <div className="text-xs text-slate-300">
-                  Selected: <span className="font-semibold text-white">{selectedMap.name}</span>
+                  Selected: <span className="font-semibold text-white">{selectedMap.name}</span>{' '}
+                  <span className="font-mono-tabular text-[11px] text-slate-400">
+                    ({selectedMap.engagementRange})
+                  </span>
                 </div>
                 <button
                   type="button"
                   onClick={onPlayOfflineTdm}
-                  className="cursor-pointer border border-amber-300 bg-amber-500 px-6 py-2 font-display text-xs font-bold tracking-wider text-slate-950 transition-colors hover:bg-amber-400"
+                  className="cursor-pointer border border-amber-300 bg-amber-500 px-6 py-2 font-display text-xs font-bold tracking-wider text-slate-950 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
                 >
                   PLAY ON {selectedMap.name.toUpperCase()}
                 </button>

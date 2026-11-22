@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { getAmmoDisplayState, getLowAmmoThreshold } from '../src/game/ammoDisplay.ts';
 import {
+  getAmmoDisplayState,
+  getLowAmmoThreshold,
   isOrdnanceKillName,
   resolveWeaponIdFromName,
-  WEAPONS,
-} from '../src/game/types.ts';
+} from '../src/game/ammoDisplay.ts';
+import { WEAPONS } from '../src/game/types.ts';
 import { INITIAL_HUD } from '../src/match/matchMachine.ts';
 import { GameHUD } from '../src/ui/GameHUD.tsx';
 

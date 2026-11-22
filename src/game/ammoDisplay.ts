@@ -1,4 +1,31 @@
+import { WeaponId } from './types';
+
 export type AmmoStatusLevel = 'normal' | 'low' | 'empty' | 'out' | 'reloading' | 'melee';
+
+export function resolveWeaponIdFromName(name: string | null | undefined): WeaponId | null {
+  if (!name) return null;
+  const lower = name.trim().toLowerCase();
+  if (!lower) return null;
+  if (lower.includes('shotgun') || lower.includes('m870')) return 'shotgun';
+  if (lower.includes('ak-47') || lower.includes('ak47') || lower.includes('heavy rifle')) return 'ak47';
+  if (lower.includes('smg') || lower.includes('vector')) return 'smg';
+  if (lower.includes('sniper') || lower.includes('awp') || lower.includes('precision rifle')) return 'sniper';
+  if (lower.includes('pistol') || lower.includes('usp')) return 'pistol';
+  if (lower.includes('knife') || lower.includes('k-bar') || lower.includes('melee')) return 'knife';
+  return null;
+}
+
+export function isOrdnanceKillName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const lower = name.trim().toLowerCase();
+  return (
+    lower.includes('barrage') ||
+    lower.includes('airstrike') ||
+    lower.includes('ordnance') ||
+    lower.includes('bomb') ||
+    lower.includes('blast')
+  );
+}
 
 export interface AmmoDisplayState {
   level: AmmoStatusLevel;

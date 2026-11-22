@@ -1,11 +1,15 @@
 import React from 'react';
 import { GAME_MODE_META, normalizeGameMode, sortFfaParticipants } from '../game/gameModeRules';
-import { MatchParticipant, MatchSnapshot } from '../game/types';
+import { MatchParticipant, MatchSnapshot, TeamColorsConfig } from '../game/types';
+import { TeamId } from '../maps/types';
+import { resolveSideColors } from '../settings/teamColorsConfig';
 
 interface ScoreboardOverlayProps {
   match: MatchSnapshot;
   embedded?: boolean;
   mvpId?: string;
+  teamColors?: Partial<TeamColorsConfig>;
+  localTeam?: TeamId;
   playerStats?: {
     kills: number;
     deaths: number;
@@ -25,6 +29,7 @@ function ParticipantTable({
   label,
   scoreLabel,
   accentClass,
+  accentColor,
   rows,
   mvpId,
   showRankColumn = false,
@@ -32,6 +37,7 @@ function ParticipantTable({
   label: string;
   scoreLabel: string | number;
   accentClass: string;
+  accentColor?: string;
   rows: MatchParticipant[];
   mvpId?: string;
   showRankColumn?: boolean;
@@ -39,7 +45,12 @@ function ParticipantTable({
   return (
     <div className="border border-white/10 bg-black/45">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
-        <span className={`font-display text-sm font-semibold ${accentClass}`}>{label}</span>
+        <span
+          className={`font-display text-sm font-semibold ${accentClass}`}
+          style={accentColor ? { color: accentColor } : undefined}
+        >
+          {label}
+        </span>
         <span className="font-mono-tabular font-display text-lg font-bold text-white">
           {scoreLabel}
         </span>
@@ -122,9 +133,12 @@ export const ScoreboardOverlay: React.FC<ScoreboardOverlayProps> = ({
   match,
   embedded = false,
   mvpId,
+  teamColors,
+  localTeam = 'blue',
 }) => {
   const mode = normalizeGameMode(match.mode, 'tdm');
   const modeMeta = GAME_MODE_META[mode];
+  const sideColors = resolveSideColors(teamColors, localTeam, mode);
   const blueTeam = match.participants.filter((p) => p.team === 'blue');
   const redTeam = match.participants.filter((p) => p.team === 'red');
   const ffaRows = sortFfaParticipants(match.participants);
@@ -157,11 +171,11 @@ export const ScoreboardOverlay: React.FC<ScoreboardOverlayProps> = ({
           </div>
         ) : (
           <div className="flex items-center gap-4 font-mono-tabular">
-            <span className="text-sm font-semibold text-blue-400">
+            <span className="text-sm font-semibold text-blue-400" style={{ color: sideColors.blueHex }}>
               {mode === 'bomb' ? 'Attackers' : 'Blue'} {match.blueScore}
             </span>
             <span className="text-slate-600">—</span>
-            <span className="text-sm font-semibold text-red-400">
+            <span className="text-sm font-semibold text-red-400" style={{ color: sideColors.redHex }}>
               {mode === 'bomb' ? 'Defenders' : 'Red'} {match.redScore}
             </span>
           </div>
@@ -185,6 +199,7 @@ export const ScoreboardOverlay: React.FC<ScoreboardOverlayProps> = ({
             label={mode === 'bomb' ? 'Blue — Attackers' : 'Blue Task Force'}
             scoreLabel={match.blueScore}
             accentClass="text-blue-400"
+            accentColor={sideColors.blueHex}
             rows={blueTeam}
             mvpId={resolvedMvpId}
           />
@@ -192,6 +207,7 @@ export const ScoreboardOverlay: React.FC<ScoreboardOverlayProps> = ({
             label={mode === 'bomb' ? 'Red — Defenders' : 'Red Opposition'}
             scoreLabel={match.redScore}
             accentClass="text-red-400"
+            accentColor={sideColors.redHex}
             rows={redTeam}
             mvpId={resolvedMvpId}
           />

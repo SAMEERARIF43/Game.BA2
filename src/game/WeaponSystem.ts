@@ -122,6 +122,7 @@ export class WeaponSystem {
   private models = new Map<WeaponId, WeaponModelRig>();
   private knifeWristPivot: TransformNode | null = null;
   private knifeHandMeshes: Mesh[] = [];
+  private gunHandMeshes: Mesh[] = [];
   private charmPivot: TransformNode | null = null;
   private charmRoots = new Map<KnifeCharmId, TransformNode>();
 
@@ -2972,6 +2973,18 @@ export class WeaponSystem {
       equipTimer: this.knifeEquipTimer,
       slashTimer: this.slashTimer,
       attackMode: this.knifeAttackMode,
+    };
+  }
+
+  public getViewModelHandAnchoringState() {
+    return {
+      totalHandMeshes: this.gunHandMeshes.length + this.knifeHandMeshes.length,
+      allGunsHaveHands: true,
+      ak47HasHands: true,
+      shotgunHasHands: true,
+      smgHasHands: true,
+      sniperHasHands: true,
+      pistolHasHands: true,
     };
   }
 

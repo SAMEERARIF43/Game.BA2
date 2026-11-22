@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bomb, Crosshair, MapPin, MessageSquare, Send, X } from 'lucide-react';
-import { getAmmoDisplayState } from '../game/ammoDisplay';
+import { getAmmoDisplayState, resolveWeaponIdFromName } from '../game/ammoDisplay';
 import {
   MINIMAP_LAYOUTS,
   worldSizeToMinimapPercent,
@@ -13,7 +13,6 @@ import {
   HudState,
   KNIFE_CHARMS,
   KnifeCharmId,
-  resolveWeaponIdFromName,
   TeamColorsConfig,
   WEAPONS,
 } from '../game/types';
@@ -937,8 +936,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 (entry.killerName === localParticipantName ||
                   entry.victimName === localParticipantName)
             );
-            const resolvedWeaponId =
-              entry.weaponId ?? resolveWeaponIdFromName(entry.weaponName);
+            const resolvedWeaponId = resolveWeaponIdFromName(entry.weaponName);
 
             return (
               <div
@@ -968,7 +966,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 >
                   <KillFeedWeaponIcon
                     weaponName={entry.weaponName}
-                    weaponId={entry.weaponId}
+                    weaponId={resolvedWeaponId ?? undefined}
                     className="h-4 w-12 shrink-0"
                   />
                   <span className="sr-only">{entry.weaponName}</span>

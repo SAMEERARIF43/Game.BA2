@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Award, LogOut, RotateCcw, Trophy, Zap, Crosshair, Shield, Flame } from 'lucide-react';
-import { MatchSnapshot } from '../game/types';
+import { MatchSnapshot, TeamColorsConfig } from '../game/types';
+import { TeamId } from '../maps/types';
 import { selectMatchMvp } from '../match/matchMachine';
 import { getRankSummary } from '../settings/progressionStorage';
+import { resolveSideColors } from '../settings/teamColorsConfig';
 import { ScoreboardOverlay, formatMatchTime } from './ScoreboardOverlay';
 
 interface EndMatchScreenProps {
@@ -15,6 +17,8 @@ interface EndMatchScreenProps {
   };
   xp: number;
   sessionXpEarned: number;
+  teamColors?: Partial<TeamColorsConfig>;
+  localTeam?: TeamId;
   isMultiplayer?: boolean;
   isHost?: boolean;
   onPlayAgain: () => void;
@@ -27,6 +31,8 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
   playerStats,
   xp,
   sessionXpEarned,
+  teamColors,
+  localTeam = 'blue',
   isMultiplayer = false,
   isHost = false,
   onPlayAgain,
@@ -34,6 +40,7 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
   onReturnToMenu,
 }) => {
   const [activeTab, setActiveTab] = useState<'scoreboard' | 'highlights'>('scoreboard');
+  const sideColors = resolveSideColors(teamColors, localTeam, match.mode ?? 'tdm');
 
   const headline =
     match.winner === 'blue'
@@ -372,7 +379,9 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="border border-blue-400/20 bg-blue-500/5 px-4 py-3">
                   <div className="flex items-center justify-between">
-                    <span className="font-display text-xs font-bold text-blue-400">Blue Task Force</span>
+                    <span className="font-display text-xs font-bold text-blue-400" style={{ color: sideColors.blueHex }}>
+                      Blue Task Force
+                    </span>
                     <span className="font-mono-tabular text-base font-bold text-white">{match.blueScore} PTS</span>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
@@ -389,7 +398,9 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
 
                 <div className="border border-red-400/20 bg-red-500/5 px-4 py-3">
                   <div className="flex items-center justify-between">
-                    <span className="font-display text-xs font-bold text-red-400">Red Opposition</span>
+                    <span className="font-display text-xs font-bold text-red-400" style={{ color: sideColors.redHex }}>
+                      Red Opposition
+                    </span>
                     <span className="font-mono-tabular text-base font-bold text-white">{match.redScore} PTS</span>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
@@ -463,7 +474,14 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
               </div>
             </section>
 
-            <ScoreboardOverlay match={match} embedded mvpId={mvp?.id} playerStats={playerStats} />
+            <ScoreboardOverlay
+              match={match}
+              embedded
+              mvpId={mvp?.id}
+              teamColors={teamColors}
+              localTeam={localTeam}
+              playerStats={playerStats}
+            />
           </>
         )}
       </div>
