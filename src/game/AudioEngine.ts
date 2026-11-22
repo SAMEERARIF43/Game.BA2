@@ -13,6 +13,7 @@ export class AudioEngine {
 
   private masterVolume = 0.65;
   private sfxVolume = 0.85;
+  private sfxEnabled = true;
   private musicVolume = 0.35;
   private muted = false;
 
@@ -39,7 +40,7 @@ export class AudioEngine {
       this.masterGain.connect(this.ctx.destination);
 
       this.sfxGain = this.ctx.createGain();
-      this.sfxGain.gain.value = this.sfxVolume;
+      this.sfxGain.gain.value = this.sfxEnabled ? this.sfxVolume : 0;
       this.sfxGain.connect(this.masterGain);
 
       this.musicGain = this.ctx.createGain();
@@ -63,12 +64,14 @@ export class AudioEngine {
     masterVolume: number,
     sfxVolume: number,
     musicVolume: number,
-    muted: boolean
+    muted: boolean,
+    sfxEnabled = true
   ): void {
     this.masterVolume = Math.max(0, Math.min(1, masterVolume));
     this.sfxVolume = Math.max(0, Math.min(1, sfxVolume));
     this.musicVolume = Math.max(0, Math.min(1, musicVolume));
     this.muted = muted;
+    this.sfxEnabled = sfxEnabled;
 
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -76,11 +79,24 @@ export class AudioEngine {
       this.masterGain.gain.setTargetAtTime(this.muted ? 0 : this.masterVolume, t, 0.02);
     }
     if (this.sfxGain) {
-      this.sfxGain.gain.setTargetAtTime(this.sfxVolume, t, 0.02);
+      this.sfxGain.gain.setTargetAtTime(this.sfxEnabled ? this.sfxVolume : 0, t, 0.02);
     }
     if (this.musicGain) {
       this.musicGain.gain.setTargetAtTime(this.musicVolume, t, 0.03);
     }
+  }
+
+  public getVolumeState() {
+    return {
+      masterVolume: this.masterVolume,
+      sfxVolume: this.sfxVolume,
+      sfxEnabled: this.sfxEnabled,
+      musicVolume: this.musicVolume,
+      muted: this.muted,
+      effectiveMasterGain: this.muted ? 0 : this.masterVolume,
+      effectiveSfxGain: this.muted || !this.sfxEnabled ? 0 : this.sfxVolume * this.masterVolume,
+      effectiveMusicGain: this.muted ? 0 : this.musicVolume * this.masterVolume,
+    };
   }
 
   public setAmbientEnvironment(env: AmbientEnvironment): void {
@@ -99,7 +115,7 @@ export class AudioEngine {
     }
 
     this.unlock();
-    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
 
     const now = this.ctx.currentTime;
     const p = this.getPitchVariance(0.035);
@@ -134,7 +150,7 @@ export class AudioEngine {
 
   public playKnifeSlash(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
 
     const now = this.ctx.currentTime;
     const p = this.getPitchVariance(0.05);
@@ -165,7 +181,7 @@ export class AudioEngine {
 
   public playKnifeHit(hitTarget: boolean): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
 
     const now = this.ctx.currentTime;
     const p = this.getPitchVariance(0.04);
@@ -184,7 +200,7 @@ export class AudioEngine {
 
   public playPlayerHurt(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     const p = this.getPitchVariance(0.04);
     // Ballistic blunt trauma impact + sharp visceral breath intake
@@ -195,14 +211,14 @@ export class AudioEngine {
 
   public playDryFire(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerTone(now, 1950, 900, 0.028, 'square', 0.18);
   }
 
   public playReloadStart(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     // Magazine release latch click + slide out
     this.triggerTone(now, 480, 260, 0.05, 'triangle', 0.24);
@@ -210,7 +226,7 @@ export class AudioEngine {
   }
 
   public playReloadMagIn(): void {
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     // Crisp magazine seat thud + lock click
     this.triggerTone(now, 240, 110, 0.055, 'triangle', 0.25);
@@ -219,7 +235,7 @@ export class AudioEngine {
 
   public playReloadComplete(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     // Bolt / slide rack snap
     this.triggerTone(now, 560, 780, 0.045, 'triangle', 0.24);
@@ -228,7 +244,7 @@ export class AudioEngine {
 
   public playHitMarker(headshot: boolean): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     const p = this.getPitchVariance(headshot ? 0.02 : 0.03);
     if (headshot) {
@@ -244,7 +260,7 @@ export class AudioEngine {
 
   public playKillConfirmation(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     // Resonant elimination confirm chime (punchy mid-bass into high crystalline bell chime)
     this.triggerTone(now, 260, 440, 0.08, 'triangle', 0.32);
@@ -254,7 +270,7 @@ export class AudioEngine {
 
   public playWeaponEquip(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerNoiseBurst(now, 0.04, 380, 1.2, 0.14);
     this.triggerTone(now + 0.025, 480, 720, 0.035, 'triangle', 0.18);
@@ -262,7 +278,14 @@ export class AudioEngine {
 
   public playUiClick(variant: 'click' | 'toggle' = 'click'): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted || this.masterVolume <= 0 || this.sfxVolume <= 0) {
+    if (
+      !this.ctx ||
+      !this.sfxGain ||
+      this.muted ||
+      !this.sfxEnabled ||
+      this.masterVolume <= 0 ||
+      this.sfxVolume <= 0
+    ) {
       return;
     }
     const now = this.ctx.currentTime;
@@ -276,21 +299,21 @@ export class AudioEngine {
 
   public playLowAmmoWarning(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerTone(now, 840, 620, 0.025, 'triangle', 0.15);
   }
 
   public playHeartbeatPulse(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerTone(now, 68, 38, 0.12, 'sine', 0.38);
     this.triggerTone(now + 0.14, 62, 34, 0.10, 'sine', 0.32);
   }
 
   public playFootstep(sprinting: boolean, crouching = false): void {
-    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     const pitch = (crouching ? 165 : 210) + Math.random() * 55;
     const gain = crouching ? 0.08 : sprinting ? 0.24 : 0.15;
@@ -300,14 +323,14 @@ export class AudioEngine {
 
   public playJump(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerNoiseBurst(now, 0.075, 340, 1.0, 0.17);
     this.triggerTone(now, 140, 190, 0.06, 'sine', 0.12);
   }
 
   public playLand(impactStrength: number): void {
-    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     const gain = Math.min(0.42, Math.max(0.12, impactStrength * 0.042));
     this.triggerNoiseBurst(now, 0.095, 215, 0.9, gain);
@@ -316,7 +339,7 @@ export class AudioEngine {
 
   public playSlide(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || !this.ambientNoiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.ambientNoiseBuffer || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
 
     // Swept gravel/concrete skid noise on sfxGain
@@ -347,21 +370,21 @@ export class AudioEngine {
 
   public playKillstreakReady(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerTone(now, 660, 880, 0.09, 'triangle', 0.24);
     this.triggerTone(now + 0.09, 880, 1175, 0.12, 'sine', 0.26);
   }
 
   public playUavSweep(): void {
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerTone(now, 1340, 980, 0.14, 'sine', 0.12);
   }
 
   public playAirstrikeIncoming(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || !this.ambientNoiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.ambientNoiseBuffer || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     const src = this.ctx.createBufferSource();
     src.buffer = this.ambientNoiseBuffer;
@@ -383,7 +406,7 @@ export class AudioEngine {
 
   public playExplosion(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || !this.ambientNoiseBuffer || this.muted) return;
+    if (!this.ctx || !this.sfxGain || !this.ambientNoiseBuffer || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
 
     const src = this.ctx.createBufferSource();
@@ -407,7 +430,7 @@ export class AudioEngine {
 
   public playOverdriveActivate(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerTone(now, 220, 660, 0.24, 'sawtooth', 0.16);
     this.triggerTone(now + 0.08, 440, 880, 0.28, 'sine', 0.22);
@@ -415,7 +438,7 @@ export class AudioEngine {
 
   public playPing(isEnemy: boolean): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     if (isEnemy) {
       // Sharp two-tone hostile spot alert
@@ -430,7 +453,7 @@ export class AudioEngine {
 
   public playBombBeep(urgency01 = 0): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     const clamped = Math.max(0, Math.min(1, urgency01));
     const freq = 1520 + clamped * 560;
@@ -440,7 +463,7 @@ export class AudioEngine {
 
   public playBombPlanted(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerTone(now, 660, 880, 0.08, 'triangle', 0.24);
     this.triggerTone(now + 0.09, 880, 1320, 0.12, 'square', 0.18);
@@ -449,7 +472,7 @@ export class AudioEngine {
 
   public playBombDefused(): void {
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerTone(now, 520, 780, 0.09, 'sine', 0.24);
     this.triggerTone(now + 0.09, 780, 1040, 0.11, 'sine', 0.26);
@@ -459,7 +482,7 @@ export class AudioEngine {
   public playBombExplosion(): void {
     this.playExplosion();
     this.unlock();
-    if (!this.ctx || !this.sfxGain || this.muted) return;
+    if (!this.ctx || !this.sfxGain || this.muted || !this.sfxEnabled) return;
     const now = this.ctx.currentTime;
     this.triggerTone(now, 90, 26, 0.72, 'sawtooth', 0.5);
   }

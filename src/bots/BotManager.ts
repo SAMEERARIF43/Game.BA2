@@ -15,6 +15,7 @@ import {
   OperatorPalette,
   buildOperatorRig,
   createOperatorPalette,
+  updateOperatorPaletteTeamColor,
 } from '../game/OperatorMeshBuilder';
 import { PooledTracerRingBuffer, getVfxQualityBudget } from '../game/combatVfx';
 import { GameMode, isHostile } from '../game/gameModeRules';
@@ -131,6 +132,10 @@ export class BotManager {
   private redPalette: OperatorPalette | null = null;
   private blueTracerMat: StandardMaterial;
   private redTracerMat: StandardMaterial;
+  private blueHex = '#38bdf8';
+  private redHex = '#ef4444';
+  private blueEmissive = new Color3(0.02, 0.06, 0.14);
+  private redEmissive = new Color3(0.14, 0.03, 0.03);
   private readonly spawnGroundRay = new Ray(Vector3.Zero(), new Vector3(0, -1, 0), 3);
   private readonly collisionPickPredicate = (mesh: AbstractMesh): boolean =>
     mesh.checkCollisions && mesh.isEnabled() && !mesh.metadata?.isBot;
@@ -157,6 +162,43 @@ export class BotManager {
     this.redTracerMat.alpha = 0.94;
     this.redTracerMat.alphaMode = Constants.ALPHA_ADD;
     this.redTracerMat.disableDepthWrite = true;
+  }
+
+  public setTeamColors(blueHex: string, redHex: string): void {
+    this.blueHex = blueHex;
+    this.redHex = redHex;
+    try {
+      const b = Color3.FromHexString(blueHex);
+      this.blueEmissive = new Color3(b.r * 0.14, b.g * 0.14, b.b * 0.14);
+      this.blueTracerMat.emissiveColor = new Color3(
+        b.r * 1.45 + 0.2,
+        b.g * 1.45 + 0.2,
+        b.b * 1.45 + 0.2
+      );
+    } catch {
+      // Keep default blue
+    }
+    try {
+      const r = Color3.FromHexString(redHex);
+      this.redEmissive = new Color3(r.r * 0.14, r.g * 0.14, r.b * 0.14);
+      this.redTracerMat.emissiveColor = new Color3(
+        r.r * 1.45 + 0.2,
+        r.g * 1.45 + 0.2,
+        r.b * 1.45 + 0.2
+      );
+    } catch {
+      // Keep default red
+    }
+
+    if (this.bluePalette) {
+      updateOperatorPaletteTeamColor(this.bluePalette, this.blueHex);
+    }
+    if (this.redPalette) {
+      updateOperatorPaletteTeamColor(this.redPalette, this.redHex);
+    }
+    for (const bot of this.bots) {
+      this.restoreBotColors(bot);
+    }
   }
 
   public setGraphicsQuality(quality: GraphicsQuality): void {
@@ -218,9 +260,11 @@ export class BotManager {
   private ensureOperatorPalettes(): void {
     if (!this.bluePalette) {
       this.bluePalette = createOperatorPalette(this.scene, 'blue', 'botBluePal');
+      updateOperatorPaletteTeamColor(this.bluePalette, this.blueHex);
     }
     if (!this.redPalette) {
       this.redPalette = createOperatorPalette(this.scene, 'red', 'botRedPal');
+      updateOperatorPaletteTeamColor(this.redPalette, this.redHex);
     }
   }
 
@@ -970,10 +1014,9 @@ export class BotManager {
   }
 
   private restoreBotColors(bot: BotAgent): void {
-    bot.bodyMat.emissiveColor =
-      bot.team === 'blue' ? new Color3(0.02, 0.06, 0.14) : new Color3(0.14, 0.03, 0.03);
-    bot.headMat.emissiveColor =
-      bot.team === 'blue' ? new Color3(0.04, 0.1, 0.24) : new Color3(0.22, 0.05, 0.04);
+    const base = bot.team === 'blue' ? this.blueEmissive : this.redEmissive;
+    bot.bodyMat.emissiveColor = base.clone();
+    bot.headMat.emissiveColor = new Color3(base.r * 1.65, base.g * 1.65, base.b * 1.65);
   }
 
   private lerp(a: number, b: number, dtFactor: number): number {

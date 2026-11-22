@@ -309,6 +309,25 @@ export function createOperatorPalette(
   };
 }
 
+export function updateOperatorPaletteTeamColor(palette: OperatorPalette, hex: string): void {
+  try {
+    const base = Color3.FromHexString(hex);
+    palette.visorMat.emissiveColor = new Color3(
+      base.r * 1.45 + 0.12,
+      base.g * 1.45 + 0.12,
+      base.b * 1.45 + 0.12
+    );
+    palette.beaconMat.emissiveColor = new Color3(
+      base.r * 1.65 + 0.08,
+      base.g * 1.65 + 0.08,
+      base.b * 1.65 + 0.08
+    );
+    palette.shellAccentMat.albedoColor = base;
+  } catch {
+    // Ignore malformed hex color
+  }
+}
+
 export interface CreateOperatorRigOptions {
   id: string;
   team: TeamId;

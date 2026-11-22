@@ -1,12 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bomb, Crosshair, MapPin, MessageSquare, Send, X } from 'lucide-react';
+import { getAmmoDisplayState } from '../game/ammoDisplay';
 import {
   MINIMAP_LAYOUTS,
   worldSizeToMinimapPercent,
   worldToMinimapPercent,
   yawRadToCompassDeg,
 } from '../game/minimap';
-import { GunId, HudState, KNIFE_CHARMS, KnifeCharmId, WEAPONS } from '../game/types';
+import {
+  CrosshairSettingsMap,
+  GunId,
+  HudState,
+  KNIFE_CHARMS,
+  KnifeCharmId,
+  resolveWeaponIdFromName,
+  TeamColorsConfig,
+  WEAPONS,
+} from '../game/types';
 import {
   CHAT_FADE_MS,
   CHAT_MAX_LENGTH,
@@ -14,18 +24,25 @@ import {
   ChatMessage,
 } from '../multiplayer/chat';
 import {
+  computeReticleGeometry,
+  getCrosshairConfigForWeapon,
+} from '../settings/crosshairConfig';
+import {
   DEFAULT_KEYBINDINGS,
   formatKeyCode,
   KeybindingsConfig,
 } from '../settings/keybindings';
+import { hexToRgba, resolveSideColors } from '../settings/teamColorsConfig';
 import { DeathScreen } from './DeathScreen';
 import { formatMatchTime, ScoreboardOverlay } from './ScoreboardOverlay';
-import { WeaponPreview } from './WeaponPreview';
+import { KillFeedWeaponIcon, WeaponPreview } from './WeaponPreview';
 
 interface GameHUDProps {
   hud: HudState;
   showFps?: boolean;
   keybindings?: KeybindingsConfig;
+  crosshairSettings?: Partial<CrosshairSettingsMap>;
+  teamColors?: Partial<TeamColorsConfig>;
   onSelectGun?: (id: GunId) => void;
   onSelectKnifeCharm?: (id: KnifeCharmId) => void;
   onRespawn?: () => void;
@@ -48,6 +65,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   hud,
   showFps = false,
   keybindings = DEFAULT_KEYBINDINGS,
+  crosshairSettings,
+  teamColors,
   onSelectGun,
   onSelectKnifeCharm,
   onRespawn,
@@ -134,6 +153,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   }, [chatOpen, isCustomMatch, newestChatTs]);
 
   const activeSlot = hud.weaponSlots.find((s) => s.id === hud.activeWeapon.id);
+  const ammoInMag = activeSlot?.ammoInMag ?? 0;
+  const reserveAmmo = activeSlot?.reserveAmmo ?? 0;
+  const ammoDisplay = getAmmoDisplayState({
+    ammoInMag,
+    reserveAmmo,
+    magSize: hud.activeWeapon.magSize,
+    isMelee: hud.activeWeapon.isMelee,
+    isReloading: hud.isReloading,
+    reloadKeyLabel: formatKeyCode(keybindings.reload),
+  });
   const stanceLabel =
     hud.stance === 'stand'
       ? 'Stand'
@@ -152,9 +181,28 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const damageAge = now - hud.lastDamageTimestamp;
   const damageRecent = hud.lastDamageTimestamp > 0 && damageAge < 320;
   const latestDamage = hud.damageIndicators[hud.damageIndicators.length - 1];
-  const gap = hud.isAds ? 3 : Math.min(34, hud.crosshairSpreadPx);
-  const tickLen = hud.isAds ? 4 : 9;
-  const reticleColor = hud.targetingEnemy ? '#ef4444' : '#f8fafc';
+  const mode = hud.gameMode ?? hud.match.mode ?? 'tdm';
+  const bombState = hud.match.bombState ?? null;
+  const localParticipant = hud.match.participants.find((p) => p.isPlayer);
+  const localParticipantId = localParticipant?.id ?? 'player';
+  const localParticipantName = localParticipant?.name;
+  const effectiveChatChannel: ChatChannel = mode === 'ffa' ? 'all' : chatChannel;
+  const sideColors = resolveSideColors(teamColors, hud.localTeam, mode);
+
+  const activeCrosshair = getCrosshairConfigForWeapon(
+    crosshairSettings,
+    hud.activeWeapon.id
+  );
+  const reticle = computeReticleGeometry(
+    activeCrosshair,
+    hud.crosshairSpreadPx,
+    hud.isAds,
+    hud.targetingEnemy,
+    sideColors.enemyHex
+  );
+  const gap = reticle.gap;
+  const tickLen = reticle.tickLen;
+  const reticleColor = reticle.color;
 
   const sniperScopeBlend =
     hud.activeWeapon.id === 'sniper' && hud.isAlive ? hud.adsBlend : 0;
@@ -175,11 +223,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     (showAkRedDotOverlay && akRedDotBlend > 0.48);
   const swayX = showSniperOverlay ? Math.sin(now * 0.003) * (hud.speed > 0.5 ? 3.2 : 0.8) : 0;
   const swayY = showSniperOverlay ? Math.cos(now * 0.0025) * (hud.speed > 0.5 ? 3.2 : 0.8) : 0;
-
-  const mode = hud.gameMode ?? hud.match.mode ?? 'tdm';
-  const bombState = hud.match.bombState ?? null;
-  const localParticipantId = hud.match.participants.find((p) => p.isPlayer)?.id ?? 'player';
-  const effectiveChatChannel: ChatChannel = mode === 'ffa' ? 'all' : chatChannel;
 
   // Real-time 2D Minimap projection data
   const minimap = hud.minimap;
@@ -314,8 +357,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             {hud.rangeDistanceMeters !== null && (
               <span
                 className={`absolute top-8 font-mono-tabular text-[10px] ${
-                  hud.targetingEnemy ? 'text-red-400' : 'text-slate-300/75'
+                  hud.targetingEnemy ? '' : 'text-slate-300/75'
                 }`}
+                style={hud.targetingEnemy ? { color: sideColors.enemyHex } : undefined}
               >
                 {hud.rangeDistanceMeters}m
               </span>
@@ -402,6 +446,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
           {hud.pings.map((ping) => {
             const isEnemy = ping.kind === 'enemy';
+            const pingColor = isEnemy ? sideColors.enemyHex : sideColors.allyHex;
             const fade = Math.min(1, Math.max(0.25, ping.remainingSec / 1.1));
             return (
               <div
@@ -416,17 +461,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <div className="flex flex-col items-center gap-0.5">
                   <div
                     className={`flex items-center gap-1 border px-1.5 py-0.5 font-mono-tabular text-[10px] font-bold shadow-md shadow-black/40 backdrop-blur-sm ${
-                      isEnemy
-                        ? 'border-red-400/75 bg-red-950/85 text-red-200'
-                        : 'border-sky-400/75 bg-slate-950/85 text-sky-200'
-                    } ${!ping.onScreen ? 'ring-1 ring-white/30' : ''}`}
+                      !ping.onScreen ? 'ring-1 ring-white/30' : ''
+                    }`}
+                    style={{
+                      borderColor: hexToRgba(pingColor, 0.78),
+                      backgroundColor: hexToRgba(pingColor, 0.2),
+                      color: '#f8fafc',
+                    }}
                   >
                     {isEnemy ? (
-                      <Crosshair className="h-3 w-3 shrink-0 text-red-400" />
+                      <Crosshair className="h-3 w-3 shrink-0" style={{ color: pingColor }} />
                     ) : (
-                      <MapPin className="h-3 w-3 shrink-0 text-sky-400" />
+                      <MapPin className="h-3 w-3 shrink-0" style={{ color: pingColor }} />
                     )}
-                    <span>{isEnemy ? 'HOSTILE' : 'PING'}</span>
+                    <span style={{ color: pingColor }}>{isEnemy ? 'HOSTILE' : 'PING'}</span>
                     <span className="text-white/90">{ping.distanceMeters}m</span>
                   </div>
                   <span className="max-w-24 truncate bg-black/55 px-1 font-mono-tabular text-[9px] text-slate-300">
@@ -467,9 +515,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         </div>
       )}
 
-      {/* Dynamic Center Reticle (hidden when sniping) */}
+      {/* Dynamic / Static Per-Weapon Center Reticle (hidden when scoped) */}
       {hud.isPointerLocked && hud.isAlive && !hud.showScoreboard && !hideHipReticle && (
-        <div className="absolute inset-0 flex items-center justify-center">
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          data-hud-reticle={hud.activeWeapon.id}
+          data-reticle-style={reticle.style}
+          data-reticle-gap={gap}
+          data-reticle-size={tickLen}
+          data-reticle-color={reticleColor}
+        >
           <div className="relative flex items-center justify-center">
             <div
               className="h-1 w-1 rounded-full transition-colors duration-75"
@@ -533,8 +588,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               {!hud.isReloading && hud.rangeDistanceMeters !== null && (
                 <span
                   className={`font-mono-tabular text-[11px] ${
-                    hud.targetingEnemy ? 'text-red-400' : 'text-slate-300/75'
+                    hud.targetingEnemy ? '' : 'text-slate-300/75'
                   }`}
+                  style={hud.targetingEnemy ? { color: sideColors.enemyHex } : undefined}
                 >
                   {hud.rangeDistanceMeters}m
                 </span>
@@ -669,6 +725,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         <DeathScreen
           hud={hud}
           chatOpen={chatOpen}
+          teamColors={teamColors}
           onSelectGun={(gunId) => onSelectGun?.(gunId)}
           onSelectKnifeCharm={onSelectKnifeCharm}
           onRespawn={() => onRespawn?.()}
@@ -709,7 +766,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         ) : mode === 'bomb' ? (
           <div className="flex items-center border border-slate-400/20 bg-slate-950/80 shadow-lg shadow-black/20 backdrop-blur-md">
             <div className="flex items-center gap-2.5 border-r border-white/10 px-4 py-1.5">
-              <span className="text-[11px] font-medium text-blue-400">ATK</span>
+              <span className="text-[11px] font-medium" style={{ color: sideColors.blueHex }}>
+                ATK
+              </span>
               <span className="font-mono-tabular font-display text-xl font-bold text-white">
                 {hud.match.blueScore}
               </span>
@@ -741,13 +800,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <span className="font-mono-tabular font-display text-xl font-bold text-white">
                 {hud.match.redScore}
               </span>
-              <span className="text-[11px] font-medium text-red-400">DEF</span>
+              <span className="text-[11px] font-medium" style={{ color: sideColors.redHex }}>
+                DEF
+              </span>
             </div>
           </div>
         ) : (
           <div className="flex items-center border border-slate-400/20 bg-slate-950/80 shadow-lg shadow-black/20 backdrop-blur-md">
             <div className="flex items-center gap-2.5 border-r border-white/10 px-4 py-1.5">
-              <span className="text-[11px] font-medium text-blue-400">BLUE</span>
+              <span className="text-[11px] font-medium" style={{ color: sideColors.blueHex }}>
+                BLUE
+              </span>
               <span className="font-mono-tabular font-display text-xl font-bold text-white">
                 {hud.match.blueScore}
               </span>
@@ -766,7 +829,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <span className="font-mono-tabular font-display text-xl font-bold text-white">
                 {hud.match.redScore}
               </span>
-              <span className="text-[11px] font-medium text-red-400">RED</span>
+              <span className="text-[11px] font-medium" style={{ color: sideColors.redHex }}>
+                RED
+              </span>
             </div>
           </div>
         )}
@@ -780,15 +845,26 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           <div
             className={`border px-3 py-1 font-mono-tabular text-[10px] font-bold tracking-wider shadow-md backdrop-blur-sm ${
               bombState.phase === 'round_end'
-                ? bombState.roundWinner === 'blue'
-                  ? 'border-blue-400/60 bg-blue-950/90 text-blue-200'
-                  : 'border-red-400/60 bg-red-950/90 text-red-200'
+                ? ''
                 : bombState.phase === 'planted'
                   ? 'border-red-400/60 bg-red-950/85 text-red-200'
                   : bombState.carrierId === localParticipantId
                     ? 'border-amber-400/65 bg-amber-500/20 text-amber-200'
                     : 'border-white/15 bg-slate-950/75 text-slate-300'
             }`}
+            style={
+              bombState.phase === 'round_end'
+                ? (() => {
+                    const winnerHex =
+                      bombState.roundWinner === 'blue' ? sideColors.blueHex : sideColors.redHex;
+                    return {
+                      borderColor: hexToRgba(winnerHex, 0.65),
+                      backgroundColor: hexToRgba(winnerHex, 0.22),
+                      color: '#f8fafc',
+                    };
+                  })()
+                : undefined
+            }
           >
             {bombState.phase === 'round_end'
               ? `${bombState.roundWinner === 'blue' ? 'ATTACKERS WIN ROUND' : 'DEFENDERS WIN ROUND'} · ${bombState.roundEndReason ?? ''}`
@@ -828,49 +904,89 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         )}
       </div>
 
-      {/* Top-Right Combat Feed */}
-      {activeKillFeed.length > 0 && (
+      {/* Top-Right Kill Feed Overlay */}
+      {!hud.showScoreboard && activeKillFeed.length > 0 && (
         <div
-          className="absolute right-4 top-28 z-10 flex w-[min(420px,calc(100vw-2rem))] flex-col items-end gap-1 md:top-4"
+          className="absolute right-4 top-28 z-10 flex w-[min(420px,calc(100vw-2rem))] flex-col items-end gap-1.5 md:top-4"
+          data-killfeed-overlay="true"
           role="log"
           aria-label="Recent eliminations"
           aria-live="polite"
           aria-relevant="additions"
         >
-          <div className="flex w-full items-center justify-between border border-slate-400/20 bg-slate-950/80 px-3 py-1 font-mono-tabular text-[9px] font-bold tracking-widest text-slate-400 backdrop-blur-md">
-            <span>COMBAT FEED</span>
-            <span className="text-emerald-300/80">LIVE</span>
-          </div>
           {activeKillFeed.map((entry) => {
             const age = Math.max(0, now - entry.timestamp);
+            const killerHex =
+              mode === 'ffa'
+                ? localParticipantName && entry.killerName === localParticipantName
+                  ? sideColors.allyHex
+                  : sideColors.enemyHex
+                : entry.killerTeam === 'blue'
+                  ? sideColors.blueHex
+                  : sideColors.redHex;
+            const victimHex =
+              mode === 'ffa'
+                ? localParticipantName && entry.victimName === localParticipantName
+                  ? sideColors.allyHex
+                  : sideColors.enemyHex
+                : entry.victimTeam === 'blue'
+                  ? sideColors.blueHex
+                  : sideColors.redHex;
+            const isLocalInvolved = Boolean(
+              localParticipantName &&
+                (entry.killerName === localParticipantName ||
+                  entry.victimName === localParticipantName)
+            );
+            const resolvedWeaponId =
+              entry.weaponId ?? resolveWeaponIdFromName(entry.weaponName);
+
             return (
               <div
                 key={entry.id}
-                className={`flex w-full flex-wrap items-center justify-end gap-x-1.5 gap-y-1 border border-slate-400/20 border-r-2 bg-slate-950/85 px-2.5 py-1.5 text-right text-xs shadow-md shadow-black/20 backdrop-blur-md ${
-                  entry.killerTeam === 'blue' ? 'border-r-blue-400' : 'border-r-red-400'
+                data-killfeed-entry={entry.id}
+                className={`flex max-w-full items-center justify-end gap-2 border px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md shadow-black/25 backdrop-blur-md transition-opacity duration-150 ${
+                  isLocalInvolved
+                    ? 'border-amber-400/55 bg-slate-900/90'
+                    : 'border-white/15 bg-slate-950/85'
                 }`}
-                style={{ opacity: Math.min(1, Math.max(0, (4500 - age) / 650)) }}
+                style={{
+                  opacity: Math.min(1, Math.max(0, (4500 - age) / 650)),
+                }}
               >
                 <span
-                  className={`max-w-24 truncate font-semibold ${
-                    entry.killerTeam === 'blue' ? 'text-blue-300' : 'text-red-300'
-                  }`}
+                  data-killfeed-killer={entry.killerName}
+                  className="max-w-28 truncate font-semibold"
+                  style={{ color: killerHex }}
                 >
                   {entry.killerName}
                 </span>
-                <span className="max-w-28 truncate border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono-tabular text-[10px] text-slate-200">
-                  {entry.weaponName}
-                </span>
-                {entry.headshot && (
-                  <span className="border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 font-mono-tabular text-[9px] font-bold tracking-wide text-amber-300">
-                    HEADSHOT
-                  </span>
-                )}
-                <span className="text-slate-500">→</span>
+
                 <span
-                  className={`max-w-24 truncate font-semibold ${
-                    entry.victimTeam === 'blue' ? 'text-blue-300' : 'text-red-300'
-                  }`}
+                  data-killfeed-weapon={resolvedWeaponId ?? 'ordnance'}
+                  title={entry.weaponName}
+                  className="inline-flex shrink-0 items-center gap-1 border border-white/10 bg-white/[0.04] px-1.5 py-0.5"
+                >
+                  <KillFeedWeaponIcon
+                    weaponName={entry.weaponName}
+                    weaponId={entry.weaponId}
+                    className="h-4 w-12 shrink-0"
+                  />
+                  <span className="sr-only">{entry.weaponName}</span>
+                  {entry.headshot && (
+                    <span
+                      className="inline-flex items-center gap-0.5 border-l border-white/10 pl-1 font-mono-tabular text-[9px] font-bold tracking-wide text-amber-300"
+                      title="Headshot elimination"
+                    >
+                      <Crosshair className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />
+                      HS
+                    </span>
+                  )}
+                </span>
+
+                <span
+                  data-killfeed-victim={entry.victimName}
+                  className="max-w-28 truncate font-semibold"
+                  style={{ color: victimHex }}
                 >
                   {entry.victimName}
                 </span>
@@ -887,12 +1003,20 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           <div
             className="flex flex-col border border-slate-400/25 bg-[#080c12]/85 shadow-lg shadow-black/30 backdrop-blur-md"
             aria-label="Real-time 2D tactical minimap"
+            data-ally-color={sideColors.allyHex}
+            data-enemy-color={sideColors.enemyHex}
           >
             <div className="flex items-center justify-between border-b border-white/10 px-2 py-0.5 font-mono-tabular text-[9px] font-bold tracking-wider">
-              <span className={hud.uavActive ? 'text-sky-400' : 'text-slate-300'}>
+              <span
+                className={hud.uavActive ? '' : 'text-slate-300'}
+                style={hud.uavActive ? { color: sideColors.allyHex } : undefined}
+              >
                 {hud.uavActive ? 'UAV SWEEP' : '2D MINIMAP'}
               </span>
-              <span className={mode === 'ffa' ? 'text-amber-300/85' : 'text-sky-300/80'}>
+              <span
+                className={mode === 'ffa' ? 'text-amber-300/85' : ''}
+                style={mode !== 'ffa' ? { color: sideColors.allyHex } : undefined}
+              >
                 {mode === 'ffa' ? 'FREE-FOR-ALL' : `${teammateCount} ALLY`}
               </span>
             </div>
@@ -901,8 +1025,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <svg viewBox="0 0 100 100" className="h-full w-full">
                 {/* Arena perimeter & North/South spawn sectors */}
                 <rect x="4" y="4" width="92" height="92" fill="rgba(15,23,42,0.55)" stroke="rgba(148,163,184,0.28)" strokeWidth="0.9" />
-                <rect x="4" y="4" width="92" height="16" fill="rgba(239,68,68,0.10)" />
-                <rect x="4" y="80" width="92" height="16" fill="rgba(59,130,246,0.12)" />
+                <rect x="4" y="4" width="92" height="16" fill={hexToRgba(sideColors.redHex, 0.14)} />
+                <rect x="4" y="80" width="92" height="16" fill={hexToRgba(sideColors.blueHex, 0.14)} />
 
                 {/* Tactical sector grid */}
                 <line x1="50" y1="4" x2="50" y2="96" stroke="rgba(255,255,255,0.07)" strokeWidth="0.6" strokeDasharray="2 2" />
@@ -942,7 +1066,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     cy={playerMapPos.yPct}
                     r={4 + hud.uavPulseProgress * 46}
                     fill="none"
-                    stroke="#38bdf8"
+                    stroke={sideColors.allyHex}
                     strokeWidth="1.2"
                     opacity={Math.max(0, 1 - hud.uavPulseProgress)}
                   />
@@ -957,7 +1081,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       <polygon
                         key={actor.id}
                         points={`${pt.xPct},${pt.yPct - 3.4} ${pt.xPct + 3.4},${pt.yPct} ${pt.xPct},${pt.yPct + 3.4} ${pt.xPct - 3.4},${pt.yPct}`}
-                        fill={isEnemyPing ? '#f87171' : '#38bdf8'}
+                        fill={isEnemyPing ? sideColors.enemyHex : sideColors.allyHex}
                         stroke="#090d13"
                         strokeWidth="0.7"
                       />
@@ -976,7 +1100,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                           cx="0"
                           cy="0"
                           r="2.6"
-                          fill="#38bdf8"
+                          fill={sideColors.allyHex}
                           stroke="#090d13"
                           strokeWidth="0.7"
                         />
@@ -985,7 +1109,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                           y1="-2.2"
                           x2="0"
                           y2="-5.0"
-                          stroke="#bae6fd"
+                          stroke="#f8fafc"
                           strokeWidth="1.1"
                           strokeLinecap="round"
                         />
@@ -999,7 +1123,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       cx={pt.xPct}
                       cy={pt.yPct}
                       r="2.6"
-                      fill="#ef4444"
+                      fill={sideColors.enemyHex}
                       stroke="#090d13"
                       strokeWidth="0.7"
                     />
@@ -1094,11 +1218,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     ? 1
                     : Math.max(0, Math.min(1, (CHAT_FADE_MS - ageMs) / 900));
                   const isSys = Boolean(msg.isSystem || msg.senderTeam === 'system');
-                  const nameColor = isSys
-                    ? 'text-amber-300'
+                  const nameHex = isSys
+                    ? undefined
                     : msg.senderTeam === 'blue'
-                      ? 'text-blue-400'
-                      : 'text-red-400';
+                      ? sideColors.blueHex
+                      : sideColors.redHex;
                   const tagLabel = isSys
                     ? '[SYS]'
                     : msg.channel === 'team'
@@ -1120,7 +1244,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                         {tagLabel}
                       </span>
                       {!isSys && (
-                        <span className={`mr-1 font-semibold ${nameColor}`}>
+                        <span
+                          className="mr-1 font-semibold"
+                          style={nameHex ? { color: nameHex } : undefined}
+                        >
                           {msg.senderName}:
                         </span>
                       )}
@@ -1262,12 +1389,26 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           })}
         </div>
 
-        {/* Weapon & Ammo Card */}
-        <div className="border border-slate-400/20 bg-slate-950/80 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
+        {/* Weapon & Dynamic Ammo Card */}
+        <div
+          data-weapon-hud-card={hud.activeWeapon.id}
+          data-ammo-state={ammoDisplay.level}
+          className={`border px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md transition-colors duration-150 ${ammoDisplay.cardBorderClass}`}
+        >
           <div className="flex items-center justify-between gap-5">
-            <div>
-              <div className="font-display text-sm font-semibold text-white">
-                {hud.activeWeapon.name}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="truncate font-display text-sm font-semibold text-white">
+                  {hud.activeWeapon.name}
+                </span>
+                {ammoDisplay.statusLabel && (
+                  <span
+                    data-ammo-status-label="true"
+                    className={`shrink-0 font-mono-tabular text-[10px] font-bold tracking-wider ${ammoDisplay.statusTextColorClass}`}
+                  >
+                    {ammoDisplay.statusLabel}
+                  </span>
+                )}
               </div>
               <div className="text-xs text-slate-400">
                 {hud.activeWeapon.isMelee
@@ -1287,31 +1428,77 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 />
               </div>
               {hud.activeWeapon.isMelee ? (
-                <div className="flex items-baseline gap-1.5 font-mono-tabular">
-                  <span className="font-display text-2xl font-bold text-emerald-300">∞</span>
+                <div
+                  data-ammo-counter="melee"
+                  className="flex items-baseline gap-1.5 font-mono-tabular"
+                >
+                  <span className={`font-display text-2xl font-bold ${ammoDisplay.magTextColorClass}`}>
+                    ∞
+                  </span>
                   <span className="text-[11px] font-semibold tracking-wider text-slate-400">
                     MELEE
                   </span>
                 </div>
               ) : (
-                <div className="flex items-baseline gap-1.5 font-mono-tabular">
+                <div
+                  data-ammo-counter={ammoDisplay.level}
+                  className="flex items-baseline gap-1.5 font-mono-tabular"
+                >
                   <span
-                    className={`font-display text-3xl font-bold ${
-                      (activeSlot?.ammoInMag ?? 0) <= Math.ceil(hud.activeWeapon.magSize * 0.25)
-                        ? 'text-red-400'
-                        : 'text-white'
-                    }`}
+                    data-ammo-mag="true"
+                    className={`font-display text-3xl font-bold leading-none transition-colors duration-100 ${ammoDisplay.magTextColorClass}`}
                   >
-                    {String(activeSlot?.ammoInMag ?? 0).padStart(2, '0')}
+                    {String(ammoInMag).padStart(2, '0')}
                   </span>
                   <span className="text-sm text-slate-500">/</span>
-                  <span className="text-sm text-slate-300">
-                    {String(activeSlot?.reserveAmmo ?? 0).padStart(2, '0')}
+                  <span
+                    data-ammo-reserve="true"
+                    className={`text-sm transition-colors duration-100 ${ammoDisplay.reserveTextColorClass}`}
+                  >
+                    {String(reserveAmmo).padStart(2, '0')}
                   </span>
                 </div>
               )}
             </div>
           </div>
+
+          {!hud.activeWeapon.isMelee && hud.activeWeapon.magSize > 0 && (
+            <div className="mt-2.5" data-ammo-meter={ammoDisplay.level}>
+              {hud.activeWeapon.magSize <= 12 && !hud.isReloading ? (
+                <div
+                  className="grid gap-1"
+                  style={{
+                    gridTemplateColumns: `repeat(${hud.activeWeapon.magSize}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {Array.from({ length: hud.activeWeapon.magSize }, (_, idx) => {
+                    const loaded = idx < ammoInMag;
+                    return (
+                      <span
+                        key={idx}
+                        className={`h-1.5 transition-colors duration-100 ${
+                          loaded ? ammoDisplay.barColorClass : 'bg-white/12'
+                        }`}
+                      />
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="h-1.5 w-full overflow-hidden bg-white/12">
+                  <div
+                    className={`h-full transition-[width,background-color] duration-100 ${ammoDisplay.barColorClass}`}
+                    style={{
+                      width: `${
+                        hud.isReloading
+                          ? Math.round(hud.reloadProgress * 100)
+                          : Math.round(ammoDisplay.magFillRatio * 100)
+                      }%`,
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-white/10 pt-2 text-xs">
             <div className="flex items-center gap-2">
@@ -1411,7 +1598,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         )}
 
       {/* Live Tab Scoreboard */}
-      {hud.showScoreboard && <ScoreboardOverlay match={hud.match} />}
+      {hud.showScoreboard && (
+        <ScoreboardOverlay
+          match={hud.match}
+          teamColors={teamColors}
+          localTeam={hud.localTeam}
+        />
+      )}
     </div>
   );
 };

@@ -573,6 +573,22 @@ export interface HudState {
   match: MatchSnapshot;
 }
 
+export type CrosshairStyle = 'dynamic' | 'static';
+
+export interface CrosshairConfig {
+  size: number;
+  color: string;
+  gap: number;
+  style: CrosshairStyle;
+}
+
+export type CrosshairSettingsMap = Record<WeaponId, CrosshairConfig>;
+
+export interface TeamColorsConfig {
+  ally: string;
+  enemy: string;
+}
+
 export interface GameSettings {
   callsign: string;
   sensitivity: number;
@@ -582,6 +598,7 @@ export interface GameSettings {
   showFps: boolean;
   volume: number;
   sfxVolume: number;
+  sfxEnabled?: boolean;
   musicVolume: number;
   muted: boolean;
   graphicsQuality: GraphicsQuality;
@@ -601,6 +618,8 @@ export interface GameSettings {
   postSlideStance: PostSlideStance;
   jumpCancelsSlide: boolean;
   slideCameraIntensity: number;
+  crosshair?: CrosshairSettingsMap;
+  teamColors?: TeamColorsConfig;
   keybindings: KeybindingsConfig;
   allyTeamColor: string;
   enemyTeamColor: string;

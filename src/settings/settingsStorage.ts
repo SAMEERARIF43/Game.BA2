@@ -10,7 +10,17 @@ import {
   PostSlideStance,
   SlideTriggerMode,
 } from '../game/types';
+import {
+  cloneCrosshairSettings,
+  DEFAULT_CROSSHAIR_SETTINGS,
+  validateCrosshairSettingsMap,
+} from './crosshairConfig';
 import { DEFAULT_KEYBINDINGS, validateKeybindings } from './keybindings';
+import {
+  cloneTeamColors,
+  DEFAULT_TEAM_COLORS,
+  validateTeamColors,
+} from './teamColorsConfig';
 
 export const SETTINGS_STORAGE_KEY = 'strike_force_profile_v1';
 const LEGACY_CALLSIGN_KEY = 'sf_callsign';
@@ -28,6 +38,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   showFps: false,
   volume: 0.65,
   sfxVolume: 0.85,
+  sfxEnabled: true,
   musicVolume: 0.35,
   muted: false,
   graphicsQuality: 'HIGH',
@@ -47,6 +58,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   postSlideStance: 'stand',
   jumpCancelsSlide: true,
   slideCameraIntensity: 1.0,
+  crosshair: cloneCrosshairSettings(DEFAULT_CROSSHAIR_SETTINGS),
+  teamColors: cloneTeamColors(DEFAULT_TEAM_COLORS),
   keybindings: { ...DEFAULT_KEYBINDINGS },
   allyTeamColor: '#3b82f6',
   enemyTeamColor: '#ef4444',
@@ -64,8 +77,18 @@ function sanitizeCallsign(raw: unknown, fallback: string): string {
 }
 
 export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_SETTINGS): GameSettings {
+  const fallbackCrosshair = validateCrosshairSettingsMap(
+    fallback.crosshair,
+    DEFAULT_CROSSHAIR_SETTINGS
+  );
+  const fallbackTeamColors = validateTeamColors(fallback.teamColors, DEFAULT_TEAM_COLORS);
   if (!raw || typeof raw !== 'object') {
-    return { ...fallback };
+    return {
+      ...fallback,
+      sfxEnabled: fallback.sfxEnabled ?? true,
+      crosshair: fallbackCrosshair,
+      teamColors: fallbackTeamColors,
+    };
   }
 
   const obj = raw as Record<string, unknown>;
@@ -183,6 +206,8 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     showFps: typeof obj.showFps === 'boolean' ? obj.showFps : fallback.showFps,
     volume: clampNumber(obj.volume, 0, 1, fallback.volume),
     sfxVolume: clampNumber(obj.sfxVolume, 0, 1, fallback.sfxVolume),
+    sfxEnabled:
+      typeof obj.sfxEnabled === 'boolean' ? obj.sfxEnabled : (fallback.sfxEnabled ?? true),
     musicVolume: clampNumber(obj.musicVolume, 0, 1, fallback.musicVolume),
     muted: typeof obj.muted === 'boolean' ? obj.muted : fallback.muted,
     graphicsQuality: quality,
@@ -205,6 +230,8 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     postSlideStance: resolvedPostStance,
     jumpCancelsSlide: resolvedJumpCancel,
     slideCameraIntensity: resolvedCameraIntensity,
+    crosshair: validateCrosshairSettingsMap(obj.crosshair, fallbackCrosshair),
+    teamColors: validateTeamColors(obj.teamColors, fallbackTeamColors),
     keybindings: validateKeybindings(obj.keybindings, fallback.keybindings ?? DEFAULT_KEYBINDINGS),
     allyTeamColor: typeof obj.allyTeamColor === 'string' && obj.allyTeamColor.startsWith('#') ? obj.allyTeamColor : (fallback.allyTeamColor ?? '#3b82f6'),
     enemyTeamColor: typeof obj.enemyTeamColor === 'string' && obj.enemyTeamColor.startsWith('#') ? obj.enemyTeamColor : (fallback.enemyTeamColor ?? '#ef4444'),
@@ -215,11 +242,17 @@ export function loadPersistedSettings(): GameSettings {
   try {
     const storage = typeof window !== 'undefined' ? window.localStorage : undefined;
     if (!storage) {
-      return { ...DEFAULT_SETTINGS };
+      return {
+        ...DEFAULT_SETTINGS,
+        crosshair: cloneCrosshairSettings(DEFAULT_CROSSHAIR_SETTINGS),
+        teamColors: cloneTeamColors(DEFAULT_TEAM_COLORS),
+      };
     }
     const legacyCallsign = storage.getItem(LEGACY_CALLSIGN_KEY);
     const baseDefault: GameSettings = {
       ...DEFAULT_SETTINGS,
+      crosshair: cloneCrosshairSettings(DEFAULT_CROSSHAIR_SETTINGS),
+      teamColors: cloneTeamColors(DEFAULT_TEAM_COLORS),
       callsign: sanitizeCallsign(
         legacyCallsign,
         `Operator-${Math.floor(100 + Math.random() * 899)}`
@@ -236,7 +269,11 @@ export function loadPersistedSettings(): GameSettings {
     const validated = validateSettings(parsed, baseDefault);
     return validated;
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return {
+      ...DEFAULT_SETTINGS,
+      crosshair: cloneCrosshairSettings(DEFAULT_CROSSHAIR_SETTINGS),
+      teamColors: cloneTeamColors(DEFAULT_TEAM_COLORS),
+    };
   }
 }
 
@@ -257,6 +294,8 @@ export function savePersistedSettings(settings: GameSettings): GameSettings {
 export function resetPersistedSettings(): GameSettings {
   const reset: GameSettings = {
     ...DEFAULT_SETTINGS,
+    crosshair: cloneCrosshairSettings(DEFAULT_CROSSHAIR_SETTINGS),
+    teamColors: cloneTeamColors(DEFAULT_TEAM_COLORS),
     keybindings: { ...DEFAULT_KEYBINDINGS },
   };
   return savePersistedSettings(reset);

@@ -1092,7 +1092,7 @@ export class PlayerController {
         : 0;
     this.slideCameraRoll +=
       (targetSlideRoll - this.slideCameraRoll) * (1 - Math.exp(-14 * clampedDt));
-    if (!this.isSliding && Math.abs(this.slideCameraRoll) < 0.0002) {
+    if (targetSlideRoll === 0 && Math.abs(this.slideCameraRoll) < 0.0002) {
       this.slideCameraRoll = 0;
     }
 

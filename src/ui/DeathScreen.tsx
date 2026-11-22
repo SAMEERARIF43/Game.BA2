@@ -7,44 +7,43 @@ import {
   KNIFE_CHARMS,
   KNIFE_CHARM_IDS,
   KnifeCharmId,
+  resolveWeaponIdFromName,
+  TeamColorsConfig,
   WEAPONS,
-  WeaponId,
 } from '../game/types';
+import { resolveSideColors } from '../settings/teamColorsConfig';
 import { WeaponPreview } from './WeaponPreview';
 
 export interface DeathScreenProps {
   hud: HudState;
   chatOpen?: boolean;
+  teamColors?: Partial<TeamColorsConfig>;
   onSelectGun: (id: GunId) => void;
   onSelectKnifeCharm?: (id: KnifeCharmId) => void;
   onRespawn: () => void;
 }
 
-function resolveKillerWeaponId(weaponName?: string | null): WeaponId | null {
-  if (!weaponName) return null;
-  const lower = weaponName.toLowerCase();
-  if (lower.includes('shotgun') || lower.includes('m870')) return 'shotgun';
-  if (lower.includes('ak')) return 'ak47';
-  if (lower.includes('smg') || lower.includes('vector')) return 'smg';
-  if (lower.includes('sniper') || lower.includes('awp')) return 'sniper';
-  if (lower.includes('pistol') || lower.includes('usp')) return 'pistol';
-  if (lower.includes('knife') || lower.includes('k-bar')) return 'knife';
-  return null;
-}
-
 export const DeathScreen: React.FC<DeathScreenProps> = ({
   hud,
   chatOpen = false,
+  teamColors,
   onSelectGun,
   onSelectKnifeCharm,
   onRespawn,
 }) => {
   const mode = hud.gameMode ?? hud.match.mode ?? 'tdm';
+  const sideColors = resolveSideColors(teamColors, hud.localTeam, mode);
+  const killerColor =
+    mode === 'ffa'
+      ? sideColors.enemyHex
+      : hud.killerBanner?.team === 'blue'
+        ? sideColors.blueHex
+        : sideColors.redHex;
   const isBombMode = mode === 'bomb';
   const canRespawn = !isBombMode && hud.respawnTimer <= 0.05;
   const queuedGun = WEAPONS[hud.queuedGunId];
   const selectedCharm = KNIFE_CHARMS[hud.knifeCharmId];
-  const killerWeaponId = resolveKillerWeaponId(
+  const killerWeaponId = resolveWeaponIdFromName(
     hud.killerBanner?.weaponName ?? hud.lastKillerWeapon
   );
 
@@ -142,9 +141,8 @@ export const DeathScreen: React.FC<DeathScreenProps> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[11px] text-slate-400">Eliminated by</span>
                 <span
-                  className={`font-display text-base font-bold ${
-                    hud.killerBanner.team === 'blue' ? 'text-blue-400' : 'text-red-400'
-                  }`}
+                  className="font-display text-base font-bold"
+                  style={{ color: killerColor }}
                 >
                   {hud.killerBanner.name}
                 </span>
@@ -183,9 +181,10 @@ export const DeathScreen: React.FC<DeathScreenProps> = ({
                   </div>
                   <div className="mt-1 h-1 w-20 bg-white/15">
                     <div
-                      className="h-full bg-red-500"
+                      className="h-full"
                       style={{
                         width: `${Math.max(0, Math.min(100, hud.killerBanner.killerHpRemaining))}%`,
+                        backgroundColor: killerColor,
                       }}
                     />
                   </div>

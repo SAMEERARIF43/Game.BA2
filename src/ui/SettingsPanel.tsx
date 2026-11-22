@@ -1,11 +1,38 @@
 import React, { useEffect, useState } from 'react';
-import { Keyboard, Maximize2, Minimize2, RotateCcw, Volume2, VolumeX } from 'lucide-react';
 import {
+  ArrowLeftRight,
+  Crosshair,
+  Keyboard,
+  Maximize2,
+  Minimize2,
+  Palette,
+  RotateCcw,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
+import {
+  CrosshairConfig,
+  CrosshairStyle,
   GameSettings,
   GraphicsQuality,
   PostSlideStance,
   SlideTriggerMode,
+  TeamColorsConfig,
+  WEAPON_IDS,
+  WEAPONS,
+  WeaponId,
 } from '../game/types';
+import {
+  computeReticleGeometry,
+  CROSSHAIR_COLOR_PRESETS,
+  CROSSHAIR_GAP_MAX,
+  CROSSHAIR_GAP_MIN,
+  CROSSHAIR_SIZE_MAX,
+  CROSSHAIR_SIZE_MIN,
+  DEFAULT_CROSSHAIR_SETTINGS,
+  getCrosshairConfigForWeapon,
+  validateCrosshairSettingsMap,
+} from '../settings/crosshairConfig';
 import {
   DEFAULT_KEYBINDINGS,
   formatKeyCode,
@@ -17,20 +44,36 @@ import {
   RESERVED_KEY_CODES,
 } from '../settings/keybindings';
 import {
+  DEFAULT_TEAM_COLORS,
+  hexToRgba,
+  TEAM_COLOR_PRESET_PAIRS,
+  TEAM_COLOR_SWATCHES,
+  validateTeamColors,
+} from '../settings/teamColorsConfig';
+import {
   isFullscreenActive,
   isFullscreenSupported,
   toggleFullscreen,
 } from '../utils/fullscreen';
 import { playUiAudioCue } from '../utils/uiAudio';
+import { WeaponPreview } from './WeaponPreview';
 
 interface SettingsPanelProps {
   settings: GameSettings;
   inMatch?: boolean;
+  initialTab?: SettingsTab;
   onUpdateSettings: (next: GameSettings) => void;
   onResetSettings?: () => void;
 }
 
-type SettingsTab = 'aim' | 'controls' | 'graphics' | 'audio' | 'match';
+export type SettingsTab =
+  | 'controls'
+  | 'crosshair'
+  | 'team_colors'
+  | 'aim'
+  | 'graphics'
+  | 'audio'
+  | 'match';
 
 const QUALITY_OPTIONS: { id: GraphicsQuality; label: string; detail: string }[] = [
   { id: 'LOW', label: 'LOW', detail: 'Shadows off · reduced FX' },
@@ -46,23 +89,97 @@ const FOCUS_CLASS =
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   settings,
   inMatch = false,
+  initialTab = 'controls',
   onUpdateSettings,
   onResetSettings,
 }) => {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('controls');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const [selectedCrosshairWeapon, setSelectedCrosshairWeapon] = useState<WeaponId>(
+    settings.selectedGunId ?? 'ak47'
+  );
+  const [previewMovementState, setPreviewMovementState] = useState<'rest' | 'active'>('rest');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => isFullscreenActive());
   const [listeningAction, setListeningAction] = useState<KeybindAction | null>(null);
   const [bindNotice, setBindNotice] = useState<string | null>(null);
   const fullscreenSupported = isFullscreenSupported();
   const keybindings = settings.keybindings ?? DEFAULT_KEYBINDINGS;
+  const sfxEnabled = settings.sfxEnabled ?? true;
+  const teamColors = validateTeamColors(settings.teamColors, DEFAULT_TEAM_COLORS);
+  const crosshairMap = validateCrosshairSettingsMap(
+    settings.crosshair,
+    DEFAULT_CROSSHAIR_SETTINGS
+  );
+  const activeCrosshair = getCrosshairConfigForWeapon(crosshairMap, selectedCrosshairWeapon);
+  const previewSpreadPx = previewMovementState === 'active' ? 30 : 14;
+  const previewGeometry = computeReticleGeometry(
+    activeCrosshair,
+    previewSpreadPx,
+    false,
+    false,
+    teamColors.enemy
+  );
 
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'controls', label: 'Controls' },
+    { id: 'crosshair', label: 'Crosshair' },
+    { id: 'team_colors', label: 'Team Colors' },
     { id: 'aim', label: 'Aim & Mouse' },
     { id: 'graphics', label: 'Graphics' },
     { id: 'audio', label: 'Audio' },
     ...(!inMatch ? [{ id: 'match' as const, label: 'Match' }] : []),
   ];
+
+  const updateTeamColors = (patch: Partial<TeamColorsConfig>) => {
+    onUpdateSettings({
+      ...settings,
+      teamColors: validateTeamColors(
+        {
+          ...teamColors,
+          ...patch,
+        },
+        DEFAULT_TEAM_COLORS
+      ),
+    });
+  };
+
+  const updateSelectedCrosshair = (patch: Partial<CrosshairConfig>) => {
+    const nextMap = validateCrosshairSettingsMap(
+      {
+        ...crosshairMap,
+        [selectedCrosshairWeapon]: {
+          ...activeCrosshair,
+          ...patch,
+        },
+      },
+      DEFAULT_CROSSHAIR_SETTINGS
+    );
+    onUpdateSettings({
+      ...settings,
+      crosshair: nextMap,
+    });
+  };
+
+  const applyCrosshairToAllWeapons = () => {
+    const nextMap = { ...crosshairMap };
+    for (const weaponId of WEAPON_IDS) {
+      nextMap[weaponId] = { ...activeCrosshair };
+    }
+    onUpdateSettings({
+      ...settings,
+      crosshair: nextMap,
+    });
+  };
+
+  const resetSelectedWeaponCrosshair = () => {
+    const nextMap = {
+      ...crosshairMap,
+      [selectedCrosshairWeapon]: { ...DEFAULT_CROSSHAIR_SETTINGS[selectedCrosshairWeapon] },
+    };
+    onUpdateSettings({
+      ...settings,
+      crosshair: nextMap,
+    });
+  };
 
   useEffect(() => {
     const syncFs = () => setIsFullscreen(isFullscreenActive());
@@ -250,9 +367,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       </section>
 
       <div
-        className={`grid gap-1 border-b border-white/10 pb-3 ${
-          inMatch ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-5'
-        }`}
+        className="flex flex-wrap gap-1 border-b border-white/10 pb-3"
         role="tablist"
         aria-label="Settings categories"
       >
@@ -281,7 +396,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               setActiveTab(nextTab.id);
               document.getElementById(`settings-tab-${nextTab.id}`)?.focus();
             }}
-            className={`border px-2 py-2 text-xs font-semibold transition-colors ${FOCUS_CLASS} ${
+            className={`min-w-[88px] flex-1 cursor-pointer border px-2.5 py-2 text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${FOCUS_CLASS} ${
               activeTab === tab.id
                 ? 'border-amber-400/70 bg-amber-400/10 text-amber-300'
                 : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-white/25 hover:text-white'
@@ -516,6 +631,544 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           </div>
         )}
 
+        {activeTab === 'crosshair' && (
+          <div className="space-y-3">
+            {/* Weapon Type Selector */}
+            <div>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="font-display text-xs font-bold tracking-wider text-amber-300 uppercase">
+                  Weapon Type Profile
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  Customize reticle per weapon
+                </span>
+              </div>
+              <div
+                className="grid grid-cols-2 gap-1.5 sm:grid-cols-3"
+                role="radiogroup"
+                aria-label="Weapon crosshair profile"
+              >
+                {WEAPON_IDS.map((weaponId) => {
+                  const weapon = WEAPONS[weaponId];
+                  const cfg = crosshairMap[weaponId];
+                  const selected = selectedCrosshairWeapon === weaponId;
+                  return (
+                    <button
+                      key={weaponId}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setSelectedCrosshairWeapon(weaponId)}
+                      className={`flex cursor-pointer flex-col gap-1 border px-2.5 py-2 text-left transition-colors ${FOCUS_CLASS} ${
+                        selected
+                          ? 'border-amber-400 bg-amber-400/12 text-white'
+                          : 'border-white/10 bg-black/25 text-slate-300 hover:border-white/25 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-display text-xs font-semibold truncate">
+                          {weapon.shortName}
+                        </span>
+                        <span
+                          aria-hidden="true"
+                          className="h-2.5 w-2.5 shrink-0 border border-white/30"
+                          style={{ backgroundColor: cfg.color }}
+                        />
+                      </div>
+                      <WeaponPreview
+                        weaponId={weaponId}
+                        charmId={settings.knifeCharmId}
+                        variant="compact"
+                        className="h-7 w-full opacity-90"
+                        accentColor={cfg.color}
+                      />
+                      <div className="flex items-center justify-between gap-1 font-mono-tabular text-[10px] text-slate-400">
+                        <span className="truncate">{weapon.category}</span>
+                        <span className="shrink-0 text-slate-300">
+                          {cfg.style === 'dynamic' ? 'Dyn' : 'Static'} · {cfg.size}px
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Live Crosshair Preview + Quick Style & Color */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
+              <div className="flex flex-col justify-between border border-white/12 bg-[#070a0f] p-2.5 sm:col-span-5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-200">
+                    <Crosshair className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
+                    <span className="truncate">{WEAPONS[selectedCrosshairWeapon].shortName}</span>
+                  </div>
+                  <div className="inline-flex border border-white/10 bg-black/50">
+                    {(
+                      [
+                        { id: 'rest', label: 'Rest' },
+                        { id: 'active', label: 'Moving / Firing' },
+                      ] as const
+                    ).map((modeOpt) => {
+                      const active = previewMovementState === modeOpt.id;
+                      return (
+                        <button
+                          key={modeOpt.id}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => setPreviewMovementState(modeOpt.id)}
+                          className={`cursor-pointer px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap transition-colors ${FOCUS_CLASS} ${
+                            active
+                              ? 'bg-amber-400/20 text-amber-200'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {modeOpt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Live Reticle Range Canvas */}
+                <div
+                  className="relative my-2 flex h-32 w-full items-center justify-center overflow-hidden border border-white/10"
+                  style={{
+                    backgroundImage:
+                      'radial-gradient(circle at center, rgba(30,41,59,0.55) 0%, rgba(7,10,15,0.95) 75%), linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px)',
+                    backgroundSize: '100% 100%, 16px 16px, 16px 16px',
+                  }}
+                >
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none h-14 w-14 rounded-full border border-white/8"
+                  />
+                  <div
+                    data-crosshair-preview={selectedCrosshairWeapon}
+                    data-crosshair-style={previewGeometry.style}
+                    data-crosshair-gap={previewGeometry.gap}
+                    data-crosshair-size={previewGeometry.tickLen}
+                    data-crosshair-color={previewGeometry.color}
+                    className="pointer-events-none absolute inset-0 flex items-center justify-center"
+                  >
+                    <div className="relative flex items-center justify-center">
+                      <span
+                        className="h-1 w-1 rounded-full"
+                        style={{ backgroundColor: previewGeometry.color }}
+                      />
+                      <span
+                        className="absolute w-[2px]"
+                        style={{
+                          height: `${previewGeometry.tickLen}px`,
+                          backgroundColor: previewGeometry.color,
+                          transform: `translateY(-${previewGeometry.gap + previewGeometry.tickLen / 2}px)`,
+                        }}
+                      />
+                      <span
+                        className="absolute w-[2px]"
+                        style={{
+                          height: `${previewGeometry.tickLen}px`,
+                          backgroundColor: previewGeometry.color,
+                          transform: `translateY(${previewGeometry.gap + previewGeometry.tickLen / 2}px)`,
+                        }}
+                      />
+                      <span
+                        className="absolute h-[2px]"
+                        style={{
+                          width: `${previewGeometry.tickLen}px`,
+                          backgroundColor: previewGeometry.color,
+                          transform: `translateX(-${previewGeometry.gap + previewGeometry.tickLen / 2}px)`,
+                        }}
+                      />
+                      <span
+                        className="absolute h-[2px]"
+                        style={{
+                          width: `${previewGeometry.tickLen}px`,
+                          backgroundColor: previewGeometry.color,
+                          transform: `translateX(${previewGeometry.gap + previewGeometry.tickLen / 2}px)`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between font-mono-tabular text-[10px] text-slate-400">
+                  <span>
+                    {activeCrosshair.style === 'dynamic' ? 'Dynamic Bloom' : 'Static Lock'}
+                  </span>
+                  <span>
+                    Size {previewGeometry.tickLen}px · Gap {Math.round(previewGeometry.gap)}px
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2.5 sm:col-span-7">
+                {/* Style Toggle: Dynamic vs Static */}
+                <div className="border border-white/10 bg-black/25 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={LABEL_CLASS}>Crosshair Style</span>
+                    <span className="text-[10px] text-slate-400">
+                      {activeCrosshair.style === 'dynamic'
+                        ? 'Expands with recoil & movement'
+                        : 'Fixed gap regardless of movement'}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    {(
+                      [
+                        { id: 'dynamic', label: 'Dynamic' },
+                        { id: 'static', label: 'Static' },
+                      ] as { id: CrosshairStyle; label: string }[]
+                    ).map((opt) => {
+                      const active = activeCrosshair.style === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => updateSelectedCrosshair({ style: opt.id })}
+                          className={`cursor-pointer border px-2.5 py-1.5 text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${FOCUS_CLASS} ${
+                            active
+                              ? 'border-amber-400 bg-amber-400/15 text-amber-200'
+                              : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Color Presets + Custom Picker */}
+                <div className="border border-white/10 bg-black/25 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={LABEL_CLASS}>Crosshair Color</span>
+                    <span className="font-mono-tabular text-[11px] text-slate-200 uppercase">
+                      {activeCrosshair.color}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {CROSSHAIR_COLOR_PRESETS.map((preset) => {
+                      const selected =
+                        activeCrosshair.color.toLowerCase() === preset.hex.toLowerCase();
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          title={preset.label}
+                          aria-label={`Set crosshair color to ${preset.label}`}
+                          aria-pressed={selected}
+                          onClick={() => updateSelectedCrosshair({ color: preset.hex })}
+                          className={`h-7 w-7 cursor-pointer border transition-transform hover:scale-105 ${FOCUS_CLASS} ${
+                            selected
+                              ? 'border-white ring-2 ring-amber-400'
+                              : 'border-white/25'
+                          }`}
+                          style={{ backgroundColor: preset.hex }}
+                        />
+                      );
+                    })}
+                    <label className="ml-auto flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-2 py-1 text-[11px] text-slate-300 hover:border-white/30">
+                      <span>Custom</span>
+                      <input
+                        type="color"
+                        aria-label="Custom crosshair color"
+                        value={activeCrosshair.color}
+                        onChange={(event) =>
+                          updateSelectedCrosshair({ color: event.target.value })
+                        }
+                        className="h-5 w-6 cursor-pointer border-0 bg-transparent p-0"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                {/* Size & Gap Sliders */}
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  {renderSlider(
+                    'Crosshair Size',
+                    activeCrosshair.size,
+                    CROSSHAIR_SIZE_MIN,
+                    CROSSHAIR_SIZE_MAX,
+                    1,
+                    `${activeCrosshair.size}px`,
+                    (size) => updateSelectedCrosshair({ size })
+                  )}
+                  {renderSlider(
+                    'Center Gap',
+                    activeCrosshair.gap,
+                    CROSSHAIR_GAP_MIN,
+                    CROSSHAIR_GAP_MAX,
+                    1,
+                    `${activeCrosshair.gap}px`,
+                    (gap) => updateSelectedCrosshair({ gap })
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Per-Weapon Utility Actions */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border border-white/10 bg-black/25 px-3 py-2">
+              <span className="text-[11px] text-slate-400">
+                Editing: <span className="font-semibold text-slate-200">{WEAPONS[selectedCrosshairWeapon].name}</span>
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={applyCrosshairToAllWeapons}
+                  className={`cursor-pointer border border-amber-400/40 bg-amber-400/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200 whitespace-nowrap transition-colors hover:bg-amber-400/20 ${FOCUS_CLASS}`}
+                >
+                  Apply to All Weapons
+                </button>
+                <button
+                  type="button"
+                  onClick={resetSelectedWeaponCrosshair}
+                  className={`cursor-pointer border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-slate-300 whitespace-nowrap transition-colors hover:bg-white/10 hover:text-white ${FOCUS_CLASS}`}
+                >
+                  Reset {WEAPONS[selectedCrosshairWeapon].shortName}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'team_colors' && (
+          <div className="space-y-3" data-team-colors-panel="true">
+            {/* Live Ally vs Enemy Visibility Preview */}
+            <div className="border border-white/12 bg-[#070a0f] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
+                  <Palette className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Ally &amp; Enemy Visibility Preview</span>
+                </div>
+                <span className="text-[11px] text-slate-400">
+                  Applies to 3D operators, tracers, pings, minimap &amp; scoreboard
+                </span>
+              </div>
+
+              <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div
+                  className="flex items-center justify-between gap-3 border px-3 py-2.5"
+                  style={{
+                    borderColor: hexToRgba(teamColors.ally, 0.5),
+                    backgroundColor: hexToRgba(teamColors.ally, 0.1),
+                  }}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 shrink-0 border border-white/40"
+                      style={{ backgroundColor: teamColors.ally }}
+                    />
+                    <div className="min-w-0">
+                      <div
+                        className="font-display text-xs font-bold tracking-wide truncate"
+                        style={{ color: teamColors.ally }}
+                      >
+                        ALLY · SQUADMATE
+                      </div>
+                      <div className="text-[10px] text-slate-300">
+                        Visor glow, teammate minimap markers &amp; pings
+                      </div>
+                    </div>
+                  </div>
+                  <span
+                    className="shrink-0 font-mono-tabular text-[11px] font-bold uppercase"
+                    style={{ color: teamColors.ally }}
+                  >
+                    {teamColors.ally}
+                  </span>
+                </div>
+
+                <div
+                  className="flex items-center justify-between gap-3 border px-3 py-2.5"
+                  style={{
+                    borderColor: hexToRgba(teamColors.enemy, 0.5),
+                    backgroundColor: hexToRgba(teamColors.enemy, 0.1),
+                  }}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 shrink-0 rotate-45 border border-white/40"
+                      style={{ backgroundColor: teamColors.enemy }}
+                    />
+                    <div className="min-w-0">
+                      <div
+                        className="font-display text-xs font-bold tracking-wide truncate"
+                        style={{ color: teamColors.enemy }}
+                      >
+                        ENEMY · HOSTILE
+                      </div>
+                      <div className="text-[10px] text-slate-300">
+                        Hostile visors, target reticle tint &amp; enemy pings
+                      </div>
+                    </div>
+                  </div>
+                  <span
+                    className="shrink-0 font-mono-tabular text-[11px] font-bold uppercase"
+                    style={{ color: teamColors.enemy }}
+                  >
+                    {teamColors.enemy}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Accessibility & High-Contrast Presets */}
+            <div className="border border-white/10 bg-black/25 p-2.5">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className={LABEL_CLASS}>Visibility &amp; Colorblind Presets</span>
+                <span className="text-[10px] text-slate-400">One-click pair presets</span>
+              </div>
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                {TEAM_COLOR_PRESET_PAIRS.map((preset) => {
+                  const active =
+                    preset.colors.ally.toLowerCase() === teamColors.ally.toLowerCase() &&
+                    preset.colors.enemy.toLowerCase() === teamColors.enemy.toLowerCase();
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => updateTeamColors(preset.colors)}
+                      className={`flex cursor-pointer items-center justify-between gap-2 border px-2.5 py-2 text-left transition-colors ${FOCUS_CLASS} ${
+                        active
+                          ? 'border-amber-400 bg-amber-400/12 text-white'
+                          : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold truncate">{preset.label}</div>
+                        <div className="text-[10px] text-slate-400 truncate">
+                          {preset.description}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1" aria-hidden="true">
+                        <span
+                          className="h-4 w-4 border border-white/30"
+                          style={{ backgroundColor: preset.colors.ally }}
+                        />
+                        <span
+                          className="h-4 w-4 border border-white/30"
+                          style={{ backgroundColor: preset.colors.enemy }}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Individual Ally & Enemy Color Pickers */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="border border-white/10 bg-black/25 p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className={LABEL_CLASS}>Ally Color</span>
+                  <span className="font-mono-tabular text-[11px] text-slate-200 uppercase">
+                    {teamColors.ally}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {TEAM_COLOR_SWATCHES.map((swatch) => {
+                    const selected =
+                      teamColors.ally.toLowerCase() === swatch.hex.toLowerCase();
+                    return (
+                      <button
+                        key={`ally_${swatch.id}`}
+                        type="button"
+                        title={swatch.label}
+                        aria-label={`Set ally color to ${swatch.label}`}
+                        aria-pressed={selected}
+                        onClick={() => updateTeamColors({ ally: swatch.hex })}
+                        className={`h-7 w-7 cursor-pointer border transition-transform hover:scale-105 ${FOCUS_CLASS} ${
+                          selected ? 'border-white ring-2 ring-amber-400' : 'border-white/25'
+                        }`}
+                        style={{ backgroundColor: swatch.hex }}
+                      />
+                    );
+                  })}
+                  <label className="ml-auto flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-2 py-1 text-[11px] text-slate-300 hover:border-white/30">
+                    <span>Custom</span>
+                    <input
+                      type="color"
+                      aria-label="Custom ally color"
+                      value={teamColors.ally}
+                      onChange={(event) => updateTeamColors({ ally: event.target.value })}
+                      className="h-5 w-6 cursor-pointer border-0 bg-transparent p-0"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="border border-white/10 bg-black/25 p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className={LABEL_CLASS}>Enemy Color</span>
+                  <span className="font-mono-tabular text-[11px] text-slate-200 uppercase">
+                    {teamColors.enemy}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {TEAM_COLOR_SWATCHES.map((swatch) => {
+                    const selected =
+                      teamColors.enemy.toLowerCase() === swatch.hex.toLowerCase();
+                    return (
+                      <button
+                        key={`enemy_${swatch.id}`}
+                        type="button"
+                        title={swatch.label}
+                        aria-label={`Set enemy color to ${swatch.label}`}
+                        aria-pressed={selected}
+                        onClick={() => updateTeamColors({ enemy: swatch.hex })}
+                        className={`h-7 w-7 cursor-pointer border transition-transform hover:scale-105 ${FOCUS_CLASS} ${
+                          selected ? 'border-white ring-2 ring-amber-400' : 'border-white/25'
+                        }`}
+                        style={{ backgroundColor: swatch.hex }}
+                      />
+                    );
+                  })}
+                  <label className="ml-auto flex cursor-pointer items-center gap-1.5 border border-white/15 bg-white/5 px-2 py-1 text-[11px] text-slate-300 hover:border-white/30">
+                    <span>Custom</span>
+                    <input
+                      type="color"
+                      aria-label="Custom enemy color"
+                      value={teamColors.enemy}
+                      onChange={(event) => updateTeamColors({ enemy: event.target.value })}
+                      className="h-5 w-6 cursor-pointer border-0 bg-transparent p-0"
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Swap & Reset Team Colors */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border border-white/10 bg-black/25 px-3 py-2">
+              <span className="text-[11px] text-slate-400">
+                Tip: Pair high-contrast hues for faster target acquisition.
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateTeamColors({ ally: teamColors.enemy, enemy: teamColors.ally })
+                  }
+                  className={`inline-flex cursor-pointer items-center gap-1.5 border border-amber-400/40 bg-amber-400/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200 whitespace-nowrap shrink-0 transition-colors hover:bg-amber-400/20 ${FOCUS_CLASS}`}
+                >
+                  <ArrowLeftRight className="h-3 w-3" aria-hidden="true" />
+                  <span>Swap Colors</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateTeamColors(DEFAULT_TEAM_COLORS)}
+                  className={`cursor-pointer border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-slate-300 whitespace-nowrap shrink-0 transition-colors hover:bg-white/10 hover:text-white ${FOCUS_CLASS}`}
+                >
+                  Reset Team Colors
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'aim' && (
           <>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -685,16 +1338,115 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         )}
 
         {activeTab === 'audio' && (
-          <>
-            {renderSlider(
-              'SFX & UI Clicks Volume',
-              settings.sfxVolume,
-              0,
-              1,
-              0.05,
-              `${Math.round(settings.sfxVolume * 100)}%`,
-              (sfxVolume) => onUpdateSettings({ ...settings, sfxVolume })
-            )}
+          <div className="space-y-3" data-audio-panel="true">
+            {/* Master Volume + Global Mute */}
+            <div className="border border-white/10 bg-black/25 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className={LABEL_CLASS}>Master Volume</div>
+                  <div className="text-[10px] text-slate-400">
+                    Controls overall output level across sound effects and ambient audio
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!settings.muted}
+                    aria-label="Master audio output"
+                    onClick={() => onUpdateSettings({ ...settings, muted: !settings.muted })}
+                    className={`cursor-pointer border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap shrink-0 transition-colors ${FOCUS_CLASS} ${
+                      settings.muted
+                        ? 'border-red-400/45 bg-red-500/15 text-red-200 hover:bg-red-500/25'
+                        : 'border-amber-400/50 bg-amber-400/15 text-amber-200 hover:bg-amber-400/25'
+                    }`}
+                  >
+                    {settings.muted ? 'Muted' : 'Active'}
+                  </button>
+                  <span className="w-10 text-right font-mono-tabular text-xs font-semibold text-white">
+                    {effectiveVolumePct}%
+                  </span>
+                </div>
+              </div>
+              <input
+                type="range"
+                aria-label="Master Volume"
+                min={0}
+                max={1}
+                step={0.05}
+                value={settings.volume}
+                onChange={(event) => {
+                  const nextVolume = Number(event.target.value);
+                  onUpdateSettings({
+                    ...settings,
+                    volume: nextVolume,
+                    muted: nextVolume <= 0,
+                  });
+                }}
+                className={RANGE_CLASS}
+              />
+            </div>
+
+            {/* Sound Effects Toggle + Volume Slider */}
+            <div className="border border-white/10 bg-black/25 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className={LABEL_CLASS}>Sound Effects</div>
+                  <div className="text-[10px] text-slate-400">
+                    Gunshots, footsteps, hitmarkers, reloads &amp; interface clicks
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={sfxEnabled}
+                    aria-label="Toggle Sound Effects"
+                    onClick={() => onUpdateSettings({ ...settings, sfxEnabled: !sfxEnabled })}
+                    className={`inline-flex cursor-pointer items-center gap-2 border px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap shrink-0 transition-colors ${FOCUS_CLASS} ${
+                      sfxEnabled
+                        ? 'border-amber-400/50 bg-amber-400/15 text-amber-200 hover:bg-amber-400/25'
+                        : 'border-white/15 bg-white/5 text-slate-400 hover:border-white/25 hover:text-slate-200'
+                    }`}
+                  >
+                    <span>{sfxEnabled ? 'On' : 'Off'}</span>
+                    <span
+                      aria-hidden="true"
+                      className={`relative h-4 w-7 rounded-full border transition-colors ${
+                        sfxEnabled ? 'border-amber-400 bg-amber-400/30' : 'border-slate-600 bg-slate-800'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-2.5 w-2.5 rounded-full transition-transform ${
+                          sfxEnabled ? 'translate-x-3 bg-amber-300' : 'translate-x-0.5 bg-slate-400'
+                        }`}
+                      />
+                    </span>
+                  </button>
+                  <span className="w-10 text-right font-mono-tabular text-xs font-semibold text-white">
+                    {sfxEnabled ? `${Math.round(settings.sfxVolume * 100)}%` : 'Off'}
+                  </span>
+                </div>
+              </div>
+              <input
+                type="range"
+                aria-label="Sound Effects Volume"
+                min={0}
+                max={1}
+                step={0.05}
+                value={settings.sfxVolume}
+                onChange={(event) => {
+                  const sfxVolume = Number(event.target.value);
+                  onUpdateSettings({
+                    ...settings,
+                    sfxVolume,
+                    sfxEnabled: sfxVolume > 0,
+                  });
+                }}
+                className={`${RANGE_CLASS} ${!sfxEnabled ? 'opacity-50' : ''}`}
+              />
+            </div>
+
             {renderSlider(
               'Ambient / Music Volume',
               settings.musicVolume,
@@ -704,30 +1456,33 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               `${Math.round(settings.musicVolume * 100)}%`,
               (musicVolume) => onUpdateSettings({ ...settings, musicVolume })
             )}
+
             <div className="flex flex-wrap items-center justify-between gap-3 border border-white/10 bg-black/25 px-3 py-2.5">
               <div className="flex items-center gap-2 text-[11px] text-slate-300">
-                {settings.muted || settings.volume <= 0 ? (
+                {settings.muted || settings.volume <= 0 || !sfxEnabled || settings.sfxVolume <= 0 ? (
                   <VolumeX className="h-3.5 w-3.5 text-red-400" aria-hidden="true" />
                 ) : (
                   <Volume2 className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
                 )}
                 <span>
-                  {settings.muted
-                    ? 'All game SFX, ambient audio, and UI clicks are muted.'
-                    : 'Global mute and master volume apply to game SFX and UI clicks.'}
+                  {settings.muted || settings.volume <= 0
+                    ? 'Master audio is muted across all channels.'
+                    : !sfxEnabled || settings.sfxVolume <= 0
+                      ? 'Sound effects are toggled off; ambient music remains active.'
+                      : 'Master volume and sound effects controls are active.'}
                 </span>
               </div>
               <button
                 type="button"
                 data-ui-sound="none"
-                disabled={settings.muted || settings.volume <= 0}
+                disabled={settings.muted || settings.volume <= 0 || !sfxEnabled || settings.sfxVolume <= 0}
                 onClick={() => playUiAudioCue('sfx_preview')}
-                className={`cursor-pointer border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-amber-400/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap ${FOCUS_CLASS}`}
+                className={`cursor-pointer border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-amber-400/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap shrink-0 ${FOCUS_CLASS}`}
               >
                 Test Sound
               </button>
             </div>
-          </>
+          </div>
         )}
 
         {activeTab === 'match' && !inMatch && (

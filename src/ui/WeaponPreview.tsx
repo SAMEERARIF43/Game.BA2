@@ -1,11 +1,18 @@
 import React, { useId } from 'react';
-import { KNIFE_CHARMS, KnifeCharmId, WeaponId } from '../game/types';
+import { Crosshair } from 'lucide-react';
+import {
+  isOrdnanceKillName,
+  KNIFE_CHARMS,
+  KnifeCharmId,
+  resolveWeaponIdFromName,
+  WeaponId,
+} from '../game/types';
 
 export interface WeaponPreviewProps {
   weaponId: WeaponId;
   charmId?: KnifeCharmId;
   className?: string;
-  variant?: 'card' | 'compact';
+  variant?: 'card' | 'compact' | 'icon';
   accentColor?: string;
 }
 
@@ -23,6 +30,7 @@ export const WeaponPreview: React.FC<WeaponPreviewProps> = ({
   const bladeId = `wp-blade-${uid}`;
   const opticGlowId = `wp-optic-${uid}`;
 
+  const isIcon = variant === 'icon';
   const charmHex = KNIFE_CHARMS[charmId]?.accentHex ?? '#f59e0b';
   const defaultAccent =
     weaponId === 'sniper'
@@ -40,7 +48,11 @@ export const WeaponPreview: React.FC<WeaponPreviewProps> = ({
 
   const sizeClass =
     className ||
-    (variant === 'compact' ? 'h-10 w-36' : 'h-16 w-full');
+    (variant === 'icon'
+      ? 'h-5 w-14 shrink-0'
+      : variant === 'compact'
+        ? 'h-10 w-36'
+        : 'h-16 w-full');
 
   return (
     <svg
@@ -49,17 +61,17 @@ export const WeaponPreview: React.FC<WeaponPreviewProps> = ({
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden="true"
       data-weapon-preview={weaponId}
-      className={`select-none ${sizeClass}`}
+      className={`select-none ${isIcon ? 'drop-shadow-[0_0_1.5px_rgba(248,250,252,0.45)]' : ''} ${sizeClass}`}
     >
       <defs>
         <linearGradient id={steelId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#94a3b8" />
-          <stop offset="45%" stopColor="#475569" />
-          <stop offset="100%" stopColor="#1e293b" />
+          <stop offset="0%" stopColor={isIcon ? '#e2e8f0' : '#94a3b8'} />
+          <stop offset="45%" stopColor={isIcon ? '#94a3b8' : '#475569'} />
+          <stop offset="100%" stopColor={isIcon ? '#475569' : '#1e293b'} />
         </linearGradient>
         <linearGradient id={darkId} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#334155" />
-          <stop offset="100%" stopColor="#0f172a" />
+          <stop offset="0%" stopColor={isIcon ? '#94a3b8' : '#334155'} />
+          <stop offset="100%" stopColor={isIcon ? '#334155' : '#0f172a'} />
         </linearGradient>
         <linearGradient id={woodId} x1="0" y1="0" x2="1" y2="0">
           <stop offset="0%" stopColor="#92400e" />
@@ -270,3 +282,58 @@ export const WeaponPreview: React.FC<WeaponPreviewProps> = ({
     </svg>
   );
 };
+
+export interface KillFeedWeaponIconProps {
+  weaponName: string;
+  weaponId?: WeaponId;
+  className?: string;
+}
+
+export const KillFeedWeaponIcon: React.FC<KillFeedWeaponIconProps> = ({
+  weaponName,
+  weaponId,
+  className,
+}) => {
+  const resolvedId = weaponId ?? resolveWeaponIdFromName(weaponName);
+  if (resolvedId) {
+    return (
+      <WeaponPreview
+        weaponId={resolvedId}
+        variant="icon"
+        className={className ?? 'h-5 w-14 shrink-0'}
+      />
+    );
+  }
+
+  if (isOrdnanceKillName(weaponName)) {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        aria-hidden="true"
+        data-killfeed-icon="ordnance"
+        className={className ?? 'h-4 w-6 shrink-0 text-amber-300'}
+      >
+        <path
+          d="M12 3L15.5 9.5L21 10.5L16.5 14.5L17.8 20.5L12 17.2L6.2 20.5L7.5 14.5L3 10.5L8.5 9.5L12 3Z"
+          fill="currentColor"
+          fillOpacity="0.25"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+        <circle cx="12" cy="12.5" r="2.2" fill="currentColor" />
+      </svg>
+    );
+  }
+
+  return (
+    <Crosshair
+      aria-hidden="true"
+      data-killfeed-icon="generic"
+      className={className ?? 'h-3.5 w-3.5 shrink-0 text-slate-300'}
+    />
+  );
+};
+

@@ -16,6 +16,7 @@ import {
   OperatorRig,
   buildOperatorRig,
   createOperatorPalette,
+  updateOperatorPaletteTeamColor,
 } from '../game/OperatorMeshBuilder';
 import {
   PooledTracerRingBuffer,
@@ -66,6 +67,8 @@ export class RemotePlayerRenderer {
   private redPalette: OperatorPalette;
   private blueTracerMat: StandardMaterial;
   private redTracerMat: StandardMaterial;
+  private blueHex = '#3b82f6';
+  private redHex = '#ef4444';
   private readonly fireStartScratch = new Vector3();
   private readonly fireEndScratch = new Vector3();
 
@@ -97,6 +100,53 @@ export class RemotePlayerRenderer {
       this.blueTracerMat,
       this.redTracerMat
     );
+  }
+
+  public setTeamColors(blueHex: string, redHex: string): void {
+    this.blueHex = blueHex;
+    this.redHex = redHex;
+    updateOperatorPaletteTeamColor(this.bluePalette, blueHex);
+    updateOperatorPaletteTeamColor(this.redPalette, redHex);
+
+    try {
+      const b = Color3.FromHexString(blueHex);
+      this.blueTracerMat.emissiveColor = new Color3(
+        b.r * 1.45 + 0.2,
+        b.g * 1.45 + 0.2,
+        b.b * 1.45 + 0.2
+      );
+    } catch {
+      // Ignore invalid color
+    }
+    try {
+      const r = Color3.FromHexString(redHex);
+      this.redTracerMat.emissiveColor = new Color3(
+        r.r * 1.45 + 0.2,
+        r.g * 1.45 + 0.2,
+        r.b * 1.45 + 0.2
+      );
+    } catch {
+      // Ignore invalid color
+    }
+
+    for (const avatar of this.avatars.values()) {
+      this.drawNameplate(avatar.nameplateTex, avatar.name, avatar.team);
+    }
+  }
+
+  private drawNameplate(tex: DynamicTexture, name: string, team: TeamId): void {
+    const nctx = tex.getContext() as unknown as CanvasRenderingContext2D;
+    nctx.clearRect(0, 0, 256, 64);
+    nctx.fillStyle = 'rgba(10, 14, 20, 0.72)';
+    nctx.fillRect(12, 12, 232, 40);
+    nctx.fillStyle = team === 'blue' ? this.blueHex : this.redHex;
+    nctx.fillRect(12, 12, 6, 40);
+    nctx.fillStyle = '#f8fafc';
+    nctx.font = 'bold 22px sans-serif';
+    nctx.textAlign = 'center';
+    nctx.textBaseline = 'middle';
+    nctx.fillText(name.slice(0, 14), 132, 32);
+    tex.update();
   }
 
   public setGraphicsQuality(quality: GraphicsQuality): void {
@@ -330,18 +380,7 @@ export class RemotePlayerRenderer {
     // Floating Nameplate Billboard (named rem_np_* so GlowLayer excludes it)
     const nameplateTex = new DynamicTexture(`rem_np_tex_${p.id}`, { width: 256, height: 64 }, this.scene, true);
     nameplateTex.hasAlpha = true;
-    const nctx = nameplateTex.getContext() as unknown as CanvasRenderingContext2D;
-    nctx.clearRect(0, 0, 256, 64);
-    nctx.fillStyle = 'rgba(10, 14, 20, 0.72)';
-    nctx.fillRect(12, 12, 232, 40);
-    nctx.fillStyle = p.team === 'blue' ? '#3b82f6' : '#ef4444';
-    nctx.fillRect(12, 12, 6, 40);
-    nctx.fillStyle = '#f8fafc';
-    nctx.font = 'bold 22px sans-serif';
-    nctx.textAlign = 'center';
-    nctx.textBaseline = 'middle';
-    nctx.fillText(p.name.slice(0, 14), 132, 32);
-    nameplateTex.update();
+    this.drawNameplate(nameplateTex, p.name, p.team);
 
     const nameplateMat = new StandardMaterial(`rem_np_mat_${p.id}`, this.scene);
     nameplateMat.diffuseTexture = nameplateTex;

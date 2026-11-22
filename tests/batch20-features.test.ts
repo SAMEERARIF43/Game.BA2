@@ -197,8 +197,14 @@ test('Batch 20: Repeated damage impulses decay camera.rotation.z cleanly back to
       player.spawnAt(new Vector3(2, 0.95, -5), Math.PI * 0.25);
       assert.strictEqual(player.camera.rotation.z, 0, 'Respawn must reset camera.rotation.z to exact 0');
 
-      // Also verify setCanControl(false) clears mid-flinch tilt cleanly
+      // Also verify setCanControl(false) and resetTransientMotion() clear mid-flinch tilt cleanly
       player.applyDamageImpact(34, new Vector3(10, 1, 0), false);
+      assert.ok(Math.abs(player.camera.rotation.z) > 0.002);
+      player.resetTransientMotion();
+      assert.strictEqual(player.getCameraRollDebugState().damageFlinchRoll, 0);
+      assert.strictEqual(player.camera.rotation.z, 0, 'resetTransientMotion must clear residual flinch tilt');
+
+      player.applyDamageImpact(34, new Vector3(-10, 1, 0), false);
       assert.ok(Math.abs(player.camera.rotation.z) > 0.002);
       player.setCanControl(false);
       assert.strictEqual(player.camera.rotation.z, 0, 'setCanControl(false) must clear residual flinch tilt');
@@ -261,7 +267,7 @@ test('Batch 20: Death holds respawn until explicit player confirmation and equip
 
   try {
     // Advance simulation by 0.6s
-    (room as any).stepSimulation(0.6);
+    (room as any).simulateTick(0.6);
 
     assert.strictEqual(bot.isAlive, true, 'Bots should still auto-respawn when timer reaches 0');
     assert.strictEqual(human.isAlive, false, 'Human player must NOT auto-respawn before explicit confirmation');
@@ -356,11 +362,11 @@ test('Batch 20: WeaponPreview renders distinct SVGs for all 5 guns + knife and D
   }
 
   const knifeHtml = renderToStaticMarkup(
-    React.createElement(WeaponPreview, { weaponId: 'knife', charmId: 'neon_blade' })
+    React.createElement(WeaponPreview, { weaponId: 'knife', charmId: 'cyber_core' })
   );
   assert.ok(knifeHtml.includes('data-weapon-art="knife"'));
   assert.ok(
-    knifeHtml.includes(KNIFE_CHARMS.neon_blade.accentHex),
+    knifeHtml.includes(KNIFE_CHARMS.cyber_core.accentHex),
     'Knife WeaponPreview must render selected charm accent color'
   );
   assert.strictEqual(renderedArt.size, 5, 'All 5 guns must produce distinct visual artwork');

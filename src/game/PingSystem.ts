@@ -208,6 +208,34 @@ export class PingSystem {
     return mat;
   }
 
+  public setTeamColors(allyHex: string, enemyHex: string): void {
+    try {
+      const ally = Color3.FromHexString(allyHex);
+      this.locationOuterMat.emissiveColor = new Color3(ally.r, ally.g, ally.b);
+      this.locationCoreMat.emissiveColor = new Color3(
+        Math.min(1, ally.r * 0.55 + 0.45),
+        Math.min(1, ally.g * 0.55 + 0.45),
+        Math.min(1, ally.b * 0.55 + 0.45)
+      );
+      this.locationBeamMat.emissiveColor = new Color3(ally.r * 0.9, ally.g * 0.9, ally.b * 0.9);
+    } catch {
+      // Ignore malformed ally hex
+    }
+
+    try {
+      const enemy = Color3.FromHexString(enemyHex);
+      this.enemyOuterMat.emissiveColor = new Color3(enemy.r, enemy.g, enemy.b);
+      this.enemyCoreMat.emissiveColor = new Color3(
+        Math.min(1, enemy.r * 0.55 + 0.45),
+        Math.min(1, enemy.g * 0.55 + 0.45),
+        Math.min(1, enemy.b * 0.55 + 0.45)
+      );
+      this.enemyBeamMat.emissiveColor = new Color3(enemy.r * 0.9, enemy.g * 0.9, enemy.b * 0.9);
+    } catch {
+      // Ignore malformed enemy hex
+    }
+  }
+
   private createSlot(index: number): PingVisualSlot {
     const root = new TransformNode(`pingSlot_${index}`, this.scene);
     root.parent = this.poolRoot;

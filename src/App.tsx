@@ -117,6 +117,8 @@ export default function App() {
             hud={hud}
             showFps={settings.showFps}
             keybindings={settings.keybindings}
+            crosshairSettings={settings.crosshair}
+            teamColors={settings.teamColors}
             onSelectGun={actions.selectGun}
             onSelectKnifeCharm={actions.selectKnifeCharm}
             onRespawn={actions.respawnPlayer}
@@ -153,6 +155,8 @@ export default function App() {
               playerStats={derived.postMatchStats}
               xp={hud.xp}
               sessionXpEarned={hud.sessionXpEarned}
+              teamColors={settings.teamColors}
+              localTeam={hud.localTeam}
               isMultiplayer
               isHost={derived.isMultiplayerHost}
               onPlayAgain={actions.restartMatch}
@@ -171,6 +175,8 @@ export default function App() {
             hud={hud}
             showFps={settings.showFps}
             keybindings={settings.keybindings}
+            crosshairSettings={settings.crosshair}
+            teamColors={settings.teamColors}
             onSelectGun={actions.selectGun}
             onSelectKnifeCharm={actions.selectKnifeCharm}
             onRespawn={actions.respawnPlayer}
@@ -204,6 +210,8 @@ export default function App() {
               playerStats={derived.postMatchStats}
               xp={hud.xp}
               sessionXpEarned={hud.sessionXpEarned}
+              teamColors={settings.teamColors}
+              localTeam={hud.localTeam}
               onPlayAgain={actions.restartMatch}
               onReturnToLobby={lobbySnapshot?.isLocalSolo ? actions.returnToLobby : undefined}
               onReturnToMenu={actions.backToMenu}

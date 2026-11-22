@@ -36,6 +36,7 @@ import {
   getRankSummary,
   loadProgression,
 } from '../settings/progressionStorage';
+import { resolveSideColors } from '../settings/teamColorsConfig';
 import { AudioEngine } from './AudioEngine';
 import {
   GUN_LOCKED_WHILE_ALIVE_MESSAGE,
@@ -304,7 +305,8 @@ export class EngineManager {
       initialSettings.volume,
       initialSettings.sfxVolume,
       initialSettings.musicVolume,
-      initialSettings.muted
+      initialSettings.muted,
+      initialSettings.sfxEnabled ?? true
     );
     this.audio.setAmbientEnvironment('menu');
 
@@ -318,6 +320,7 @@ export class EngineManager {
     this.matchManager = new MatchManager();
     this.remoteRenderer = new RemotePlayerRenderer(this.scene);
     this.pingSystem = new PingSystem(this.scene);
+    this.syncTeamColorsToScene('blue');
 
     this.player = new PlayerController(this.scene, this.canvas, this.audio, {
       onFirePress: () => this.weapons.onFirePress(),
@@ -746,6 +749,7 @@ export class EngineManager {
     const local = snapshot.players.find((p) => p.id === snapshot.localPlayerId);
     const localTeam = local?.team ?? 'blue';
     this.pingSystem.setLocalTeam(localTeam);
+    this.syncTeamColorsToScene(localTeam);
     this.weapons.setGameMode(mode);
     this.weapons.setMultiplayerContext(true, localTeam, snapshot.friendlyFire);
     this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
@@ -834,10 +838,13 @@ export class EngineManager {
 
       const local = snapshot.players.find((p) => p.id === snapshot.localPlayerId);
       if (local) {
+        const wasAlive = this.playerIsAlive;
         this.playerHealth = local.health;
         this.playerIsAlive = local.isAlive;
         this.playerRespawnTimer = local.respawnTimer;
-        if (!local.isAlive && this.chatOpen) {
+        if (wasAlive && !local.isAlive) {
+          this.onPlayerEliminatedCleanup(null);
+        } else if (!local.isAlive && this.chatOpen) {
           this.closeChatInput(false);
         }
         this.pingSystem.setLocalTeam(local.team);
@@ -1023,7 +1030,14 @@ export class EngineManager {
       jumpCancelsSlide: settings.jumpCancelsSlide,
       slideCameraIntensity: settings.slideCameraIntensity,
     });
-    this.audio.setVolumes(settings.volume, settings.sfxVolume, settings.musicVolume, settings.muted);
+    this.audio.setVolumes(
+      settings.volume,
+      settings.sfxVolume,
+      settings.musicVolume,
+      settings.muted,
+      settings.sfxEnabled ?? true
+    );
+    this.syncTeamColorsToScene();
     this.applyGraphicsQuality(settings.graphicsQuality);
     if (settings.knifeCharmId !== this.weapons.getKnifeCharmId()) {
       this.weapons.setKnifeCharm(settings.knifeCharmId);
@@ -1035,6 +1049,24 @@ export class EngineManager {
     }
     this.updateMenuShowcaseVisuals();
     this.emitHudState(true);
+  }
+
+  private syncTeamColorsToScene(overrideLocalTeam?: TeamId): void {
+    const isMp = this.sessionMode === 'multiplayer';
+    const mode = isMp
+      ? normalizeGameMode(this.mpSnapshot?.mode, this.gameMode)
+      : this.gameMode;
+    const localTeam =
+      overrideLocalTeam ??
+      (isMp
+        ? (this.mpSnapshot?.players.find(
+            (p) => p.id === this.mpSnapshot?.localPlayerId
+          )?.team ?? 'blue')
+        : 'blue');
+    const resolved = resolveSideColors(this.settings.teamColors, localTeam, mode);
+    this.botManager?.setTeamColors(resolved.blueHex, resolved.redHex);
+    this.remoteRenderer.setTeamColors(resolved.blueHex, resolved.redHex);
+    this.pingSystem.setTeamColors(resolved.allyHex, resolved.enemyHex);
   }
 
   public setMenuShowcaseVisible(visible: boolean): void {
