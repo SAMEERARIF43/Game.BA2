@@ -4,6 +4,13 @@ export type MapId = 'urban' | 'desert' | 'industrial' | 'forest';
 
 export type TeamId = 'blue' | 'red';
 
+export interface BombSiteDef {
+  id: 'A' | 'B';
+  label: string;
+  position: Vector3;
+  radius: number;
+}
+
 export interface MapDefinition {
   id: MapId;
   name: string;
@@ -27,6 +34,7 @@ export interface MapDefinition {
   blueSpawns: Vector3[];
   redSpawns: Vector3[];
   waypoints: Vector3[];
+  bombSites: BombSiteDef[];
   previewCameraTarget: Vector3;
 }
 

@@ -7,6 +7,7 @@ import {
   GlowLayer,
   HemisphericLight,
   ImageProcessingConfiguration,
+  Matrix,
   Mesh,
   MeshBuilder,
   PointLight,
@@ -15,10 +16,11 @@ import {
   StandardMaterial,
   TransformNode,
   Vector3,
+  Viewport,
 } from '@babylonjs/core';
 import { BotManager } from '../bots/BotManager';
 import { MAP_REGISTRY, MapManager } from '../maps/MapManager';
-import { MapId, TeamId } from '../maps/types';
+import { MapDefinition, MapId, TeamId } from '../maps/types';
 import { MatchManager, RESPAWN_DELAY_SEC } from '../match/MatchManager';
 import { RemotePlayerRenderer } from '../multiplayer/RemotePlayerRenderer';
 import {
@@ -55,6 +57,20 @@ import { PlayerController } from './PlayerController';
 import { ARENA_HALF_EXTENT } from './minimap';
 import type { ChatChannel } from '../multiplayer/chat';
 import {
+  BOMB_DEFUSE_DURATION_SEC,
+  BOMB_DETONATE_DURATION_SEC,
+  BOMB_PLANT_DURATION_SEC,
+  BOMB_SITE_RADIUS,
+  FFA_RESPAWN_DELAY_SEC,
+  GameMode,
+  isHostile as checkActorsHostile,
+  normalizeGameMode,
+  sortFfaParticipants,
+} from './gameModeRules';
+import {
+  BombPhase,
+  BombSiteHudMarker,
+  BombStateSnapshot,
   CharacterId,
   DamageIndicator,
   GUN_IDS,
@@ -128,6 +144,8 @@ export interface EngineCallbacks {
   }) => void;
   onGunPersistedChange?: (gunId: GunId) => void;
   onChatOpenChange?: (open: boolean, channel: ChatChannel) => void;
+  onMultiplayerBombInteract?: (holding: boolean) => void;
+  onMultiplayerRespawnRequest?: (weaponId: GunId) => void;
 }
 
 interface BarrageShell {
@@ -174,6 +192,7 @@ export class EngineManager {
 
   private settings: GameSettings;
   private sessionMode: 'offline' | 'multiplayer' = 'offline';
+  private gameMode: GameMode = 'tdm';
   private mpPaused = false;
   private mpSnapshot: LobbyRoomSnapshot | null = null;
   private mpKillFeed: KillFeedEntry[] = [];
@@ -182,6 +201,21 @@ export class EngineManager {
   private localPingSeq = 0;
   private chatOpen = false;
   private customChatEnabled = false;
+  private lastSentBombInteract = false;
+  private prevMpRoundNumber = 1;
+  private lastBombPhase: BombPhase = 'unplanted';
+  private bombBeepCooldown = 0;
+
+  private bombSiteVisualRoot: TransformNode | null = null;
+  private bombSiteVisualMaterials: StandardMaterial[] = [];
+  private plantedBombRoot: TransformNode | null = null;
+  private plantedBombMaterials: StandardMaterial[] = [];
+  private plantedBombLedMat: StandardMaterial | null = null;
+  private readonly bombProjIdentity = Matrix.Identity();
+  private readonly bombProjViewport = new Viewport(0, 0, 1, 1);
+  private readonly bombWorldScratch = new Vector3();
+  private readonly bombForwardScratch = new Vector3();
+  private readonly bombDeltaScratch = new Vector3();
 
   private elapsedTime = 0;
   private lastHudEmitTime = 0;
@@ -334,7 +368,7 @@ export class EngineManager {
         }
         if (this.sessionMode === 'offline') {
           if (!locked && this.matchManager.getPhase() === 'playing') {
-            if (!this.chatOpen) {
+            if (!this.chatOpen && this.playerIsAlive) {
               this.matchManager.setPhase('paused');
               this.weapons.cancelTransientActions();
             }
@@ -343,7 +377,7 @@ export class EngineManager {
           }
         } else if (this.mpSnapshot?.phase === 'playing') {
           if (!locked) {
-            if (!this.chatOpen) {
+            if (!this.chatOpen && this.playerIsAlive) {
               this.mpPaused = true;
               this.weapons.cancelTransientActions();
             }
@@ -378,6 +412,11 @@ export class EngineManager {
     this.player.setScreenShakeScale(initialSettings.screenShakeScale);
     this.player.setKeybindings(initialSettings.keybindings ?? DEFAULT_KEYBINDINGS);
     this.player.setSlideSettings({
+      slideEnabled: initialSettings.slideEnabled,
+      slideInputMode: initialSettings.slideInputMode,
+      slidePostStance: initialSettings.slidePostStance,
+      slideJumpCancel: initialSettings.slideJumpCancel,
+      slideCameraTilt: initialSettings.slideCameraTilt,
       slideTrigger: initialSettings.slideTrigger,
       postSlideStance: initialSettings.postSlideStance,
       jumpCancelsSlide: initialSettings.jumpCancelsSlide,
@@ -559,10 +598,13 @@ export class EngineManager {
 
   public previewMap(mapId: MapId): void {
     this.sessionMode = 'offline';
+    this.gameMode = normalizeGameMode(this.settings.selectedGameMode, 'tdm');
     this.mpSnapshot = null;
     this.mpPaused = false;
+    this.lastSentBombInteract = false;
     this.setCustomChatEnabled(false);
     this.closeChatInput(false);
+    this.clearBombVisuals();
     this.playerHealth = this.playerMaxHealth;
     this.playerIsAlive = true;
     this.playerRespawnTimer = 0;
@@ -575,6 +617,7 @@ export class EngineManager {
     this.pingSystem.clear();
     this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
     this.weapons.resetForNewMatch();
+    this.weapons.setGameMode(this.gameMode);
     this.weapons.setMultiplayerContext(false, 'blue', false);
     this.player.exitPointerLock();
     this.player.setCanControl(false);
@@ -594,6 +637,7 @@ export class EngineManager {
     mapId: MapId,
     requestLock: boolean,
     customOptions?: {
+      mode?: GameMode;
       killLimit?: number;
       timeLimitSec?: number;
       botsPerTeam?: number;
@@ -604,6 +648,9 @@ export class EngineManager {
     this.sessionMode = 'offline';
     this.mpSnapshot = null;
     this.mpPaused = false;
+    this.lastSentBombInteract = false;
+    const mode = normalizeGameMode(customOptions?.mode ?? this.settings.selectedGameMode, 'tdm');
+    this.gameMode = mode;
     const isCustom = Boolean(customOptions?.isCustomMatch);
     this.setCustomChatEnabled(isCustom);
     this.closeChatInput(false);
@@ -611,7 +658,9 @@ export class EngineManager {
     this.remoteRenderer.clear();
     this.pingSystem.clear();
     this.pingSystem.setLocalTeam('blue');
+    this.weapons.setGameMode(mode);
     this.weapons.setMultiplayerContext(false, 'blue', false);
+    this.botManager.setGameMode(mode);
 
     const def =
       this.mapManager.getCurrentMapId() === mapId
@@ -627,9 +676,17 @@ export class EngineManager {
       customOptions?.killLimit ?? this.settings.killLimit,
       customOptions?.botsPerTeam ?? this.settings.botsPerTeam,
       {
+        mode,
         timeLimitSec: customOptions?.timeLimitSec,
         isCustomMatch: isCustom,
         playerName: customOptions?.playerName ?? this.settings.callsign,
+        bombSites: def.bombSites.map((s) => ({
+          id: s.id,
+          x: s.position.x,
+          y: s.position.y,
+          z: s.position.z,
+          radius: s.radius,
+        })),
       }
     );
 
@@ -638,10 +695,13 @@ export class EngineManager {
       this.matchManager.getBlueBotParticipants(),
       this.matchManager.getRedBotParticipants()
     );
+    this.rebuildBombVisuals(def, mode === 'bomb');
 
     this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
     this.weapons.resetForNewMatch();
-    this.resetPlayerForLife(def.blueSpawns[0] ?? new Vector3(0, 1, -20), 0);
+    const initialSpawn = def.blueSpawns[0] ?? new Vector3(0, 1, -20);
+    const initialYaw = mode === 'ffa' ? Math.atan2(-initialSpawn.x, -initialSpawn.z) : 0;
+    this.resetPlayerForLife(initialSpawn, initialYaw);
 
     this.player.setOrbitPreview(false);
     this.player.setCanControl(true);
@@ -663,6 +723,10 @@ export class EngineManager {
 
   public startMultiplayerMatch(snapshot: LobbyRoomSnapshot, requestLock: boolean): void {
     this.sessionMode = 'multiplayer';
+    const mode = normalizeGameMode(snapshot.mode, 'tdm');
+    this.gameMode = mode;
+    this.prevMpRoundNumber = snapshot.roundNumber ?? 1;
+    this.lastSentBombInteract = false;
     this.setCustomChatEnabled(true);
     this.closeChatInput(false);
     this.botManager.clearBots();
@@ -671,15 +735,18 @@ export class EngineManager {
     this.mpSnapshot = snapshot;
     this.mpPaused = !requestLock;
 
-    if (this.mapManager.getCurrentMapId() !== snapshot.mapId) {
-      const def = this.mapManager.loadMap(snapshot.mapId);
-      this.applyMapColorGrading(def.exposure, def.contrast);
-    }
+    const def =
+      this.mapManager.getCurrentMapId() !== snapshot.mapId
+        ? this.mapManager.loadMap(snapshot.mapId)
+        : this.mapManager.getCurrentDefinition();
+    this.applyMapColorGrading(def.exposure, def.contrast);
     this.audio.setAmbientEnvironment(snapshot.mapId);
+    this.rebuildBombVisuals(def, mode === 'bomb');
 
     const local = snapshot.players.find((p) => p.id === snapshot.localPlayerId);
     const localTeam = local?.team ?? 'blue';
     this.pingSystem.setLocalTeam(localTeam);
+    this.weapons.setGameMode(mode);
     this.weapons.setMultiplayerContext(true, localTeam, snapshot.friendlyFire);
     this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
     this.weapons.resetForNewMatch();
@@ -707,10 +774,14 @@ export class EngineManager {
 
   public syncMultiplayerState(snapshot: LobbyRoomSnapshot): void {
     this.mpSnapshot = snapshot;
+    const mode = normalizeGameMode(snapshot.mode, 'tdm');
 
     if (snapshot.phase === 'lobby') {
+      this.gameMode = mode;
       this.closeChatInput(false);
       this.setCustomChatEnabled(true);
+      this.clearBombVisuals();
+      this.lastSentBombInteract = false;
       if (this.mapManager.getCurrentMapId() !== snapshot.mapId) {
         const def = this.mapManager.loadMap(snapshot.mapId);
         this.applyMapColorGrading(def.exposure, def.contrast);
@@ -724,6 +795,7 @@ export class EngineManager {
       this.lastKillerName = null;
       this.lastKillerWeapon = null;
       this.player.setDeadState(false);
+      this.weapons.setGameMode(mode);
       this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
       if (this.sessionMode === 'multiplayer') {
         this.remoteRenderer.clear();
@@ -741,9 +813,23 @@ export class EngineManager {
 
     if (snapshot.phase === 'playing') {
       this.setCustomChatEnabled(true);
-      if (this.sessionMode !== 'multiplayer' || this.mapManager.getCurrentMapId() !== snapshot.mapId) {
+      if (
+        this.sessionMode !== 'multiplayer' ||
+        this.mapManager.getCurrentMapId() !== snapshot.mapId ||
+        this.gameMode !== mode
+      ) {
         this.startMultiplayerMatch(snapshot, true);
         return;
+      }
+
+      if (mode === 'bomb' && !this.bombSiteVisualRoot) {
+        this.rebuildBombVisuals(this.mapManager.getCurrentDefinition(), true);
+      }
+      if ((snapshot.roundNumber ?? 1) !== this.prevMpRoundNumber) {
+        this.prevMpRoundNumber = snapshot.roundNumber ?? 1;
+        this.lastBombPhase = 'unplanted';
+        this.bombBeepCooldown = 0;
+        this.lastSentBombInteract = false;
       }
 
       const local = snapshot.players.find((p) => p.id === snapshot.localPlayerId);
@@ -755,6 +841,7 @@ export class EngineManager {
           this.closeChatInput(false);
         }
         this.pingSystem.setLocalTeam(local.team);
+        this.weapons.setGameMode(mode);
         this.weapons.setMultiplayerContext(true, local.team, snapshot.friendlyFire);
       }
 
@@ -762,6 +849,8 @@ export class EngineManager {
     } else if (snapshot.phase === 'ended') {
       this.closeChatInput(false);
       this.mpPaused = false;
+      this.lastSentBombInteract = false;
+      this.clearBombVisuals();
       this.pingSystem.clear();
       this.player.setCanControl(false);
       this.player.exitPointerLock();
@@ -769,7 +858,11 @@ export class EngineManager {
       this.weapons.setViewModelVisible(false);
       this.remoteRenderer.syncPlayers(snapshot.players, snapshot.localPlayerId);
       const local = snapshot.players.find((p) => p.id === snapshot.localPlayerId);
-      this.awardMatchCompletionXp(Boolean(local && snapshot.winner === local.team));
+      const won =
+        mode === 'ffa'
+          ? Boolean(snapshot.winnerId && snapshot.winnerId === snapshot.localPlayerId)
+          : Boolean(local && snapshot.winner === local.team);
+      this.awardMatchCompletionXp(won);
     }
 
     this.emitHudState(true);
@@ -781,6 +874,9 @@ export class EngineManager {
 
   public handleNetworkPing(event: NetworkPingEvent): void {
     if (this.sessionMode !== 'multiplayer' || this.mpSnapshot?.phase !== 'playing') return;
+    if (this.mpSnapshot.mode === 'ffa' && event.senderId !== this.mpSnapshot.localPlayerId) {
+      return;
+    }
     const local = this.mpSnapshot.players.find((p) => p.id === this.mpSnapshot?.localPlayerId);
     const localTeam = local?.team ?? 'blue';
     if (event.team !== localTeam) return;
@@ -893,10 +989,12 @@ export class EngineManager {
     const currentId = this.mapManager.getCurrentMapId() ?? 'urban';
     const isCustom = this.matchManager.getIsCustomMatch();
     const snap = this.matchManager.getSnapshot();
-    this.startMatch(currentId, true, isCustom ? {
-      killLimit: snap.killLimit,
-      isCustomMatch: true,
-    } : undefined);
+    this.startMatch(currentId, true, {
+      mode: snap.mode,
+      killLimit: isCustom ? snap.killLimit : undefined,
+      isCustomMatch: isCustom,
+      playerName: this.settings.callsign,
+    });
   }
 
   public returnToMenu(): void {
@@ -915,6 +1013,11 @@ export class EngineManager {
     this.player.setScreenShakeScale(settings.screenShakeScale);
     this.player.setKeybindings(settings.keybindings ?? DEFAULT_KEYBINDINGS);
     this.player.setSlideSettings({
+      slideEnabled: settings.slideEnabled,
+      slideInputMode: settings.slideInputMode,
+      slidePostStance: settings.slidePostStance,
+      slideJumpCancel: settings.slideJumpCancel,
+      slideCameraTilt: settings.slideCameraTilt,
       slideTrigger: settings.slideTrigger,
       postSlideStance: settings.postSlideStance,
       jumpCancelsSlide: settings.jumpCancelsSlide,
@@ -1360,6 +1463,7 @@ export class EngineManager {
     this.weapons.setReloadSpeedMultiplier(1.0);
     this.player.setDeathLookTarget(attackerPos);
     this.player.setDeadState(true);
+    this.player.exitPointerLock();
     this.weapons.setViewModelVisible(false);
     this.weapons.cancelTransientActions();
     this.weapons.clearTransientEffects();
@@ -1652,6 +1756,26 @@ export class EngineManager {
     );
     this.updateArcadeEffects(dt);
 
+    if (phase === 'playing' && this.mpSnapshot) {
+      this.updateBombVisualsAndAudio(
+        dt,
+        this.mpSnapshot.mode === 'bomb' ? (this.mpSnapshot.bombState ?? null) : null
+      );
+      if (this.mpSnapshot.mode === 'bomb') {
+        const holdingE = !this.mpPaused && this.player.isInteractHeld();
+        if (holdingE !== this.lastSentBombInteract) {
+          this.lastSentBombInteract = holdingE;
+          this.callbacks.onMultiplayerBombInteract?.(holdingE);
+        }
+      } else if (this.lastSentBombInteract) {
+        this.lastSentBombInteract = false;
+        this.callbacks.onMultiplayerBombInteract?.(false);
+      }
+    } else if (this.lastSentBombInteract) {
+      this.lastSentBombInteract = false;
+      this.callbacks.onMultiplayerBombInteract?.(false);
+    }
+
     const now = performance.now();
     if (this.mpKillFeed.length > 0) {
       this.mpKillFeed = this.mpKillFeed.filter((k) => now - k.timestamp < 4500);
@@ -1680,6 +1804,38 @@ export class EngineManager {
     this.matchManager.update(dt);
     this.updateArcadeEffects(dt);
 
+    if (this.matchManager.consumePendingRoundReset()) {
+      const def = this.mapManager.getCurrentDefinition();
+      this.botManager.resetBotsForNewRound();
+      const spawn = def.blueSpawns[0] ?? new Vector3(0, 1, -20);
+      this.resetPlayerForLife(spawn, 0);
+      this.weapons.applyQueuedGunOnRespawn();
+      this.weapons.resetForNewMatch();
+      this.weapons.setViewModelVisible(true);
+      this.lastBombPhase = 'unplanted';
+      this.bombBeepCooldown = 0;
+      this.emitHudState(true);
+    }
+
+    if (this.gameMode === 'bomb') {
+      const pos = this.player.collider.position;
+      this.matchManager.updateBombInteraction(
+        {
+          id: 'player',
+          team: 'blue',
+          x: pos.x,
+          y: Math.max(0, pos.y - 0.9),
+          z: pos.z,
+          isAlive: this.playerIsAlive,
+        },
+        this.player.isInteractHeld(),
+        dt
+      );
+      this.updateBombVisualsAndAudio(dt, this.matchManager.getBombState());
+    } else {
+      this.updateBombVisualsAndAudio(dt, null);
+    }
+
     // Dismiss onboarding overlay on first player movement
     if (this.showOnboarding && this.player.getHorizontalSpeed() > 0.3) {
       this.showOnboarding = false;
@@ -1700,7 +1856,9 @@ export class EngineManager {
     if (this.matchManager.getPhase() === 'ended') {
       this.closeChatInput(false);
       const snap = this.matchManager.getSnapshot();
-      this.awardMatchCompletionXp(snap.winner === 'blue');
+      const playerWon =
+        snap.mode === 'ffa' ? snap.winnerParticipantId === 'player' : snap.winner === 'blue';
+      this.awardMatchCompletionXp(playerWon);
       this.player.setCanControl(false);
       this.player.exitPointerLock();
       this.weapons.cancelTransientActions();
@@ -1714,17 +1872,41 @@ export class EngineManager {
     }
 
     if (!this.playerIsAlive) {
-      this.playerRespawnTimer -= dt;
-      this.matchManager.setParticipantAlive('player', false, Math.max(0, this.playerRespawnTimer));
-      if (this.playerRespawnTimer <= 0) {
-        const spawn = this.botManager.pickBestSpawn('blue');
-        const toCenterYaw = Math.atan2(-spawn.x, -spawn.z);
-        this.resetPlayerForLife(spawn, toCenterYaw);
-        this.weapons.applyQueuedGunOnRespawn();
-        this.weapons.setViewModelVisible(true);
-        this.emitHudState(true);
+      if (this.gameMode === 'bomb') {
+        this.playerRespawnTimer = 0;
+        this.matchManager.setParticipantAlive('player', false, 0);
+        return;
       }
+
+      this.playerRespawnTimer = Math.max(0, this.playerRespawnTimer - dt);
+      this.matchManager.setParticipantAlive('player', false, this.playerRespawnTimer);
     }
+  }
+
+  public respawnLocalPlayer(): boolean {
+    if (this.playerIsAlive) return false;
+    const phase = this.getCurrentMatchPhase();
+    if (phase !== 'playing') return false;
+    if (this.gameMode === 'bomb') return false;
+    if (this.playerRespawnTimer > 0.05) return false;
+
+    const queuedGun = this.weapons.getQueuedGunId();
+    if (this.sessionMode === 'multiplayer') {
+      this.callbacks.onMultiplayerRespawnRequest?.(queuedGun);
+      this.player.requestPointerLock();
+      this.emitHudState(true);
+      return true;
+    }
+
+    const spawn = this.botManager.pickBestSpawn('blue', 'player');
+    const toCenterYaw = Math.atan2(-spawn.x, -spawn.z);
+    this.resetPlayerForLife(spawn, toCenterYaw);
+    this.weapons.applyQueuedGunOnRespawn();
+    this.weapons.setViewModelVisible(true);
+    this.player.setCanControl(true);
+    this.player.requestPointerLock();
+    this.emitHudState(true);
+    return true;
   }
 
   private handleOfflinePlayerDamaged(
@@ -1751,8 +1933,14 @@ export class EngineManager {
     if (this.playerHealth > 0) {
       this.player.applyDamageImpact(damage, sanitizedPos, headshot === true);
     } else {
+      const mode = this.matchManager.getMode();
       this.playerIsAlive = false;
-      this.playerRespawnTimer = RESPAWN_DELAY_SEC;
+      this.playerRespawnTimer =
+        mode === 'bomb'
+          ? 0
+          : mode === 'ffa'
+            ? FFA_RESPAWN_DELAY_SEC
+            : RESPAWN_DELAY_SEC;
       this.lastKillerName = attackerName;
       this.lastKillerWeapon = weaponName;
       this.killerBanner = {
@@ -1768,7 +1956,9 @@ export class EngineManager {
 
       if (this.matchManager.getPhase() === 'ended') {
         const snap = this.matchManager.getSnapshot();
-        this.awardMatchCompletionXp(snap.winner === 'blue');
+        const playerWon =
+          snap.mode === 'ffa' ? snap.winnerParticipantId === 'player' : snap.winner === 'blue';
+        this.awardMatchCompletionXp(playerWon);
         this.player.setCanControl(false);
         this.player.exitPointerLock();
       }
@@ -1879,12 +2069,360 @@ export class EngineManager {
     rim.diffuse = new Color3(0.58, 0.76, 0.98);
   }
 
+  private clearBombVisuals(): void {
+    if (this.bombSiteVisualRoot) {
+      this.bombSiteVisualRoot.dispose();
+      this.bombSiteVisualRoot = null;
+    }
+    for (const mat of this.bombSiteVisualMaterials) {
+      mat.dispose();
+    }
+    this.bombSiteVisualMaterials = [];
+
+    if (this.plantedBombRoot) {
+      this.plantedBombRoot.dispose();
+      this.plantedBombRoot = null;
+    }
+    for (const mat of this.plantedBombMaterials) {
+      mat.dispose();
+    }
+    this.plantedBombMaterials = [];
+    this.plantedBombLedMat = null;
+    this.lastBombPhase = 'unplanted';
+    this.bombBeepCooldown = 0;
+  }
+
+  private rebuildBombVisuals(mapDef: MapDefinition, active: boolean): void {
+    this.clearBombVisuals();
+    if (!active || !mapDef.bombSites || mapDef.bombSites.length === 0) {
+      return;
+    }
+
+    const siteRoot = new TransformNode('bombSiteVisualRoot', this.scene);
+    this.bombSiteVisualRoot = siteRoot;
+
+    for (const site of mapDef.bombSites) {
+      const baseColor =
+        site.id === 'A' ? new Color3(0.96, 0.62, 0.08) : new Color3(0.06, 0.78, 0.92);
+
+      const ringMat = new StandardMaterial(`bombSiteRingMat_${site.id}`, this.scene);
+      ringMat.disableLighting = true;
+      ringMat.diffuseColor = Color3.Black();
+      ringMat.emissiveColor = baseColor;
+      ringMat.alpha = 0.72;
+      this.bombSiteVisualMaterials.push(ringMat);
+
+      const ring = MeshBuilder.CreateTorus(
+        `bombSiteRing_${site.id}`,
+        { diameter: site.radius * 2, thickness: 0.09, tessellation: 48 },
+        this.scene
+      );
+      ring.parent = siteRoot;
+      ring.position.set(site.position.x, site.position.y + 0.05, site.position.z);
+      ring.material = ringMat;
+      ring.isPickable = false;
+      ring.checkCollisions = false;
+
+      const discMat = new StandardMaterial(`bombSiteDiscMat_${site.id}`, this.scene);
+      discMat.disableLighting = true;
+      discMat.diffuseColor = Color3.Black();
+      discMat.emissiveColor = baseColor;
+      discMat.alpha = 0.09;
+      discMat.backFaceCulling = false;
+      this.bombSiteVisualMaterials.push(discMat);
+
+      const disc = MeshBuilder.CreateDisc(
+        `bombSiteDisc_${site.id}`,
+        { radius: site.radius, tessellation: 48 },
+        this.scene
+      );
+      disc.parent = siteRoot;
+      disc.position.set(site.position.x, site.position.y + 0.025, site.position.z);
+      disc.rotation.x = Math.PI * 0.5;
+      disc.material = discMat;
+      disc.isPickable = false;
+      disc.checkCollisions = false;
+
+      const beaconMat = new StandardMaterial(`bombSiteBeaconMat_${site.id}`, this.scene);
+      beaconMat.disableLighting = true;
+      beaconMat.diffuseColor = Color3.Black();
+      beaconMat.emissiveColor = baseColor;
+      beaconMat.alpha = 0.22;
+      beaconMat.disableDepthWrite = true;
+      this.bombSiteVisualMaterials.push(beaconMat);
+
+      const beacon = MeshBuilder.CreateCylinder(
+        `bombSiteBeacon_${site.id}`,
+        { height: 3.4, diameterTop: 0.14, diameterBottom: 0.48, tessellation: 12 },
+        this.scene
+      );
+      beacon.parent = siteRoot;
+      beacon.position.set(site.position.x, site.position.y + 1.7, site.position.z);
+      beacon.material = beaconMat;
+      beacon.isPickable = false;
+      beacon.checkCollisions = false;
+    }
+
+    // 3D Planted C4 Satchel Mesh
+    const bombRoot = new TransformNode('plantedBombRoot', this.scene);
+    const bodyMat = new StandardMaterial('plantedBombBodyMat', this.scene);
+    bodyMat.diffuseColor = new Color3(0.18, 0.2, 0.17);
+    bodyMat.specularColor = new Color3(0.15, 0.16, 0.16);
+    this.plantedBombMaterials.push(bodyMat);
+
+    const screenMat = new StandardMaterial('plantedBombScreenMat', this.scene);
+    screenMat.disableLighting = true;
+    screenMat.emissiveColor = new Color3(0.14, 0.85, 0.45);
+    this.plantedBombMaterials.push(screenMat);
+
+    const ledMat = new StandardMaterial('plantedBombLedMat', this.scene);
+    ledMat.disableLighting = true;
+    ledMat.emissiveColor = new Color3(1.8, 0.18, 0.12);
+    this.plantedBombMaterials.push(ledMat);
+    this.plantedBombLedMat = ledMat;
+
+    const casing = MeshBuilder.CreateBox(
+      'plantedBombCasing',
+      { width: 0.42, height: 0.14, depth: 0.28 },
+      this.scene
+    );
+    casing.parent = bombRoot;
+    casing.position.y = 0.07;
+    casing.material = bodyMat;
+    casing.isPickable = false;
+    casing.checkCollisions = false;
+
+    const keypad = MeshBuilder.CreateBox(
+      'plantedBombKeypad',
+      { width: 0.2, height: 0.03, depth: 0.14 },
+      this.scene
+    );
+    keypad.parent = bombRoot;
+    keypad.position.set(0, 0.15, 0.02);
+    keypad.material = screenMat;
+    keypad.isPickable = false;
+    keypad.checkCollisions = false;
+
+    const antenna = MeshBuilder.CreateCylinder(
+      'plantedBombAntenna',
+      { height: 0.24, diameter: 0.025, tessellation: 8 },
+      this.scene
+    );
+    antenna.parent = bombRoot;
+    antenna.position.set(0.14, 0.22, -0.08);
+    antenna.material = bodyMat;
+    antenna.isPickable = false;
+    antenna.checkCollisions = false;
+
+    const led = MeshBuilder.CreateSphere(
+      'plantedBombLed',
+      { diameter: 0.075, segments: 8 },
+      this.scene
+    );
+    led.parent = bombRoot;
+    led.position.set(-0.12, 0.16, -0.06);
+    led.material = ledMat;
+    led.isPickable = false;
+    led.checkCollisions = false;
+
+    bombRoot.setEnabled(false);
+    this.plantedBombRoot = bombRoot;
+  }
+
+  private updateBombVisualsAndAudio(dt: number, bombState: BombStateSnapshot | null): void {
+    if (!bombState || this.gameMode !== 'bomb') {
+      if (this.plantedBombRoot?.isEnabled()) {
+        this.plantedBombRoot.setEnabled(false);
+      }
+      this.lastBombPhase = 'unplanted';
+      this.bombBeepCooldown = 0;
+      return;
+    }
+
+    if (bombState.phase === 'planted' && this.lastBombPhase !== 'planted') {
+      this.audio.playBombPlanted();
+      this.bombBeepCooldown = 0.25;
+    } else if (bombState.phase === 'defused' && this.lastBombPhase !== 'defused') {
+      this.audio.playBombDefused();
+    } else if (bombState.phase === 'detonated' && this.lastBombPhase !== 'detonated') {
+      this.audio.playBombExplosion();
+      this.player.addCameraShake(0.28);
+    }
+    this.lastBombPhase = bombState.phase;
+
+    if (this.plantedBombRoot) {
+      if (bombState.phase === 'planted' || bombState.phase === 'detonated') {
+        this.plantedBombRoot.position.set(bombState.plantX, bombState.plantY, bombState.plantZ);
+        this.plantedBombRoot.setEnabled(true);
+      } else {
+        this.plantedBombRoot.setEnabled(false);
+      }
+    }
+
+    if (bombState.phase === 'planted') {
+      const urgency = Math.max(
+        0,
+        Math.min(1, 1 - bombState.detonateRemainingSec / BOMB_DETONATE_DURATION_SEC)
+      );
+      this.bombBeepCooldown -= dt;
+      if (this.bombBeepCooldown <= 0) {
+        this.audio.playBombBeep(urgency);
+        this.bombBeepCooldown = Math.max(
+          0.16,
+          0.15 + (bombState.detonateRemainingSec / BOMB_DETONATE_DURATION_SEC) * 0.85
+        );
+      }
+      if (this.plantedBombLedMat) {
+        const pulse = Math.sin(this.elapsedTime * (8 + urgency * 18)) > 0 ? 2.4 : 0.25;
+        this.plantedBombLedMat.emissiveColor.set(pulse, 0.12, 0.08);
+      }
+    }
+  }
+
+  private buildBombSiteHudMarkers(bombState: BombStateSnapshot | null): BombSiteHudMarker[] {
+    if (this.gameMode !== 'bomb') return [];
+    const def = this.mapManager.getCurrentDefinition();
+    const sites = def.bombSites ?? [];
+    if (sites.length === 0) return [];
+
+    const viewportWidth = this.engine.getRenderWidth();
+    const viewportHeight = this.engine.getRenderHeight();
+    if (viewportWidth <= 0 || viewportHeight <= 0) return [];
+
+    const transformMatrix = this.scene.getTransformMatrix();
+    this.bombProjViewport.x = 0;
+    this.bombProjViewport.y = 0;
+    this.bombProjViewport.width = 1;
+    this.bombProjViewport.height = 1;
+    const globalViewport = this.bombProjViewport.toGlobal(viewportWidth, viewportHeight);
+
+    const camPos = this.player.camera.globalPosition;
+    this.player.camera.getDirectionToRef(Vector3.Forward(), this.bombForwardScratch);
+
+    return sites.map((site) => {
+      const isPlantedHere = Boolean(
+        bombState && bombState.phase === 'planted' && bombState.siteId === site.id
+      );
+      const wx = isPlantedHere && bombState ? bombState.plantX : site.position.x;
+      const wy = (isPlantedHere && bombState ? bombState.plantY : site.position.y) + 2.0;
+      const wz = isPlantedHere && bombState ? bombState.plantZ : site.position.z;
+
+      this.bombWorldScratch.set(wx, wy, wz);
+      const distanceMeters = Math.max(1, Math.round(Vector3.Distance(camPos, this.bombWorldScratch)));
+
+      this.bombDeltaScratch.copyFrom(this.bombWorldScratch).subtractInPlace(camPos);
+      const inFront = Vector3.Dot(this.bombDeltaScratch, this.bombForwardScratch) > 0.05;
+
+      const projected = Vector3.Project(
+        this.bombWorldScratch,
+        this.bombProjIdentity,
+        transformMatrix,
+        globalViewport
+      );
+
+      let pctX = (projected.x / viewportWidth) * 100;
+      let pctY = (projected.y / viewportHeight) * 100;
+
+      if (!inFront) {
+        pctX = 100 - pctX;
+        pctY = 100 - pctY;
+        const dx = pctX - 50;
+        const dy = pctY - 50;
+        const mag = Math.hypot(dx, dy) || 1;
+        pctX = 50 + (dx / mag) * 48;
+        pctY = 50 + (dy / mag) * 48;
+      }
+
+      const onScreen = inFront && pctX >= 4 && pctX <= 96 && pctY >= 5 && pctY <= 95;
+      const clampedX = Math.max(5, Math.min(95, pctX));
+      const clampedY = Math.max(7, Math.min(92, pctY));
+
+      return {
+        id: site.id,
+        label: isPlantedHere ? `DEFUSE ${site.id}` : `SITE ${site.id}`,
+        x: wx,
+        y: wy - 2.0,
+        z: wz,
+        distanceMeters,
+        screenXPct: Math.round(clampedX * 10) / 10,
+        screenYPct: Math.round(clampedY * 10) / 10,
+        onScreen,
+        isPlantedHere,
+      };
+    });
+  }
+
+  private computeBombInteractPrompt(
+    match: MatchSnapshot,
+    localId: string,
+    localTeam: TeamId
+  ): HudState['bombInteractPrompt'] {
+    if (
+      this.gameMode !== 'bomb' ||
+      match.phase !== 'playing' ||
+      !this.playerIsAlive ||
+      !match.bombState
+    ) {
+      return null;
+    }
+
+    const bomb = match.bombState;
+    const pos = this.player.collider.position;
+
+    if (bomb.phase === 'unplanted' && localTeam === 'blue') {
+      const carrier = bomb.carrierId
+        ? match.participants.find((p) => p.id === bomb.carrierId)
+        : undefined;
+      const canCarry = bomb.carrierId === localId || !carrier || !carrier.isAlive;
+      if (!canCarry) return null;
+
+      const def = this.mapManager.getCurrentDefinition();
+      const nearSite = (def.bombSites ?? []).find(
+        (site) => Math.hypot(pos.x - site.position.x, pos.z - site.position.z) <= site.radius
+      );
+      if (!nearSite) return null;
+
+      const progress =
+        bomb.actionPlayerId === localId && bomb.actionType === 'plant' ? bomb.actionProgress : 0;
+      return {
+        action: 'plant',
+        siteId: nearSite.id,
+        progress,
+        remainingSec: Math.max(
+          0,
+          Math.round(BOMB_PLANT_DURATION_SEC * (1 - progress) * 10) / 10
+        ),
+      };
+    }
+
+    if (bomb.phase === 'planted' && localTeam === 'red') {
+      const dist = Math.hypot(pos.x - bomb.plantX, pos.z - bomb.plantZ);
+      if (dist > BOMB_SITE_RADIUS) return null;
+
+      const progress =
+        bomb.actionPlayerId === localId && bomb.actionType === 'defuse' ? bomb.actionProgress : 0;
+      return {
+        action: 'defuse',
+        siteId: bomb.siteId ?? 'A',
+        progress,
+        remainingSec: Math.max(
+          0,
+          Math.round(BOMB_DEFUSE_DURATION_SEC * (1 - progress) * 10) / 10
+        ),
+      };
+    }
+
+    return null;
+  }
+
   private buildRadarBlips(): RadarBlip[] {
     const actors =
       this.sessionMode === 'multiplayer'
         ? this.remoteRenderer.getRadarActors()
         : this.botManager.getRadarActors();
 
+    const localId =
+      this.sessionMode === 'multiplayer' ? (this.mpSnapshot?.localPlayerId ?? 'player') : 'player';
     const localTeam: TeamId =
       this.sessionMode === 'multiplayer'
         ? (this.mpSnapshot?.players.find((p) => p.id === this.mpSnapshot?.localPlayerId)?.team ?? 'blue')
@@ -1902,7 +2440,12 @@ export class EngineManager {
       const dx = actor.x - pPos.x;
       const dz = actor.z - pPos.z;
       const dist = Math.hypot(dx, dz);
-      const isFriend = actor.team === localTeam;
+      const isEnemy = checkActorsHostile(
+        this.gameMode,
+        { id: localId, team: localTeam },
+        { id: actor.id, team: actor.team }
+      );
+      const isFriend = !isEnemy;
       if (!isFriend && !uavActive && dist > PROXIMITY_REVEAL_METERS) {
         continue;
       }
@@ -1917,7 +2460,7 @@ export class EngineManager {
         id: actor.id,
         relX: localRight * clampedMag,
         relZ: localForward * clampedMag,
-        team: actor.team,
+        team: isFriend ? localTeam : localTeam === 'blue' ? 'red' : 'blue',
       });
     }
 
@@ -1951,6 +2494,8 @@ export class EngineManager {
         ? this.remoteRenderer.getRadarActors()
         : this.botManager.getRadarActors();
 
+    const localId =
+      this.sessionMode === 'multiplayer' ? (this.mpSnapshot?.localPlayerId ?? 'player') : 'player';
     const localTeam: TeamId =
       this.sessionMode === 'multiplayer'
         ? (this.mpSnapshot?.players.find((p) => p.id === this.mpSnapshot?.localPlayerId)?.team ?? 'blue')
@@ -1963,7 +2508,12 @@ export class EngineManager {
     for (const actor of actorsSource) {
       if (!actor.isAlive) continue;
       const dist = Math.round(Math.hypot(actor.x - pPos.x, actor.z - pPos.z));
-      const isFriend = actor.team === localTeam;
+      const isEnemy = checkActorsHostile(
+        this.gameMode,
+        { id: localId, team: localTeam },
+        { id: actor.id, team: actor.team }
+      );
+      const isFriend = !isEnemy;
       if (!isFriend && !uavActive && dist > PROXIMITY_REVEAL_METERS) {
         continue;
       }
@@ -1973,7 +2523,7 @@ export class EngineManager {
         x: actor.x,
         z: actor.z,
         yawRad: actor.yawRad,
-        team: actor.team,
+        team: isFriend ? localTeam : localTeam === 'blue' ? 'red' : 'blue',
         kind: isFriend ? 'teammate' : 'enemy',
         distanceMeters: dist,
       });
@@ -2032,7 +2582,9 @@ export class EngineManager {
       origin,
       dir,
       localTeam,
-      this.player.collider
+      this.player.collider,
+      180,
+      this.gameMode
     );
 
     const pingId = `${senderId}_ping_${++this.localPingSeq}`;
@@ -2077,9 +2629,8 @@ export class EngineManager {
             : 'playing'
           : 'menu';
 
-    const participants = [...snap.players]
-      .sort((a, b) => (b.kills !== a.kills ? b.kills - a.kills : a.deaths - b.deaths))
-      .map((p) => ({
+    const participants = sortFfaParticipants(
+      snap.players.map((p) => ({
         id: p.id,
         name: p.name,
         team: p.team,
@@ -2088,17 +2639,25 @@ export class EngineManager {
         deaths: p.deaths,
         isAlive: p.isAlive,
         respawnTimer: p.respawnTimer,
-      }));
+      }))
+    );
 
+    const resolvedMode = snap.mode ?? 'tdm';
     return {
       phase,
+      mode: resolvedMode,
       mapId: snap.mapId,
       mapName: mapDef.name,
       blueScore: snap.blueScore,
       redScore: snap.redScore,
       killLimit: snap.killLimit,
+      roundNumber: snap.roundNumber ?? 1,
+      roundsToWin: snap.roundsToWin ?? (resolvedMode === 'bomb' ? 5 : 1),
       timeRemainingSec: snap.timeRemaining,
       winner: snap.winner === '' ? null : snap.winner,
+      winnerParticipantId: snap.winnerId || null,
+      winnerName: snap.winnerName || null,
+      bombState: snap.bombState ?? null,
       participants,
       killFeed: [...this.mpKillFeed],
     };
@@ -2124,6 +2683,15 @@ export class EngineManager {
       this.sessionMode === 'multiplayer' && this.mpSnapshot
         ? this.buildMultiplayerMatchSnapshot()
         : this.matchManager.getSnapshot();
+
+    const localId =
+      this.sessionMode === 'multiplayer' && this.mpSnapshot
+        ? this.mpSnapshot.localPlayerId
+        : 'player';
+    const localTeam: TeamId =
+      this.sessionMode === 'multiplayer' && this.mpSnapshot
+        ? (this.mpSnapshot.players.find((p) => p.id === localId)?.team ?? 'blue')
+        : 'blue';
 
     const rank = getRankSummary(this.xpTotal);
     const kb = this.settings.keybindings ?? DEFAULT_KEYBINDINGS;
@@ -2158,6 +2726,11 @@ export class EngineManager {
     ];
 
     const isGunSwitchLocked = !canSwitchGunImmediately(match.phase, this.playerIsAlive);
+    const ffaIdx =
+      match.mode === 'ffa'
+        ? match.participants.findIndex((p) => p.id === localId)
+        : -1;
+    const ffaLeader = match.mode === 'ffa' ? match.participants[0] : undefined;
 
     this.callbacks.onHudUpdate({
       isPointerLocked: this.player.getIsPointerLocked(),
@@ -2222,6 +2795,16 @@ export class EngineManager {
       showOnboarding: this.showOnboarding,
       lowHealthPulse: this.playerIsAlive && this.playerHealth <= 25,
       fps: Math.round(this.engine.getFps()),
+      gameMode: match.mode,
+      localTeam,
+      bombSites:
+        match.phase === 'playing' || match.phase === 'paused'
+          ? this.buildBombSiteHudMarkers(match.bombState ?? null)
+          : [],
+      bombInteractPrompt: this.computeBombInteractPrompt(match, localId, localTeam),
+      ffaRank: ffaIdx >= 0 ? ffaIdx + 1 : null,
+      ffaLeaderName: ffaLeader ? ffaLeader.name : null,
+      ffaLeaderKills: ffaLeader ? ffaLeader.kills : 0,
       match,
     });
   }
@@ -2256,6 +2839,7 @@ export class EngineManager {
     this.canvas.removeEventListener('webglcontextrestored', this.onWebGLContextRestored);
 
     this.resetCombatArcadeState(true);
+    this.clearBombVisuals();
     if (this.showcaseRig) {
       this.showcaseRig.root.dispose();
       this.showcaseRig.bodyMat.dispose();

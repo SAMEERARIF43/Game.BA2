@@ -1,6 +1,7 @@
 import { Client, Room } from '@colyseus/sdk';
+import { normalizeGameMode } from '../game/gameModeRules';
 import { normalizeCharacterId, normalizeWeaponId } from '../game/loadoutRules';
-import { CharacterId, GunId, Stance, WeaponId } from '../game/types';
+import { BombPhase, BombSiteId, BombStateSnapshot, CharacterId, GunId, Stance, WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 import {
   CHAT_HISTORY_LIMIT,
@@ -270,6 +271,14 @@ export class NetworkManager {
     this.room?.send('place_ping', payload);
   }
 
+  public sendBombInteract(holding: boolean): void {
+    this.room?.send('bomb_interact', { holding });
+  }
+
+  public requestRespawn(weaponId?: GunId): void {
+    this.room?.send('request_respawn', weaponId ? { weaponId } : {});
+  }
+
   public async leaveRoom(): Promise<void> {
     const active = this.room;
     this.clearChatMessages();
@@ -349,6 +358,7 @@ export class NetworkManager {
       roomCode?: string;
       roomName?: string;
       mapId?: string;
+      mode?: string;
       phase?: string;
       killLimit?: number;
       timeLimit?: number;
@@ -360,7 +370,24 @@ export class NetworkManager {
       hostId?: string;
       blueScore?: number;
       redScore?: number;
+      roundNumber?: number;
+      roundsToWin?: number;
       winner?: string;
+      winnerId?: string;
+      winnerName?: string;
+      bombPhase?: string;
+      bombSite?: string;
+      bombCarrierId?: string;
+      bombX?: number;
+      bombY?: number;
+      bombZ?: number;
+      bombDetonateTimer?: number;
+      bombActionPlayerId?: string;
+      bombActionType?: string;
+      bombActionProgress?: number;
+      roundWinner?: string;
+      roundEndReason?: string;
+      roundTransitionTimer?: number;
       players?: Map<string, LobbyPlayerInfo> & { forEach?: (cb: (v: LobbyPlayerInfo) => void) => void };
     };
 
@@ -392,10 +419,51 @@ export class NetworkManager {
       });
     });
 
+    const mode = normalizeGameMode(raw?.mode, 'tdm');
+    const carrierId = raw?.bombCarrierId ? String(raw.bombCarrierId) : null;
+    const carrierPlayer = carrierId ? players.find((pl) => pl.id === carrierId) : undefined;
+    const rawPhase = String(raw?.bombPhase || 'unplanted');
+    const bombPhase: BombPhase =
+      rawPhase === 'planted' ||
+      rawPhase === 'defused' ||
+      rawPhase === 'detonated' ||
+      rawPhase === 'round_end'
+        ? rawPhase
+        : 'unplanted';
+    const rawSite = String(raw?.bombSite || '');
+    const siteId: BombSiteId | null = rawSite === 'A' || rawSite === 'B' ? rawSite : null;
+    const bombState: BombStateSnapshot | null =
+      mode === 'bomb'
+        ? {
+            phase: bombPhase,
+            siteId,
+            carrierId,
+            carrierName: carrierPlayer?.name ?? null,
+            plantedBy: null,
+            plantX: Number(raw?.bombX) || 0,
+            plantY: Number(raw?.bombY) || 0,
+            plantZ: Number(raw?.bombZ) || 0,
+            detonateRemainingSec: Number(raw?.bombDetonateTimer) || 0,
+            actionPlayerId: raw?.bombActionPlayerId ? String(raw.bombActionPlayerId) : null,
+            actionType:
+              raw?.bombActionType === 'plant' || raw?.bombActionType === 'defuse'
+                ? raw.bombActionType
+                : null,
+            actionProgress: Number(raw?.bombActionProgress) || 0,
+            roundWinner:
+              raw?.roundWinner === 'blue' || raw?.roundWinner === 'red'
+                ? raw.roundWinner
+                : null,
+            roundEndReason: raw?.roundEndReason ? String(raw.roundEndReason) : null,
+            roundTransitionTimerSec: Number(raw?.roundTransitionTimer) || 0,
+          }
+        : null;
+
     return {
       roomCode: String(raw?.roomCode || room.roomId),
       roomName: String(raw?.roomName || 'Custom Match'),
       mapId: (raw?.mapId || 'urban') as MapId,
+      mode,
       phase: (raw?.phase === 'playing' || raw?.phase === 'ended' ? raw.phase : 'lobby'),
       killLimit: Number(raw?.killLimit) || 30,
       timeLimit: Number(raw?.timeLimit) || 300,
@@ -407,7 +475,12 @@ export class NetworkManager {
       hostId: String(raw?.hostId || ''),
       blueScore: Number(raw?.blueScore) || 0,
       redScore: Number(raw?.redScore) || 0,
+      roundNumber: Number(raw?.roundNumber) || 1,
+      roundsToWin: Number(raw?.roundsToWin) || 5,
       winner: (raw?.winner || '') as TeamId | 'draw' | '',
+      winnerId: raw?.winnerId ? String(raw.winnerId) : undefined,
+      winnerName: raw?.winnerName ? String(raw.winnerName) : undefined,
+      bombState,
       players,
       localPlayerId: room.sessionId,
     };

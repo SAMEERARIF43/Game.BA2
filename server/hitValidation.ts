@@ -27,6 +27,7 @@ export interface HitValidationPayload {
 
 export interface HitValidationContext {
   friendlyFire: boolean;
+  mode?: 'tdm' | 'ffa' | 'bomb';
   spawnProtectionUntil: number;
   currentTime: number;
   lastShotTime?: number;
@@ -223,7 +224,7 @@ export function validateAuthoritativeHit(
 
   // 4. Friendly fire rule check
   const sameTeam = target.team === shooter.team;
-  if (sameTeam && !context.friendlyFire) {
+  if (sameTeam && !context.friendlyFire && context.mode !== 'ffa') {
     return {
       accepted: false,
       reason: 'FRIENDLY_FIRE_BLOCKED',

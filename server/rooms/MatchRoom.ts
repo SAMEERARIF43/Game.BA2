@@ -18,11 +18,25 @@ import {
   type ChatMessage,
   validateChatPayload,
 } from '../../src/multiplayer/chat.ts';
+import {
+  BOMB_DEFUSE_DURATION_SEC,
+  BOMB_DETONATE_DURATION_SEC,
+  BOMB_PLANT_DURATION_SEC,
+  BOMB_ROUND_DURATION_SEC,
+  BOMB_ROUND_END_DELAY_SEC,
+  BOMB_ROUNDS_TO_WIN,
+  BOMB_SITE_RADIUS,
+  type GameMode,
+  isHostile,
+  normalizeGameMode,
+  sortFfaParticipants,
+} from '../../src/game/gameModeRules.ts';
 
 export interface CreateRoomOptions {
   playerName?: string;
   roomName?: string;
   mapId?: string;
+  mode?: GameMode;
   killLimit?: number;
   timeLimit?: number;
   respawnDelay?: number;
@@ -120,6 +134,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
   private lastChatAt = new Map<string, number>();
   private equippedGunByPlayer = new Map<string, string>();
   private queuedGunByPlayer = new Map<string, string>();
+  private bombHoldingByPlayer = new Map<string, boolean>();
   private botBrains = new Map<string, BotBrain>();
   private killFeedSeq = 0;
   private pingSeq = 0;
@@ -130,15 +145,31 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     this.roomId = code;
     ACTIVE_ROOMS.set(code, this);
 
+    const mode = normalizeGameMode(options.mode, 'tdm');
     const state = new MatchState();
     state.roomCode = code;
     state.roomName = sanitizeName(options.roomName, `${code} Tactical Room`);
     state.mapId = isValidMapId(String(options.mapId)) ? String(options.mapId) : 'urban';
+    state.mode = mode;
     state.phase = 'lobby';
-    state.killLimit = clamp(Number(options.killLimit) || 30, 5, 100);
-    state.timeLimit = clamp(Number(options.timeLimit) || 300, 60, 1200);
+    if (mode === 'bomb') {
+      const rounds = clamp(Number(options.killLimit) || BOMB_ROUNDS_TO_WIN, 1, 13);
+      state.roundsToWin = rounds;
+      state.killLimit = rounds;
+      state.timeLimit = clamp(Number(options.timeLimit) || BOMB_ROUND_DURATION_SEC, 30, 300);
+      state.respawnDelay = 0;
+    } else if (mode === 'ffa') {
+      state.roundsToWin = 1;
+      state.killLimit = clamp(Number(options.killLimit) || 20, 5, 100);
+      state.timeLimit = clamp(Number(options.timeLimit) || 300, 60, 1200);
+      state.respawnDelay = clamp(Number(options.respawnDelay) || 2.5, 1, 10);
+    } else {
+      state.roundsToWin = 1;
+      state.killLimit = clamp(Number(options.killLimit) || 30, 5, 100);
+      state.timeLimit = clamp(Number(options.timeLimit) || 300, 60, 1200);
+      state.respawnDelay = clamp(Number(options.respawnDelay) || 3, 1, 10);
+    }
     state.timeRemaining = state.timeLimit;
-    state.respawnDelay = clamp(Number(options.respawnDelay) || 3, 1, 10);
     state.friendlyFire = Boolean(options.friendlyFire);
     state.botCount = clamp(Number(options.botCount ?? 4), 0, 10);
 
@@ -148,7 +179,11 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     state.hostId = '';
     state.blueScore = 0;
     state.redScore = 0;
+    state.roundNumber = 1;
     state.winner = '';
+    state.winnerId = '';
+    state.winnerName = '';
+    this.resetServerBombStateFields(state, '');
 
     this.setState(state);
     this.syncBotSlots();
@@ -158,6 +193,22 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     this.setSimulationInterval((deltaMs) => {
       this.simulateTick(deltaMs / 1000);
     }, 50);
+  }
+
+  private resetServerBombStateFields(state: MatchStateType, carrierId: string): void {
+    state.bombPhase = 'unplanted';
+    state.bombSite = '';
+    state.bombCarrierId = carrierId;
+    state.bombX = 0;
+    state.bombY = 0;
+    state.bombZ = 0;
+    state.bombDetonateTimer = BOMB_DETONATE_DURATION_SEC;
+    state.bombActionPlayerId = '';
+    state.bombActionType = '';
+    state.bombActionProgress = 0;
+    state.roundWinner = '';
+    state.roundEndReason = '';
+    state.roundTransitionTimer = 0;
   }
 
   public getPublicSummary(): PublicRoomSummary {
@@ -243,6 +294,10 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     this.lastChatAt.delete(client.sessionId);
     this.equippedGunByPlayer.delete(client.sessionId);
     this.queuedGunByPlayer.delete(client.sessionId);
+    this.bombHoldingByPlayer.delete(client.sessionId);
+    if (this.state.bombCarrierId === client.sessionId && this.state.bombPhase === 'unplanted') {
+      this.reassignBombCarrier();
+    }
 
     // Host migration if host disconnected
     if (this.state.hostId === client.sessionId) {
@@ -277,6 +332,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     this.lastChatAt.clear();
     this.equippedGunByPlayer.clear();
     this.queuedGunByPlayer.clear();
+    this.bombHoldingByPlayer.clear();
   }
 
   private emitSystemChat(text: string): void {
@@ -336,14 +392,45 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       if (payload.mapId && isValidMapId(payload.mapId)) {
         this.state.mapId = payload.mapId;
       }
+      if (payload.mode !== undefined) {
+        const nextMode = normalizeGameMode(payload.mode, normalizeGameMode(this.state.mode, 'tdm'));
+        if (nextMode !== this.state.mode) {
+          this.state.mode = nextMode;
+          if (nextMode === 'bomb') {
+            this.state.roundsToWin = BOMB_ROUNDS_TO_WIN;
+            this.state.killLimit = BOMB_ROUNDS_TO_WIN;
+            this.state.timeLimit = BOMB_ROUND_DURATION_SEC;
+            this.state.timeRemaining = BOMB_ROUND_DURATION_SEC;
+            this.state.respawnDelay = 0;
+          } else if (nextMode === 'ffa') {
+            this.state.roundsToWin = 1;
+            this.state.killLimit = 20;
+            this.state.timeLimit = 300;
+            this.state.timeRemaining = 300;
+            this.state.respawnDelay = 2.5;
+          } else {
+            this.state.roundsToWin = 1;
+            this.state.killLimit = 30;
+            this.state.timeLimit = 300;
+            this.state.timeRemaining = 300;
+            this.state.respawnDelay = 3;
+          }
+        }
+      }
       if (payload.killLimit !== undefined) {
-        this.state.killLimit = clamp(Number(payload.killLimit) || 30, 5, 100);
+        if (this.state.mode === 'bomb') {
+          const rounds = clamp(Number(payload.killLimit) || BOMB_ROUNDS_TO_WIN, 1, 13);
+          this.state.roundsToWin = rounds;
+          this.state.killLimit = rounds;
+        } else {
+          this.state.killLimit = clamp(Number(payload.killLimit) || 30, 5, 100);
+        }
       }
       if (payload.timeLimit !== undefined) {
-        this.state.timeLimit = clamp(Number(payload.timeLimit) || 300, 60, 1200);
+        this.state.timeLimit = clamp(Number(payload.timeLimit) || 300, 30, 1200);
         this.state.timeRemaining = this.state.timeLimit;
       }
-      if (payload.respawnDelay !== undefined) {
+      if (payload.respawnDelay !== undefined && this.state.mode !== 'bomb') {
         this.state.respawnDelay = clamp(Number(payload.respawnDelay) || 3, 1, 10);
       }
       if (payload.friendlyFire !== undefined) {
@@ -425,6 +512,18 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
           this.queuedGunByPlayer.set(client.sessionId, nextGun);
         }
       }
+    });
+
+    this.onMessage('request_respawn', (client, payload?: { weaponId?: string }) => {
+      if (this.state.phase !== 'playing') return;
+      if (normalizeGameMode(this.state.mode, 'tdm') === 'bomb') return;
+      const p = this.state.players.get(client.sessionId);
+      if (!p || p.isBot || p.isAlive || p.respawnTimer > 0.05) return;
+
+      if (typeof payload?.weaponId === 'string' && VALID_GUN_IDS.has(payload.weaponId)) {
+        this.queuedGunByPlayer.set(client.sessionId, payload.weaponId);
+      }
+      this.respawnPlayer(p, Date.now());
     });
 
     this.onMessage(
@@ -621,9 +720,10 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         let outY = clampedY;
         let outZ = clampedZ;
 
+        const mode = normalizeGameMode(this.state.mode, 'tdm');
         if (payload?.kind === 'enemy' && typeof payload?.targetId === 'string') {
           const target = this.state.players.get(payload.targetId);
-          if (target && target.isAlive && target.team !== sender.team) {
+          if (target && target.isAlive && isHostile(mode, sender, target, this.state.friendlyFire)) {
             kind = 'enemy';
             resolvedTargetId = target.id;
             outX = target.x;
@@ -653,15 +753,28 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
           durationMs,
         };
 
-        // Broadcast strictly to teammates on the sender's team
+        // In FFA only the sender receives pings; otherwise broadcast strictly to teammates
         for (const c of this.clients) {
           const recipient = this.state.players.get(c.sessionId);
-          if (recipient && recipient.team === sender.team) {
+          if (
+            recipient &&
+            (mode === 'ffa' ? recipient.id === sender.id : recipient.team === sender.team)
+          ) {
             c.send('team_ping', pingEvent);
           }
         }
       }
     );
+
+    this.onMessage('bomb_interact', (client, payload: { holding?: boolean }) => {
+      if (this.state.phase !== 'playing' || this.state.mode !== 'bomb') return;
+      const actor = this.state.players.get(client.sessionId);
+      if (!actor || actor.isBot || !actor.isAlive) {
+        this.bombHoldingByPlayer.delete(client.sessionId);
+        return;
+      }
+      this.bombHoldingByPlayer.set(client.sessionId, Boolean(payload?.holding));
+    });
 
     this.onMessage('chat', (client, payload: unknown) => {
       const sender = this.state.players.get(client.sessionId);
@@ -677,17 +790,20 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       }
       this.lastChatAt.set(sender.id, now);
 
+      const mode = normalizeGameMode(this.state.mode, 'tdm');
+      const effectiveChannel = mode === 'ffa' && validated.channel === 'team' ? 'all' : validated.channel;
+
       const chatMsg: ChatMessage = {
         id: `chat_${sender.id}_${++this.chatSeq}`,
         senderId: sender.id,
         senderName: sender.name,
         senderTeam: sender.team === 'red' ? 'red' : 'blue',
-        channel: validated.channel,
+        channel: effectiveChannel,
         text: validated.text,
         timestamp: now,
       };
 
-      if (validated.channel === 'team') {
+      if (effectiveChannel === 'team') {
         for (const c of this.clients) {
           const recipient = this.state.players.get(c.sessionId);
           if (recipient && recipient.team === sender.team) {
@@ -703,16 +819,44 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     });
   }
 
+  private reassignBombCarrier(): void {
+    let nextCarrier = '';
+    this.state.players.forEach((p) => {
+      if (!nextCarrier && !p.isBot && p.team === 'blue' && p.isAlive) {
+        nextCarrier = p.id;
+      }
+    });
+    if (!nextCarrier) {
+      this.state.players.forEach((p) => {
+        if (!nextCarrier && p.team === 'blue' && p.isAlive) {
+          nextCarrier = p.id;
+        }
+      });
+    }
+    this.state.bombCarrierId = nextCarrier;
+  }
+
   private startMatch(): void {
+    const mode = normalizeGameMode(this.state.mode, 'tdm');
+    this.state.mode = mode;
     this.state.blueScore = 0;
     this.state.redScore = 0;
+    this.state.roundNumber = 1;
     this.state.winner = '';
+    this.state.winnerId = '';
+    this.state.winnerName = '';
+    if (mode === 'bomb') {
+      this.state.timeLimit = clamp(this.state.timeLimit || BOMB_ROUND_DURATION_SEC, 30, 300);
+      this.state.roundsToWin = clamp(this.state.roundsToWin || BOMB_ROUNDS_TO_WIN, 1, 13);
+      this.state.killLimit = this.state.roundsToWin;
+    }
     this.state.timeRemaining = this.state.timeLimit;
     this.state.phase = 'playing';
 
     this.spawnProtectionUntil.clear();
     this.lastShotAt.clear();
     this.lastPingAt.clear();
+    this.bombHoldingByPlayer.clear();
 
     const now = Date.now();
     this.state.players.forEach((p) => {
@@ -732,7 +876,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         p.weaponId = this.resolvePlayerEquippedGun(p);
       }
 
-      const spawn = this.pickTeamSpawn(p.team as 'blue' | 'red');
+      const spawn = this.pickTeamSpawn(p.team as 'blue' | 'red', p.id);
       p.x = spawn.x;
       p.y = spawn.y;
       p.z = spawn.z;
@@ -745,14 +889,26 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         c?.send('player_respawn', { x: p.x, y: p.y, z: p.z, rotY: p.rotY });
       }
     });
+
+    if (mode === 'bomb') {
+      this.resetServerBombStateFields(this.state, '');
+      this.reassignBombCarrier();
+    } else {
+      this.resetServerBombStateFields(this.state, '');
+    }
   }
 
   private resetToLobby(): void {
     this.state.phase = 'lobby';
     this.state.blueScore = 0;
     this.state.redScore = 0;
+    this.state.roundNumber = 1;
     this.state.winner = '';
+    this.state.winnerId = '';
+    this.state.winnerName = '';
     this.state.timeRemaining = this.state.timeLimit;
+    this.bombHoldingByPlayer.clear();
+    this.resetServerBombStateFields(this.state, '');
     this.state.players.forEach((p) => {
       p.kills = 0;
       p.deaths = 0;
@@ -794,6 +950,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     const protUntil = this.spawnProtectionUntil.get(target.id) ?? 0;
     const mapId = this.state.mapId;
 
+    const mode = normalizeGameMode(this.state.mode, 'tdm');
     const validation = validateAuthoritativeHit(
       shooter,
       target,
@@ -813,10 +970,11 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       },
       {
         friendlyFire: this.state.friendlyFire,
+        mode,
         spawnProtectionUntil: protUntil,
         currentTime: now,
         // Wire server-held orientation for VULN-2 / VULN-5 checks
-        shooterRotY:  shooter.rotY,
+        shooterRotY: shooter.rotY,
         shooterPitch: shooter.pitch,
         // Wire mapId for VULN-1 occlusion check
         mapId,
@@ -828,7 +986,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     if (!validation.accepted) return;
 
     const { verifiedZone, damage, isHeadshot, weapon } = validation;
-    const sameTeam = target.team === shooter.team;
+    const hostileHit = isHostile(mode, shooter, target, true);
     const distance = Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z);
 
     target.health = Math.max(0, target.health - damage);
@@ -859,15 +1017,18 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
 
     if (killed) {
       target.isAlive = false;
-      target.respawnTimer = this.state.respawnDelay;
+      target.respawnTimer = mode === 'bomb' ? 0 : this.state.respawnDelay;
       target.deaths += 1;
+      this.bombHoldingByPlayer.delete(target.id);
 
-      if (!sameTeam) {
+      if (hostileHit) {
         shooter.kills += 1;
-        if (shooter.team === 'blue') {
-          this.state.blueScore += 1;
-        } else {
-          this.state.redScore += 1;
+        if (mode === 'tdm') {
+          if (shooter.team === 'blue') {
+            this.state.blueScore += 1;
+          } else {
+            this.state.redScore += 1;
+          }
         }
       }
 
@@ -882,6 +1043,42 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         distanceMeters: Math.round(distance * 10) / 10,
       });
 
+      if (mode === 'ffa') {
+        if (shooter.kills >= this.state.killLimit) {
+          this.state.winnerId = shooter.id;
+          this.state.winnerName = shooter.name;
+          this.state.winner = shooter.team === 'red' ? 'red' : 'blue';
+          this.state.phase = 'ended';
+        }
+        return;
+      }
+
+      if (mode === 'bomb') {
+        if (this.state.bombActionPlayerId === target.id) {
+          this.state.bombActionPlayerId = '';
+          this.state.bombActionType = '';
+          this.state.bombActionProgress = 0;
+        }
+        if (this.state.bombPhase === 'unplanted' && this.state.bombCarrierId === target.id) {
+          this.reassignBombCarrier();
+        }
+        if (this.state.bombPhase !== 'round_end' && this.state.bombPhase !== 'defused' && this.state.bombPhase !== 'detonated') {
+          let aliveBlue = 0;
+          let aliveRed = 0;
+          this.state.players.forEach((p) => {
+            if (!p.isAlive) return;
+            if (p.team === 'blue') aliveBlue += 1;
+            else aliveRed += 1;
+          });
+          if (aliveRed === 0) {
+            this.endServerBombRound('blue', 'Defenders Eliminated');
+          } else if (aliveBlue === 0 && this.state.bombPhase === 'unplanted') {
+            this.endServerBombRound('red', 'Attackers Eliminated');
+          }
+        }
+        return;
+      }
+
       if (this.state.blueScore >= this.state.killLimit) {
         this.state.winner = 'blue';
         this.state.phase = 'ended';
@@ -892,27 +1089,215 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     }
   }
 
-  private simulateTick(dt: number): void {
-    if (this.state.phase !== 'playing') return;
+  private endServerBombRound(winnerTeam: 'blue' | 'red', reason: string): void {
+    if (this.state.phase !== 'playing' || this.state.bombPhase === 'round_end') return;
+    if (winnerTeam === 'blue') {
+      this.state.blueScore += 1;
+    } else {
+      this.state.redScore += 1;
+    }
+    this.state.roundWinner = winnerTeam;
+    this.state.roundEndReason = reason;
+    this.state.bombActionPlayerId = '';
+    this.state.bombActionType = '';
+    this.state.bombActionProgress = 0;
+    this.bombHoldingByPlayer.clear();
 
-    this.state.timeRemaining = Math.max(0, this.state.timeRemaining - dt);
-    if (this.state.timeRemaining <= 0) {
-      if (this.state.blueScore > this.state.redScore) {
-        this.state.winner = 'blue';
-      } else if (this.state.redScore > this.state.blueScore) {
-        this.state.winner = 'red';
-      } else {
-        this.state.winner = 'draw';
-      }
+    const roundsTarget = Math.max(1, this.state.roundsToWin || BOMB_ROUNDS_TO_WIN);
+    if (this.state.blueScore >= roundsTarget || this.state.redScore >= roundsTarget) {
+      this.state.winner = this.state.blueScore >= roundsTarget ? 'blue' : 'red';
       this.state.phase = 'ended';
+      this.state.bombPhase = 'round_end';
+      this.state.roundTransitionTimer = 0;
       return;
     }
 
+    this.state.bombPhase = 'round_end';
+    this.state.roundTransitionTimer = BOMB_ROUND_END_DELAY_SEC;
+  }
+
+  private startNextServerBombRound(now: number): void {
+    this.state.roundNumber += 1;
+    this.state.timeRemaining = clamp(this.state.timeLimit || BOMB_ROUND_DURATION_SEC, 30, 300);
+    this.bombHoldingByPlayer.clear();
+    this.resetServerBombStateFields(this.state, '');
+
+    this.state.players.forEach((p) => {
+      this.respawnPlayer(p, now);
+    });
+    this.reassignBombCarrier();
+  }
+
+  private stepServerBombInteraction(dt: number): void {
+    if (this.state.mode !== 'bomb' || this.state.phase !== 'playing') return;
+    if (this.state.bombPhase === 'round_end' || this.state.bombPhase === 'defused' || this.state.bombPhase === 'detonated') {
+      return;
+    }
+
+    const mapId: ServerMapId = isValidMapId(this.state.mapId) ? this.state.mapId : 'urban';
+    const layout = SERVER_MAP_LAYOUTS[mapId];
+
+    // Evaluate human holdings + bot auto-interactions
+    let activeActor: PlayerSchemaType | null = null;
+    let activeAction: 'plant' | 'defuse' | null = null;
+    let activeSiteId: 'A' | 'B' | null = null;
+    let activeSiteY = 0;
+
+    // Prioritize existing action player if still holding & valid
+    const currentId = this.state.bombActionPlayerId;
+    if (currentId) {
+      const cur = this.state.players.get(currentId);
+      if (cur && cur.isAlive && (cur.isBot || this.bombHoldingByPlayer.get(cur.id))) {
+        if (this.state.bombPhase === 'unplanted' && cur.team === 'blue') {
+          const site = layout.bombSites.find((s) => Math.hypot(cur.x - s.x, cur.z - s.z) <= s.radius);
+          if (site) {
+            activeActor = cur;
+            activeAction = 'plant';
+            activeSiteId = site.id;
+            activeSiteY = site.y;
+          }
+        } else if (this.state.bombPhase === 'planted' && cur.team === 'red') {
+          if (Math.hypot(cur.x - this.state.bombX, cur.z - this.state.bombZ) <= BOMB_SITE_RADIUS) {
+            activeActor = cur;
+            activeAction = 'defuse';
+          }
+        }
+      }
+    }
+
+    if (!activeActor) {
+      this.state.players.forEach((p) => {
+        if (activeActor || !p.isAlive) return;
+        const holding = !p.isBot && Boolean(this.bombHoldingByPlayer.get(p.id));
+        if (!holding) return;
+
+        if (this.state.bombPhase === 'unplanted' && p.team === 'blue') {
+          const carrier = this.state.players.get(this.state.bombCarrierId);
+          const canCarry = this.state.bombCarrierId === p.id || !carrier || !carrier.isAlive;
+          const site = layout.bombSites.find((s) => Math.hypot(p.x - s.x, p.z - s.z) <= s.radius);
+          if (canCarry && site) {
+            activeActor = p;
+            activeAction = 'plant';
+            activeSiteId = site.id;
+            activeSiteY = site.y;
+          }
+        } else if (this.state.bombPhase === 'planted' && p.team === 'red') {
+          if (Math.hypot(p.x - this.state.bombX, p.z - this.state.bombZ) <= BOMB_SITE_RADIUS) {
+            activeActor = p;
+            activeAction = 'defuse';
+          }
+        }
+      });
+    }
+
+    if (!activeActor || !activeAction) {
+      this.state.bombActionPlayerId = '';
+      this.state.bombActionType = '';
+      this.state.bombActionProgress = 0;
+      return;
+    }
+
+    const duration = activeAction === 'plant' ? BOMB_PLANT_DURATION_SEC : BOMB_DEFUSE_DURATION_SEC;
+    const prevProgress =
+      this.state.bombActionPlayerId === activeActor.id && this.state.bombActionType === activeAction
+        ? this.state.bombActionProgress
+        : 0;
+    const nextProgress = Math.min(1, prevProgress + dt / duration);
+
+    this.state.bombActionPlayerId = activeActor.id;
+    this.state.bombActionType = activeAction;
+    this.state.bombActionProgress = nextProgress;
+
+    if (nextProgress >= 1) {
+      if (activeAction === 'plant' && activeSiteId) {
+        this.state.bombPhase = 'planted';
+        this.state.bombSite = activeSiteId;
+        this.state.bombCarrierId = '';
+        this.state.bombX = activeActor.x;
+        this.state.bombY = activeSiteY;
+        this.state.bombZ = activeActor.z;
+        this.state.bombDetonateTimer = BOMB_DETONATE_DURATION_SEC;
+        this.state.bombActionPlayerId = '';
+        this.state.bombActionType = '';
+        this.state.bombActionProgress = 0;
+        this.emitSystemChat(`${activeActor.name} planted the bomb at Site ${activeSiteId}!`);
+      } else if (activeAction === 'defuse') {
+        this.state.bombPhase = 'defused';
+        this.state.bombActionPlayerId = '';
+        this.state.bombActionType = '';
+        this.state.bombActionProgress = 0;
+        this.emitSystemChat(`${activeActor.name} defused the bomb!`);
+        this.endServerBombRound('red', 'Bomb Defused');
+      }
+    }
+  }
+
+  private simulateTick(dt: number): void {
+    if (this.state.phase !== 'playing') return;
+
+    const mode = normalizeGameMode(this.state.mode, 'tdm');
     const now = Date.now();
+
+    if (mode === 'bomb') {
+      if (this.state.bombPhase === 'round_end') {
+        this.state.roundTransitionTimer = Math.max(0, this.state.roundTransitionTimer - dt);
+        if (this.state.roundTransitionTimer <= 0) {
+          this.startNextServerBombRound(now);
+        }
+        return;
+      }
+
+      if (this.state.bombPhase === 'planted') {
+        this.state.bombDetonateTimer = Math.max(0, this.state.bombDetonateTimer - dt);
+        if (this.state.bombDetonateTimer <= 0) {
+          this.state.bombPhase = 'detonated';
+          this.endServerBombRound('blue', 'Bomb Detonated');
+          return;
+        }
+      } else {
+        this.state.timeRemaining = Math.max(0, this.state.timeRemaining - dt);
+        if (this.state.timeRemaining <= 0) {
+          this.endServerBombRound('red', 'Round Time Expired');
+          return;
+        }
+      }
+
+      this.stepServerBombInteraction(dt);
+    } else {
+      this.state.timeRemaining = Math.max(0, this.state.timeRemaining - dt);
+      if (this.state.timeRemaining <= 0) {
+        if (mode === 'ffa') {
+          const all: PlayerSchemaType[] = [];
+          this.state.players.forEach((p) => all.push(p));
+          const sorted = sortFfaParticipants(all);
+          const first = sorted[0];
+          const second = sorted[1];
+          if (!first || (second && first.kills === second.kills)) {
+            this.state.winner = 'draw';
+            this.state.winnerId = '';
+            this.state.winnerName = '';
+          } else {
+            this.state.winnerId = first.id;
+            this.state.winnerName = first.name;
+            this.state.winner = first.team === 'red' ? 'red' : 'blue';
+          }
+        } else if (this.state.blueScore > this.state.redScore) {
+          this.state.winner = 'blue';
+        } else if (this.state.redScore > this.state.blueScore) {
+          this.state.winner = 'red';
+        } else {
+          this.state.winner = 'draw';
+        }
+        this.state.phase = 'ended';
+        return;
+      }
+    }
+
     this.state.players.forEach((p) => {
       if (!p.isAlive) {
+        if (mode === 'bomb') return;
         p.respawnTimer = Math.max(0, p.respawnTimer - dt);
-        if (p.respawnTimer <= 0) {
+        if (p.respawnTimer <= 0 && p.isBot) {
           this.respawnPlayer(p, now);
         }
       } else if (p.isBot) {
@@ -922,7 +1307,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
   }
 
   private respawnPlayer(p: PlayerSchemaType, now: number): void {
-    const spawn = this.pickTeamSpawn(p.team as 'blue' | 'red');
+    const spawn = this.pickTeamSpawn(p.team as 'blue' | 'red', p.id);
     p.x = spawn.x;
     p.y = spawn.y;
     p.z = spawn.z;
@@ -949,6 +1334,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
   private simulateBot(bot: PlayerSchemaType, dt: number): void {
     const mapId: ServerMapId = isValidMapId(this.state.mapId) ? this.state.mapId : 'urban';
     const layout = SERVER_MAP_LAYOUTS[mapId];
+    const mode = normalizeGameMode(this.state.mode, 'tdm');
     let brain = this.botBrains.get(bot.id);
     if (!brain) {
       brain = {
@@ -959,11 +1345,11 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       this.botBrains.set(bot.id, brain);
     }
 
-    // Look for nearest opposing living target within 26m
+    // Look for nearest hostile living target within 26m
     let closestTarget: PlayerSchemaType | null = null;
     let closestDist = 26;
     this.state.players.forEach((other) => {
-      if (!other.isAlive || other.team === bot.team || other.id === bot.id) return;
+      if (!other.isAlive || !isHostile(mode, bot, other)) return;
       const d = Math.hypot(other.x - bot.x, other.z - bot.z);
       if (d < closestDist) {
         closestDist = d;
@@ -1003,16 +1389,12 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         });
 
         if (hit) {
-          // VULN-4: Bot hits previously passed no end-coordinates, causing coordinate
-          // validation to reject every bot shot. The server now supplies authoritative
-          // target coordinates (body-centre or head-centre based on zone probability).
-          // isBotShooter=true skips client-coord checks that do not apply to server bots.
           const isHeadZone = zone === 'head';
           const botEndX = target.x;
           const botEndY = target.y + (isHeadZone ? 1.70 : 1.25);
           const botEndZ = target.z;
           const botMuzzleX = bot.x;
-          const botMuzzleY = bot.y + 1.35; // bot eye height (server constant)
+          const botMuzzleY = bot.y + 1.35;
           const botMuzzleZ = bot.z;
           this.applyAuthoritativeHit(
             bot, target.id, bot.weaponId, zone,
@@ -1023,6 +1405,67 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
         }
       }
       return;
+    }
+
+    // Bomb objective navigation when no enemy is engaged
+    if (mode === 'bomb') {
+      if (bot.team === 'blue' && this.state.bombPhase === 'unplanted' && this.state.bombCarrierId === bot.id) {
+        const site = layout.bombSites[bot.id.charCodeAt(bot.id.length - 1) % layout.bombSites.length];
+        const sdx = site.x - bot.x;
+        const sdz = site.z - bot.z;
+        const sdist = Math.hypot(sdx, sdz);
+        if (sdist <= site.radius * 0.75) {
+          if (!this.state.bombActionPlayerId || this.state.bombActionPlayerId === bot.id) {
+            this.state.bombActionPlayerId = bot.id;
+            this.state.bombActionType = 'plant';
+            this.state.bombActionProgress = Math.min(1, this.state.bombActionProgress + dt / BOMB_PLANT_DURATION_SEC);
+            if (this.state.bombActionProgress >= 1) {
+              this.state.bombPhase = 'planted';
+              this.state.bombSite = site.id;
+              this.state.bombCarrierId = '';
+              this.state.bombX = bot.x;
+              this.state.bombY = site.y;
+              this.state.bombZ = bot.z;
+              this.state.bombDetonateTimer = BOMB_DETONATE_DURATION_SEC;
+              this.state.bombActionPlayerId = '';
+              this.state.bombActionType = '';
+              this.state.bombActionProgress = 0;
+              this.emitSystemChat(`${bot.name} planted the bomb at Site ${site.id}!`);
+            }
+          }
+          return;
+        }
+        bot.rotY = Math.atan2(sdx, sdz);
+        bot.x = clamp(bot.x + (sdx / sdist) * 4.4 * dt, -27.5, 27.5);
+        bot.z = clamp(bot.z + (sdz / sdist) * 4.4 * dt, -27.5, 27.5);
+        return;
+      }
+
+      if (bot.team === 'red' && this.state.bombPhase === 'planted') {
+        const bdx = this.state.bombX - bot.x;
+        const bdz = this.state.bombZ - bot.z;
+        const bdist = Math.hypot(bdx, bdz);
+        if (bdist <= BOMB_SITE_RADIUS * 0.75) {
+          if (!this.state.bombActionPlayerId || this.state.bombActionPlayerId === bot.id) {
+            this.state.bombActionPlayerId = bot.id;
+            this.state.bombActionType = 'defuse';
+            this.state.bombActionProgress = Math.min(1, this.state.bombActionProgress + dt / BOMB_DEFUSE_DURATION_SEC);
+            if (this.state.bombActionProgress >= 1) {
+              this.state.bombPhase = 'defused';
+              this.state.bombActionPlayerId = '';
+              this.state.bombActionType = '';
+              this.state.bombActionProgress = 0;
+              this.emitSystemChat(`${bot.name} defused the bomb!`);
+              this.endServerBombRound('red', 'Bomb Defused');
+            }
+          }
+          return;
+        }
+        bot.rotY = Math.atan2(bdx, bdz);
+        bot.x = clamp(bot.x + (bdx / bdist) * 4.4 * dt, -27.5, 27.5);
+        bot.z = clamp(bot.z + (bdz / bdist) * 4.4 * dt, -27.5, 27.5);
+        return;
+      }
     }
 
     // Patrol waypoints
@@ -1080,7 +1523,7 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       bot.kills = 0;
       bot.deaths = 0;
 
-      const spawn = this.pickTeamSpawn(team);
+      const spawn = this.pickTeamSpawn(team, id);
       bot.x = spawn.x;
       bot.y = spawn.y;
       bot.z = spawn.z;
@@ -1103,10 +1546,42 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     return blueHumans <= redHumans ? 'blue' : 'red';
   }
 
-  private pickTeamSpawn(team: 'blue' | 'red'): Vec3Tuple {
+  private pickTeamSpawn(team: 'blue' | 'red', forPlayerId?: string): Vec3Tuple {
     const mapId: ServerMapId = isValidMapId(this.state.mapId) ? this.state.mapId : 'urban';
     const layout = SERVER_MAP_LAYOUTS[mapId];
-    const spawns = team === 'blue' ? layout.blueSpawns : layout.redSpawns;
+    const mode = normalizeGameMode(this.state.mode, 'tdm');
+    const spawns =
+      mode === 'ffa'
+        ? [...layout.blueSpawns, ...layout.redSpawns]
+        : team === 'blue'
+          ? layout.blueSpawns
+          : layout.redSpawns;
+
+    if (mode === 'ffa') {
+      const activeEnemies: PlayerSchemaType[] = [];
+      this.state.players.forEach((p) => {
+        if (p.isAlive && p.id !== forPlayerId) {
+          activeEnemies.push(p);
+        }
+      });
+      if (activeEnemies.length > 0) {
+        let bestSpawn = spawns[0];
+        let bestMinDist = -1;
+        for (const s of spawns) {
+          let minDist = Infinity;
+          for (const e of activeEnemies) {
+            const d = (s.x - e.x) ** 2 + (s.z - e.z) ** 2;
+            if (d < minDist) minDist = d;
+          }
+          if (minDist > bestMinDist) {
+            bestMinDist = minDist;
+            bestSpawn = s;
+          }
+        }
+        return bestSpawn;
+      }
+    }
+
     return spawns[Math.floor(Math.random() * spawns.length)];
   }
 }

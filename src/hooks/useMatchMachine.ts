@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { EngineManager, InitProgressState } from '../game/EngineManager';
+import {
+  BOMB_ROUND_DURATION_SEC,
+  BOMB_ROUNDS_TO_WIN,
+  GameMode,
+  getModeDefaultLimits,
+  normalizeGameMode,
+} from '../game/gameModeRules';
 import { CharacterId, GameSettings, GunId, KnifeCharmId, WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 import {
@@ -154,6 +161,7 @@ export interface MatchMachineActions {
   sendChatMessage: (text: string, channel?: ChatChannel) => void;
   setChatChannel: (channel: ChatChannel) => void;
   closeInMatchChat: (restorePointerLock: boolean) => void;
+  respawnPlayer: () => void;
 }
 
 export function useMatchMachine() {
@@ -293,8 +301,17 @@ export function useMatchMachine() {
       onChatOpenChange: (open, channel) => {
         setChatOpen(open);
         if (open) {
-          setChatChannel(channel);
+          const activeMode =
+            stateRef.current.lobbySnapshot?.mode ??
+            normalizeGameMode(stateRef.current.settings.selectedGameMode, 'tdm');
+          setChatChannel(activeMode === 'ffa' ? 'all' : channel);
         }
+      },
+      onMultiplayerBombInteract: (holding) => {
+        networkRef.current?.sendBombInteract(holding);
+      },
+      onMultiplayerRespawnRequest: (gunId) => {
+        networkRef.current?.requestRespawn(gunId);
       },
     });
     engineRef.current = manager;
@@ -424,6 +441,7 @@ export function useMatchMachine() {
 
   const playOfflineTdm = useCallback(() => {
     const mapId = stateRef.current.selectedMapId;
+    const mode: GameMode = normalizeGameMode(stateRef.current.settings.selectedGameMode, 'tdm');
     networkRef.current?.clearChatMessages();
     setChatMessages([]);
     setChatOpen(false);
@@ -435,7 +453,7 @@ export function useMatchMachine() {
     });
     if (nextState.status !== 'offline_playing') return;
     navigateToRoute(deriveActiveRoute(nextState));
-    engineRef.current?.startMatch(mapId, true);
+    engineRef.current?.startMatch(mapId, true, { mode });
   }, [dispatchAction]);
 
   const openCustomMatch = useCallback(() => {
@@ -462,6 +480,7 @@ export function useMatchMachine() {
 
   const deployMap = useCallback(
     (mapId: MapId) => {
+      const mode: GameMode = normalizeGameMode(stateRef.current.settings.selectedGameMode, 'tdm');
       networkRef.current?.clearChatMessages();
       setChatMessages([]);
       setChatOpen(false);
@@ -473,7 +492,7 @@ export function useMatchMachine() {
       });
       if (nextState.status !== 'offline_playing') return;
       navigateToRoute(deriveActiveRoute(nextState));
-      engineRef.current?.startMatch(mapId, true);
+      engineRef.current?.startMatch(mapId, true, { mode });
     },
     [dispatchAction]
   );
@@ -494,6 +513,10 @@ export function useMatchMachine() {
 
   const resumeMatch = useCallback(() => {
     engineRef.current?.resumeMatch();
+  }, []);
+
+  const respawnPlayer = useCallback(() => {
+    engineRef.current?.respawnLocalPlayer();
   }, []);
 
   const restartMatch = useCallback(() => {
@@ -611,22 +634,34 @@ export function useMatchMachine() {
         const saved = savePersistedSettings({ ...latestSettings, callsign: safeName });
         dispatchAction({ type: 'SETTINGS_UPDATED', settings: saved });
       }
+      const mode = normalizeGameMode(options.mode, 'tdm');
+      const defaults = getModeDefaultLimits(mode);
+      const roundsToWin =
+        mode === 'bomb'
+          ? Math.max(1, Math.min(13, options.killLimit || BOMB_ROUNDS_TO_WIN))
+          : 1;
+      const killLimit = mode === 'bomb' ? roundsToWin : options.killLimit || defaults.killLimit;
+      const timeLimit = options.timeLimit || defaults.timeLimitSec;
       const snapshot: LobbyRoomSnapshot = {
         roomCode: 'SOLO01',
         roomName: options.roomName.trim() || 'Solo Custom Lobby',
         mapId: options.mapId,
+        mode,
         phase: 'lobby',
-        killLimit: options.killLimit,
-        timeLimit: options.timeLimit,
-        timeRemaining: options.timeLimit,
-        respawnDelay: options.respawnDelay,
+        killLimit,
+        timeLimit,
+        timeRemaining: timeLimit,
+        respawnDelay: mode === 'bomb' ? 0 : options.respawnDelay ?? defaults.respawnDelaySec,
         friendlyFire: options.friendlyFire,
         botCount: options.botCount,
         hasPassword: false,
         hostId: 'player',
         blueScore: 0,
         redScore: 0,
+        roundNumber: 1,
+        roundsToWin,
         winner: '',
+        bombState: null,
         players: buildSoloLobbyPlayers(
           'blue',
           options.botCount,
@@ -736,12 +771,32 @@ export function useMatchMachine() {
         const nextBotCount =
           typeof patch.botCount === 'number' ? Math.max(0, Math.min(10, patch.botCount)) : snap.botCount;
         const nextMapId = patch.mapId ?? snap.mapId;
+        const currentMode = normalizeGameMode(snap.mode, 'tdm');
+        const nextMode = patch.mode ? normalizeGameMode(patch.mode, currentMode) : currentMode;
+        const modeChanged = nextMode !== currentMode;
+        const nextDefaults = getModeDefaultLimits(nextMode);
+        const nextKillLimit =
+          patch.killLimit ?? (modeChanged ? nextDefaults.killLimit : snap.killLimit);
+        const nextTimeLimit =
+          patch.timeLimit ??
+          (modeChanged
+            ? nextMode === 'bomb'
+              ? BOMB_ROUND_DURATION_SEC
+              : nextDefaults.timeLimitSec
+            : snap.timeLimit);
+        const nextRoundsToWin =
+          nextMode === 'bomb'
+            ? Math.max(1, Math.min(13, nextKillLimit || BOMB_ROUNDS_TO_WIN))
+            : 1;
         const nextSnapshot: LobbyRoomSnapshot = {
           ...snap,
           mapId: nextMapId,
-          killLimit: patch.killLimit ?? snap.killLimit,
-          timeLimit: patch.timeLimit ?? snap.timeLimit,
-          timeRemaining: patch.timeLimit ?? snap.timeRemaining,
+          mode: nextMode,
+          killLimit: nextKillLimit,
+          roundsToWin: nextRoundsToWin,
+          timeLimit: nextTimeLimit,
+          timeRemaining: nextTimeLimit,
+          respawnDelay: nextMode === 'bomb' ? 0 : nextDefaults.respawnDelaySec,
           friendlyFire: patch.friendlyFire ?? snap.friendlyFire,
           botCount: nextBotCount,
           players: buildSoloLobbyPlayers(
@@ -785,6 +840,7 @@ export function useMatchMachine() {
       navigateToRoute(deriveActiveRoute(nextState));
       const botsPerTeam = snap.botCount === 0 ? 0 : Math.max(1, Math.ceil(snap.botCount / 2));
       engineRef.current?.startMatch(snap.mapId, true, {
+        mode: snap.mode,
         killLimit: snap.killLimit,
         timeLimitSec: snap.timeLimit,
         botsPerTeam,
@@ -827,8 +883,11 @@ export function useMatchMachine() {
 
   const sendChatMessage = useCallback(
     (text: string, channel?: ChatChannel) => {
-      const targetChannel = channel ?? chatChannel;
       const snap = stateRef.current.lobbySnapshot;
+      const activeMode =
+        snap?.mode ?? normalizeGameMode(stateRef.current.settings.selectedGameMode, 'tdm');
+      const requestedChannel = channel ?? chatChannel;
+      const targetChannel: ChatChannel = activeMode === 'ffa' ? 'all' : requestedChannel;
       const local = snap?.players.find((p) => p.id === snap.localPlayerId);
       networkRef.current?.sendChatMessage(text, targetChannel, {
         id: local?.id ?? 'player',
@@ -897,6 +956,7 @@ export function useMatchMachine() {
       sendChatMessage,
       setChatChannel,
       closeInMatchChat,
+      respawnPlayer,
     }),
     [
       backToMenu,
@@ -916,6 +976,7 @@ export function useMatchMachine() {
       previewMap,
       previewShowcase,
       resetSettings,
+      respawnPlayer,
       restartMatch,
       resumeMatch,
       returnToLobby,

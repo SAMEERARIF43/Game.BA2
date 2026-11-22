@@ -13,6 +13,7 @@ import {
   Viewport,
 } from '@babylonjs/core';
 import { TeamId } from '../maps/types';
+import { GameMode } from './gameModeRules';
 import { PingHudMarker, PingKind } from './types';
 
 export interface PingPlacementRequest {
@@ -82,7 +83,8 @@ export function resolvePingRaycast(
   direction: Vector3,
   localTeam: TeamId,
   excludeMesh?: AbstractMesh | null,
-  maxRange = 180
+  maxRange = 180,
+  gameMode: GameMode = 'tdm'
 ): PingRaycastResult {
   const dir = direction.clone();
   if (dir.lengthSquared() < 1e-6) {
@@ -108,7 +110,7 @@ export function resolvePingRaycast(
         }
       | undefined;
 
-    if (meta?.isBot && meta.botId && meta.team && meta.team !== localTeam) {
+    if (meta?.isBot && meta.botId && meta.team && (gameMode === 'ffa' || meta.team !== localTeam)) {
       const grandParent = pick.pickedMesh?.parent?.parent;
       const rootPos = grandParent instanceof TransformNode ? grandParent.position : undefined;
       return {
@@ -120,7 +122,7 @@ export function resolvePingRaycast(
       };
     }
 
-    if (meta?.isRemotePlayer && meta.playerId && meta.team && meta.team !== localTeam) {
+    if (meta?.isRemotePlayer && meta.playerId && meta.team && (gameMode === 'ffa' || meta.team !== localTeam)) {
       const grandParent = pick.pickedMesh?.parent?.parent;
       const rootPos = grandParent instanceof TransformNode ? grandParent.position : undefined;
       return {

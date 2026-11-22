@@ -6,10 +6,19 @@ export interface Vec3Tuple {
   z: number;
 }
 
+export interface ServerBombSite {
+  id: 'A' | 'B';
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+}
+
 export interface ServerMapLayout {
   blueSpawns: Vec3Tuple[];
   redSpawns: Vec3Tuple[];
   waypoints: Vec3Tuple[];
+  bombSites: ServerBombSite[];
 }
 
 export const SERVER_MAP_LAYOUTS: Record<ServerMapId, ServerMapLayout> = {
@@ -47,6 +56,10 @@ export const SERVER_MAP_LAYOUTS: Record<ServerMapId, ServerMapLayout> = {
       { x: 0, y: 0, z: 17 },
       { x: 18, y: 0, z: 16 },
     ],
+    bombSites: [
+      { id: 'A', x: -8, y: 0, z: 8, radius: 4.5 },
+      { id: 'B', x: 20.5, y: 0, z: 6, radius: 4.5 },
+    ],
   },
   desert: {
     blueSpawns: [
@@ -81,6 +94,10 @@ export const SERVER_MAP_LAYOUTS: Record<ServerMapId, ServerMapLayout> = {
       { x: -18, y: 0, z: 16 },
       { x: 0, y: 0, z: 17 },
       { x: 18, y: 0, z: 16 },
+    ],
+    bombSites: [
+      { id: 'A', x: -8, y: 0, z: 7, radius: 4.5 },
+      { id: 'B', x: 8, y: 0, z: 7, radius: 4.5 },
     ],
   },
   industrial: {
@@ -117,6 +134,10 @@ export const SERVER_MAP_LAYOUTS: Record<ServerMapId, ServerMapLayout> = {
       { x: 0, y: 0, z: 16 },
       { x: 18, y: 0, z: 16 },
     ],
+    bombSites: [
+      { id: 'A', x: -7, y: 0, z: 7, radius: 4.5 },
+      { id: 'B', x: 19, y: 0, z: 6, radius: 4.5 },
+    ],
   },
   forest: {
     blueSpawns: [
@@ -151,6 +172,10 @@ export const SERVER_MAP_LAYOUTS: Record<ServerMapId, ServerMapLayout> = {
       { x: -18, y: 0, z: 16 },
       { x: 0, y: 0, z: 17 },
       { x: 18, y: 0, z: 16 },
+    ],
+    bombSites: [
+      { id: 'A', x: -15, y: 0, z: 7.5, radius: 4.5 },
+      { id: 'B', x: 8, y: 0, z: 8, radius: 4.5 },
     ],
   },
 };

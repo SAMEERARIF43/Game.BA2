@@ -77,6 +77,7 @@ export default function App() {
         <CustomMatchMenu
           initialJoinCode={joinCode}
           initialMapId={selectedMapId}
+          initialMode={settings.selectedGameMode}
           initialCallsign={settings.callsign}
           errorBanner={disconnectError}
           onCallsignChange={actions.updateCallsign}
@@ -117,6 +118,8 @@ export default function App() {
             showFps={settings.showFps}
             keybindings={settings.keybindings}
             onSelectGun={actions.selectGun}
+            onSelectKnifeCharm={actions.selectKnifeCharm}
+            onRespawn={actions.respawnPlayer}
             isCustomMatch
             chatMessages={derived.chatMessages}
             chatOpen={derived.chatOpen}
@@ -169,6 +172,8 @@ export default function App() {
             showFps={settings.showFps}
             keybindings={settings.keybindings}
             onSelectGun={actions.selectGun}
+            onSelectKnifeCharm={actions.selectKnifeCharm}
+            onRespawn={actions.respawnPlayer}
             isCustomMatch={derived.isCustomMatch}
             chatMessages={derived.chatMessages}
             chatOpen={derived.chatOpen}

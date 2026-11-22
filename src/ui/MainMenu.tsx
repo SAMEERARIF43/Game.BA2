@@ -14,6 +14,12 @@ import {
   Users,
 } from 'lucide-react';
 import {
+  GAME_MODE_IDS,
+  GAME_MODE_META,
+  GameMode,
+  normalizeGameMode,
+} from '../game/gameModeRules';
+import {
   CHARACTERS,
   CHARACTER_IDS,
   CharacterId,
@@ -26,6 +32,7 @@ import {
   WEAPONS,
 } from '../game/types';
 import { MAP_LIST, MAP_REGISTRY } from '../maps/MapManager';
+import { WeaponPreview } from './WeaponPreview';
 import { MapId } from '../maps/types';
 import { getRankSummary } from '../settings/progressionStorage';
 import { DEFAULT_KEYBINDINGS, formatKeyCode } from '../settings/keybindings';
@@ -100,6 +107,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const selectedCharacter = CHARACTERS[selectedCharacterId];
   const selectedGun = WEAPONS[selectedGunId];
   const selectedCharm = KNIFE_CHARMS[knifeCharmId];
+  const selectedMode: GameMode = normalizeGameMode(settings.selectedGameMode, 'tdm');
+  const selectedModeMeta = GAME_MODE_META[selectedMode];
   const rank = getRankSummary(xp);
 
   const navItems: Array<{ id: MenuTab; label: string; icon: React.ReactNode }> = [
@@ -131,7 +140,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               STRIKE FORCE
             </div>
             <div className="hidden truncate font-mono-tabular text-[10px] tracking-wider text-slate-400 sm:block">
-              TDM · {selectedMap.name.toUpperCase()}
+              {selectedModeMeta.shortLabel} · {selectedMap.name.toUpperCase()}
             </div>
           </div>
         </div>
@@ -244,10 +253,51 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     </button>
                   </div>
                   <div className="mt-1 flex items-center justify-between font-mono-tabular text-[11px] text-slate-400">
-                    <span>Team Size</span>
+                    <span>Rules</span>
                     <span className="text-slate-200">
-                      {settings.botsPerTeam}v{settings.botsPerTeam} · {settings.killLimit} Kills
+                      {selectedMode === 'ffa'
+                        ? `${settings.botsPerTeam * 2 + 1} Combatants · 20 Kills`
+                        : selectedMode === 'bomb'
+                          ? `${settings.botsPerTeam}v${settings.botsPerTeam} · First to 5 Rnds`
+                          : `${settings.botsPerTeam}v${settings.botsPerTeam} · ${settings.killLimit} Kills`}
                     </span>
+                  </div>
+
+                  {/* Game Mode Selector */}
+                  <div className="mt-3 border-t border-white/10 pt-2.5">
+                    <div className="flex items-center justify-between font-mono-tabular text-[10px]">
+                      <span className="font-semibold tracking-widest text-slate-400">GAME MODE</span>
+                      <span className="text-amber-300">{selectedModeMeta.targetLabel}</span>
+                    </div>
+                    <div className="mt-1.5 grid grid-cols-3 gap-1">
+                      {GAME_MODE_IDS.map((modeId) => {
+                        const meta = GAME_MODE_META[modeId];
+                        const active = selectedMode === modeId;
+                        return (
+                          <button
+                            key={modeId}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() =>
+                              onUpdateSettings({
+                                ...settings,
+                                selectedGameMode: modeId,
+                              })
+                            }
+                            className={`cursor-pointer border px-2 py-1.5 font-mono-tabular text-[10px] font-bold tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
+                              active
+                                ? 'border-amber-400 bg-amber-400/20 text-amber-200'
+                                : 'border-white/12 bg-black/40 text-slate-300 hover:border-white/30 hover:text-white'
+                            }`}
+                          >
+                            {meta.shortLabel}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-1.5 text-[10px] leading-snug text-slate-400">
+                      {selectedModeMeta.tagline}
+                    </p>
                   </div>
                 </section>
 
@@ -360,7 +410,14 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                             : 'SEMI'}
                       </span>
                     </div>
-                    <div className="mt-0.5 font-display text-sm font-bold text-white">
+                    <div className="my-1.5 border border-white/10 bg-slate-950/65 px-2 py-1">
+                      <WeaponPreview
+                        weaponId={selectedGunId}
+                        variant="compact"
+                        className="h-10 w-full"
+                      />
+                    </div>
+                    <div className="font-display text-sm font-bold text-white">
                       {selectedGun.name}
                     </div>
                     <div className="mt-0.5 font-mono-tabular text-[10px] text-slate-300">
@@ -385,8 +442,18 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                         {selectedCharm.name}
                       </span>
                     </div>
-                    <div className="mt-0.5 font-display text-xs font-semibold text-white">
-                      {WEAPONS.knife.name}
+                    <div className="mt-1.5 flex items-center gap-2.5">
+                      <div className="border border-white/10 bg-slate-950/65 px-1.5 py-0.5">
+                        <WeaponPreview
+                          weaponId="knife"
+                          charmId={knifeCharmId}
+                          variant="compact"
+                          className="h-8 w-20"
+                        />
+                      </div>
+                      <div className="font-display text-xs font-semibold text-white">
+                        {WEAPONS.knife.name}
+                      </div>
                     </div>
                   </div>
 
@@ -416,10 +483,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               <button
                 type="button"
                 onClick={onPlayOfflineTdm}
-                className="flex cursor-pointer items-center justify-center gap-3 border border-amber-300 bg-amber-500 px-10 py-3.5 font-display text-base font-bold tracking-widest text-slate-950 shadow-xl shadow-amber-950/35 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 whitespace-nowrap sm:min-w-[260px]"
+                className="flex cursor-pointer items-center justify-center gap-3 border border-amber-300 bg-amber-500 px-8 py-3.5 font-display text-base font-bold tracking-widest text-slate-950 shadow-xl shadow-amber-950/35 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 whitespace-nowrap sm:min-w-[260px]"
               >
                 <Crosshair className="h-5 w-5" />
-                <span>PLAY · SOLO BOTS</span>
+                <span>PLAY · SOLO BOTS ({selectedModeMeta.shortLabel})</span>
               </button>
 
               <button
@@ -581,7 +648,14 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                             )}
                           </div>
                         </div>
-                        <div className="mt-1 truncate font-display text-sm font-bold text-white">
+                        <div className="my-2 border border-white/[0.06] bg-slate-950/65 px-2 py-1">
+                          <WeaponPreview
+                            weaponId={id}
+                            variant="card"
+                            className="h-12 w-full"
+                          />
+                        </div>
+                        <div className="truncate font-display text-sm font-bold text-white">
                           {w.name}
                         </div>
                         <div className="mt-0.5 font-mono-tabular text-[10px] text-slate-400">
@@ -597,7 +671,15 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               {/* Slot 02 Knife + 5 Selectable 3D Charms */}
               <div className="mt-4 border border-white/12 bg-black/40 p-3.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className="border border-white/10 bg-slate-950/65 px-2 py-0.5">
+                      <WeaponPreview
+                        weaponId="knife"
+                        charmId={knifeCharmId}
+                        variant="compact"
+                        className="h-8 w-24"
+                      />
+                    </div>
                     <span className="border border-emerald-400/35 bg-emerald-500/15 px-1.5 py-0.5 font-mono-tabular text-[10px] font-bold text-emerald-300">
                       SLOT 02 · ALWAYS EQUIPPED
                     </span>

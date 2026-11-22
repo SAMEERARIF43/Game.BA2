@@ -428,6 +428,42 @@ export class AudioEngine {
     }
   }
 
+  public playBombBeep(urgency01 = 0): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    const clamped = Math.max(0, Math.min(1, urgency01));
+    const freq = 1520 + clamped * 560;
+    this.triggerTone(now, freq, freq * 0.96, 0.06, 'square', 0.12 + clamped * 0.08);
+    this.triggerTone(now, freq * 1.5, freq * 1.48, 0.05, 'sine', 0.10 + clamped * 0.06);
+  }
+
+  public playBombPlanted(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    this.triggerTone(now, 660, 880, 0.08, 'triangle', 0.24);
+    this.triggerTone(now + 0.09, 880, 1320, 0.12, 'square', 0.18);
+    this.triggerTone(now + 0.22, 1320, 1760, 0.14, 'sine', 0.22);
+  }
+
+  public playBombDefused(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    this.triggerTone(now, 520, 780, 0.09, 'sine', 0.24);
+    this.triggerTone(now + 0.09, 780, 1040, 0.11, 'sine', 0.26);
+    this.triggerTone(now + 0.2, 1040, 1560, 0.18, 'triangle', 0.22);
+  }
+
+  public playBombExplosion(): void {
+    this.playExplosion();
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    this.triggerTone(now, 90, 26, 0.72, 'sawtooth', 0.5);
+  }
+
   private startAmbientLoop(): void {
     if (!this.ctx || !this.musicGain || !this.ambientNoiseBuffer || this.ambientStarted) return;
     this.ambientStarted = true;

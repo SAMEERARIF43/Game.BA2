@@ -55,6 +55,10 @@ export const FOREST_MAP_DEF: MapDefinition = {
     new Vector3(0, 0.2, 17),
     new Vector3(18, 0.2, 16),
   ],
+  bombSites: [
+    { id: 'A', label: 'Site A', position: new Vector3(-15, 0, 7.5), radius: 4.5 },
+    { id: 'B', label: 'Site B', position: new Vector3(8, 0, 8), radius: 4.5 },
+  ],
   previewCameraTarget: new Vector3(0, 2.0, 0),
 };
 

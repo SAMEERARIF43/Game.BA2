@@ -1,5 +1,8 @@
 import { MapId, TeamId } from '../maps/types';
 import { KeybindingsConfig } from '../settings/keybindings';
+import type { BombPhase, BombSiteId, GameMode } from './gameModeRules';
+
+export type { BombPhase, BombSiteId, GameMode } from './gameModeRules';
 
 export type GunId = 'shotgun' | 'ak47' | 'smg' | 'sniper' | 'pistol';
 
@@ -354,15 +357,52 @@ export interface MatchParticipant {
   respawnTimer: number;
 }
 
+export interface BombStateSnapshot {
+  phase: BombPhase;
+  siteId: BombSiteId | null;
+  carrierId: string | null;
+  carrierName: string | null;
+  plantedBy: string | null;
+  plantX: number;
+  plantY: number;
+  plantZ: number;
+  detonateRemainingSec: number;
+  actionPlayerId: string | null;
+  actionType: 'plant' | 'defuse' | null;
+  actionProgress: number;
+  roundWinner: TeamId | null;
+  roundEndReason: string | null;
+  roundTransitionTimerSec: number;
+}
+
+export interface BombSiteHudMarker {
+  id: BombSiteId;
+  label: string;
+  x: number;
+  y: number;
+  z: number;
+  distanceMeters: number;
+  screenXPct: number;
+  screenYPct: number;
+  onScreen: boolean;
+  isPlantedHere: boolean;
+}
+
 export interface MatchSnapshot {
   phase: MatchPhase;
+  mode: GameMode;
   mapId: MapId;
   mapName: string;
   blueScore: number;
   redScore: number;
   killLimit: number;
+  roundNumber: number;
+  roundsToWin: number;
   timeRemainingSec: number;
   winner: TeamId | 'draw' | null;
+  winnerParticipantId?: string | null;
+  winnerName?: string | null;
+  bombState?: BombStateSnapshot | null;
   participants: MatchParticipant[];
   killFeed: KillFeedEntry[];
 }
@@ -518,6 +558,18 @@ export interface HudState {
   showOnboarding: boolean;
   lowHealthPulse: boolean;
   fps: number;
+  gameMode: GameMode;
+  localTeam: TeamId;
+  bombSites: BombSiteHudMarker[];
+  bombInteractPrompt: {
+    action: 'plant' | 'defuse';
+    siteId: BombSiteId;
+    progress: number;
+    remainingSec: number;
+  } | null;
+  ffaRank: number | null;
+  ffaLeaderName: string | null;
+  ffaLeaderKills: number;
   match: MatchSnapshot;
 }
 
@@ -536,9 +588,15 @@ export interface GameSettings {
   killLimit: number;
   botsPerTeam: number;
   screenShakeScale: number;
+  selectedGameMode?: GameMode;
   selectedCharacterId: CharacterId;
   selectedGunId: GunId;
   knifeCharmId: KnifeCharmId;
+  slideEnabled: boolean;
+  slideInputMode: SlideTriggerMode;
+  slidePostStance: PostSlideStance;
+  slideJumpCancel: boolean;
+  slideCameraTilt: boolean;
   slideTrigger: SlideTriggerMode;
   postSlideStance: PostSlideStance;
   jumpCancelsSlide: boolean;

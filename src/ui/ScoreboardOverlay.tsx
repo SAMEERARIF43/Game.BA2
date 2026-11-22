@@ -1,4 +1,5 @@
 import React from 'react';
+import { GAME_MODE_META, normalizeGameMode, sortFfaParticipants } from '../game/gameModeRules';
 import { MatchParticipant, MatchSnapshot } from '../game/types';
 
 interface ScoreboardOverlayProps {
@@ -14,30 +15,33 @@ export function formatMatchTime(seconds: number): string {
   return `${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
 }
 
-function TeamTable({
+function ParticipantTable({
   label,
-  score,
+  scoreLabel,
   accentClass,
   rows,
   mvpId,
+  showRankColumn = false,
 }: {
   label: string;
-  score: number;
+  scoreLabel: string | number;
   accentClass: string;
   rows: MatchParticipant[];
   mvpId?: string;
+  showRankColumn?: boolean;
 }) {
   return (
     <div className="border border-white/10 bg-black/45">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
         <span className={`font-display text-sm font-semibold ${accentClass}`}>{label}</span>
         <span className="font-mono-tabular font-display text-lg font-bold text-white">
-          {score}
+          {scoreLabel}
         </span>
       </div>
       <table className="w-full text-left text-xs">
         <thead>
           <tr className="border-b border-white/10 text-slate-400">
+            {showRankColumn && <th className="w-10 px-2 py-2 font-medium sm:px-3">#</th>}
             <th className="px-2 py-2 font-medium sm:px-4">Operator</th>
             <th className="px-2 py-2 text-right font-medium">Kills</th>
             <th className="px-2 py-2 text-right font-medium">Deaths</th>
@@ -50,7 +54,7 @@ function TeamTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((p) => {
+          {rows.map((p, idx) => {
             const isMvp = p.id === mvpId;
             const roleTag = p.isPlayer ? 'YOU' : p.id.startsWith('bot_') ? 'BOT' : 'PLAYER';
             return (
@@ -64,6 +68,11 @@ function TeamTable({
                       : 'text-slate-300'
                 }`}
               >
+                {showRankColumn && (
+                  <td className="px-2 py-2 font-mono-tabular font-bold text-amber-300 sm:px-3">
+                    #{idx + 1}
+                  </td>
+                )}
                 <td className="max-w-[170px] px-2 py-2 font-medium sm:max-w-none sm:px-4">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate">{p.name}</span>
@@ -108,11 +117,13 @@ export const ScoreboardOverlay: React.FC<ScoreboardOverlayProps> = ({
   embedded = false,
   mvpId,
 }) => {
+  const mode = normalizeGameMode(match.mode, 'tdm');
+  const modeMeta = GAME_MODE_META[mode];
   const blueTeam = match.participants.filter((p) => p.team === 'blue');
   const redTeam = match.participants.filter((p) => p.team === 'red');
-  const fallbackMvp = [...match.participants].sort(
-    (a, b) => b.kills - a.kills || a.deaths - b.deaths,
-  )[0];
+  const ffaRows = sortFfaParticipants(match.participants);
+  const ffaLeader = ffaRows[0];
+  const fallbackMvp = ffaRows[0];
   const resolvedMvpId = mvpId ?? fallbackMvp?.id;
 
   const content = (
@@ -120,38 +131,66 @@ export const ScoreboardOverlay: React.FC<ScoreboardOverlayProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-3.5">
         <div>
           <h2 className="font-display text-lg font-semibold text-white">
-            Team Deathmatch · {match.mapName}
+            {modeMeta.label} · {match.mapName}
           </h2>
           <p className="text-xs text-slate-400">
-            Score Limit {match.killLimit} · Time Remaining {formatMatchTime(match.timeRemainingSec)}
+            {mode === 'bomb'
+              ? `Round ${match.roundNumber} · First to ${match.roundsToWin} Rounds · Round Timer ${formatMatchTime(match.timeRemainingSec)}`
+              : `Score Limit ${match.killLimit} · Time Remaining ${formatMatchTime(match.timeRemainingSec)}`}
           </p>
           <p className="mt-1 font-mono-tabular text-[9px] text-slate-500">
             Individual score is 100 per elimination, excluding bonuses.
           </p>
         </div>
-        <div className="flex items-center gap-4 font-mono-tabular">
-          <span className="text-sm font-semibold text-blue-400">Blue {match.blueScore}</span>
-          <span className="text-slate-600">—</span>
-          <span className="text-sm font-semibold text-red-400">Red {match.redScore}</span>
-        </div>
+        {mode === 'ffa' ? (
+          <div className="flex items-center gap-2 font-mono-tabular text-sm">
+            <span className="text-slate-400">Leader</span>
+            <span className="font-semibold text-amber-300">
+              {ffaLeader ? `${ffaLeader.name} (${ffaLeader.kills})` : '—'}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-4 font-mono-tabular">
+            <span className="text-sm font-semibold text-blue-400">
+              {mode === 'bomb' ? 'Attackers' : 'Blue'} {match.blueScore}
+            </span>
+            <span className="text-slate-600">—</span>
+            <span className="text-sm font-semibold text-red-400">
+              {mode === 'bomb' ? 'Defenders' : 'Red'} {match.redScore}
+            </span>
+          </div>
+        )}
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-        <TeamTable
-          label="Blue Task Force"
-          score={match.blueScore}
-          accentClass="text-blue-400"
-          rows={blueTeam}
-          mvpId={resolvedMvpId}
-        />
-        <TeamTable
-          label="Red Opposition"
-          score={match.redScore}
-          accentClass="text-red-400"
-          rows={redTeam}
-          mvpId={resolvedMvpId}
-        />
-      </div>
+      {mode === 'ffa' ? (
+        <div className="mt-4">
+          <ParticipantTable
+            label="Free-For-All Leaderboard"
+            scoreLabel={`${ffaRows.length} Combatants`}
+            accentClass="text-amber-300"
+            rows={ffaRows}
+            mvpId={resolvedMvpId}
+            showRankColumn
+          />
+        </div>
+      ) : (
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <ParticipantTable
+            label={mode === 'bomb' ? 'Blue — Attackers' : 'Blue Task Force'}
+            scoreLabel={match.blueScore}
+            accentClass="text-blue-400"
+            rows={blueTeam}
+            mvpId={resolvedMvpId}
+          />
+          <ParticipantTable
+            label={mode === 'bomb' ? 'Red — Defenders' : 'Red Opposition'}
+            scoreLabel={match.redScore}
+            accentClass="text-red-400"
+            rows={redTeam}
+            mvpId={resolvedMvpId}
+          />
+        </div>
+      )}
     </div>
   );
 

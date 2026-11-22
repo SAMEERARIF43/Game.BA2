@@ -15,6 +15,7 @@ import {
   WEAPONS,
 } from '../game/types';
 import { SettingsPanel } from './SettingsPanel';
+import { WeaponPreview } from './WeaponPreview';
 
 interface PauseMenuProps {
   hud: HudState;
@@ -260,6 +261,13 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                           </span>
                         )}
                       </div>
+                      <div className="border border-white/[0.06] bg-slate-950/60 px-1 py-0.5">
+                        <WeaponPreview
+                          weaponId={id}
+                          variant="card"
+                          className="h-10 w-full"
+                        />
+                      </div>
                       <div className="truncate text-[10px] leading-4 text-slate-400">
                         {cfg.category}
                       </div>
@@ -271,9 +279,19 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
               {/* Knife + Charm Selector */}
               <div className="mt-3 border border-white/10 bg-black/30 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                  <span className="font-medium text-slate-200">
-                    [2] {WEAPONS.knife.name} · Quick Melee [V / F]
-                  </span>
+                  <div className="flex items-center gap-2.5">
+                    <div className="border border-white/10 bg-slate-950/65 px-1.5 py-0.5">
+                      <WeaponPreview
+                        weaponId="knife"
+                        charmId={hud.knifeCharmId}
+                        variant="compact"
+                        className="h-7 w-20"
+                      />
+                    </div>
+                    <span className="font-medium text-slate-200">
+                      [2] {WEAPONS.knife.name} · Quick Melee [V / F]
+                    </span>
+                  </div>
                   <span className="inline-flex items-center gap-1 text-amber-300">
                     <Sparkles className="h-3 w-3" />
                     {selectedCharm.name}

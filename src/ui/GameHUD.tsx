@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Crosshair, MapPin, MessageSquare, Send, X } from 'lucide-react';
+import { Bomb, Crosshair, MapPin, MessageSquare, Send, X } from 'lucide-react';
 import {
   MINIMAP_LAYOUTS,
   worldSizeToMinimapPercent,
   worldToMinimapPercent,
   yawRadToCompassDeg,
 } from '../game/minimap';
-import { GUN_IDS, GunId, HudState, KNIFE_CHARMS, WEAPONS } from '../game/types';
+import { GunId, HudState, KNIFE_CHARMS, KnifeCharmId, WEAPONS } from '../game/types';
 import {
   CHAT_FADE_MS,
   CHAT_MAX_LENGTH,
@@ -18,13 +18,17 @@ import {
   formatKeyCode,
   KeybindingsConfig,
 } from '../settings/keybindings';
+import { DeathScreen } from './DeathScreen';
 import { formatMatchTime, ScoreboardOverlay } from './ScoreboardOverlay';
+import { WeaponPreview } from './WeaponPreview';
 
 interface GameHUDProps {
   hud: HudState;
   showFps?: boolean;
   keybindings?: KeybindingsConfig;
   onSelectGun?: (id: GunId) => void;
+  onSelectKnifeCharm?: (id: KnifeCharmId) => void;
+  onRespawn?: () => void;
   isCustomMatch?: boolean;
   chatMessages?: ChatMessage[];
   chatOpen?: boolean;
@@ -45,6 +49,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   showFps = false,
   keybindings = DEFAULT_KEYBINDINGS,
   onSelectGun,
+  onSelectKnifeCharm,
+  onRespawn,
   isCustomMatch = false,
   chatMessages = [],
   chatOpen = false,
@@ -170,6 +176,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const swayX = showSniperOverlay ? Math.sin(now * 0.003) * (hud.speed > 0.5 ? 3.2 : 0.8) : 0;
   const swayY = showSniperOverlay ? Math.cos(now * 0.0025) * (hud.speed > 0.5 ? 3.2 : 0.8) : 0;
 
+  const mode = hud.gameMode ?? hud.match.mode ?? 'tdm';
+  const bombState = hud.match.bombState ?? null;
+  const localParticipantId = hud.match.participants.find((p) => p.isPlayer)?.id ?? 'player';
+  const effectiveChatChannel: ChatChannel = mode === 'ffa' ? 'all' : chatChannel;
+
   // Real-time 2D Minimap projection data
   const minimap = hud.minimap;
   const mapStructures = MINIMAP_LAYOUTS[minimap.mapId] ?? MINIMAP_LAYOUTS.urban;
@@ -179,9 +190,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     minimap.halfExtent
   );
   const playerCompassDeg = yawRadToCompassDeg(minimap.playerYawRad);
-  const teammateCount = minimap.actors.filter(
-    (a) => !a.pingKind && a.team === minimap.localTeam
-  ).length;
+  const teammateCount =
+    mode === 'ffa'
+      ? 0
+      : minimap.actors.filter((a) => !a.pingKind && a.kind === 'teammate').length;
 
   // Custom Match In-Game Chat Feed filtering (always show last 6 when typing, fade >6s otherwise)
   const visibleChatMessages = chatOpen
@@ -199,7 +211,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
     e.preventDefault();
     const trimmed = chatDraft.trim();
     if (trimmed.length > 0) {
-      onSendChat?.(trimmed, chatChannel);
+      onSendChat?.(trimmed, effectiveChatChannel);
     }
     setChatDraft('');
     chatInputRef.current?.blur();
@@ -215,7 +227,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       onCloseChat?.(true);
     } else if (e.key === 'Tab') {
       e.preventDefault();
-      onChangeChatChannel?.(chatChannel === 'all' ? 'team' : 'all');
+      if (mode !== 'ffa') {
+        onChangeChatChannel?.(chatChannel === 'all' ? 'team' : 'all');
+      }
     }
   };
 
@@ -351,6 +365,37 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           }}
         />
       )}
+
+      {/* Projected 3D Bomb Site & Defuse Markers */}
+      {mode === 'bomb' &&
+        hud.match.phase === 'playing' &&
+        !hud.showScoreboard &&
+        hud.bombSites.length > 0 && (
+          <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
+            {hud.bombSites.map((site) => (
+              <div
+                key={site.id}
+                className="absolute -translate-x-1/2 -translate-y-1/2"
+                style={{
+                  left: `${site.screenXPct}%`,
+                  top: `${site.screenYPct}%`,
+                }}
+              >
+                <div
+                  className={`flex items-center gap-1 border px-1.5 py-0.5 font-mono-tabular text-[10px] font-bold shadow-md shadow-black/40 backdrop-blur-sm ${
+                    site.isPlantedHere
+                      ? 'border-red-400 bg-red-950/90 text-red-200'
+                      : 'border-amber-400/75 bg-slate-950/85 text-amber-200'
+                  } ${!site.onScreen ? 'opacity-80 ring-1 ring-white/25' : ''}`}
+                >
+                  <Bomb className="h-3 w-3 shrink-0" />
+                  <span>{site.label}</span>
+                  <span className="text-white/90">{site.distanceMeters}m</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
       {/* Projected Teammate Tactical Ping Markers (synchronized with 3D world icons) */}
       {hud.match.phase === 'playing' && !hud.showScoreboard && hud.pings.length > 0 && (
@@ -589,143 +634,173 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         </div>
       )}
 
-      {/* Killer Banner & Kill-Cam Respawn Overlay */}
-      {!hud.isAlive && hud.match.phase === 'playing' && (
-        <div className="absolute inset-0 flex items-end justify-center pb-10">
-          <div className="pointer-events-auto w-full max-w-xl border border-white/20 bg-[#0b0f16]/90 px-6 py-4 backdrop-blur-md">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2">
-              <span className="font-display text-xs font-bold tracking-widest text-red-400">
-                ELIMINATED BY
+      {/* Bomb Plant / Defuse Hold [E] Prompt */}
+      {hud.isAlive &&
+        hud.match.phase === 'playing' &&
+        !hud.showScoreboard &&
+        hud.bombInteractPrompt && (
+          <div className="pointer-events-none absolute bottom-32 left-1/2 z-20 w-72 -translate-x-1/2 border border-amber-400/55 bg-slate-950/90 px-4 py-2.5 shadow-xl shadow-black/40 backdrop-blur-md">
+            <div className="flex items-center justify-between gap-2 font-mono-tabular text-[11px] font-bold">
+              <span className="flex items-center gap-1.5 text-amber-300">
+                <Bomb className="h-3.5 w-3.5" />
+                {hud.bombInteractPrompt.action === 'plant'
+                  ? `HOLD [E] TO PLANT SITE ${hud.bombInteractPrompt.siteId}`
+                  : 'HOLD [E] TO DEFUSE BOMB'}
               </span>
-              <span className="font-mono-tabular text-xs font-semibold text-amber-400">
-                Respawning in {hud.respawnTimer.toFixed(1)}s
+              <span className="text-white">
+                {hud.bombInteractPrompt.remainingSec.toFixed(1)}s
               </span>
             </div>
-
-            {hud.killerBanner ? (
-              <div className="mt-3 flex items-center justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`font-display text-lg font-bold ${
-                        hud.killerBanner.team === 'blue' ? 'text-blue-400' : 'text-red-400'
-                      }`}
-                    >
-                      {hud.killerBanner.name}
-                    </span>
-                    {hud.killerBanner.headshot && (
-                      <span className="border border-amber-400/40 bg-amber-400/15 px-1.5 py-0.5 font-mono-tabular text-[10px] font-bold text-amber-300">
-                        HEADSHOT
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 font-mono-tabular text-xs text-slate-300">
-                    {hud.killerBanner.weaponName}
-                    {hud.killerBanner.distanceMeters > 0
-                      ? ` · ${hud.killerBanner.distanceMeters.toFixed(1)}m`
-                      : ''}
-                  </div>
-                </div>
-
-                {typeof hud.killerBanner.killerHpRemaining === 'number' && (
-                  <div className="text-right">
-                    <div className="text-[10px] uppercase tracking-wider text-slate-400">
-                      Killer HP
-                    </div>
-                    <div className="font-mono-tabular text-sm font-bold text-white">
-                      {hud.killerBanner.killerHpRemaining}
-                    </div>
-                    <div className="mt-1 h-1 w-20 bg-white/15">
-                      <div
-                        className="h-full bg-red-500"
-                        style={{
-                          width: `${Math.max(0, Math.min(100, hud.killerBanner.killerHpRemaining))}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              hud.lastKillerName && (
-                <div className="mt-2 text-xs text-slate-300">
-                  Taken down by <span className="font-semibold text-white">{hud.lastKillerName}</span>
-                  {hud.lastKillerWeapon ? ` · ${hud.lastKillerWeapon}` : ''}
-                </div>
-              )
-            )}
-
-            {/* Death / Pre-Spawn Gun Switcher */}
-            <div className="mt-3.5 border-t border-white/10 pt-3">
-              <div className="flex items-center justify-between text-[10px]">
-                <span className="font-display font-semibold tracking-wider text-slate-300">
-                  NEXT SPAWN GUN · PRESS [1–5] OR CLICK
-                </span>
-                <span className="font-mono-tabular text-amber-300">
-                  {WEAPONS[hud.queuedGunId].name} + Knife
-                </span>
-              </div>
-              <div className="mt-2 grid grid-cols-5 gap-1.5">
-                {GUN_IDS.map((gunId, idx) => {
-                  const g = WEAPONS[gunId];
-                  const selected = hud.queuedGunId === gunId;
-                  return (
-                    <button
-                      key={gunId}
-                      type="button"
-                      onClick={() => onSelectGun?.(gunId)}
-                      className={`cursor-pointer border px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
-                        selected
-                          ? 'border-amber-400 bg-amber-400/20 text-white'
-                          : 'border-white/10 bg-black/40 text-slate-300 hover:border-white/25 hover:bg-white/10'
-                      }`}
-                    >
-                      <div className="font-mono-tabular text-[9px] font-bold text-amber-300">
-                        [{idx + 1}]
-                      </div>
-                      <div className="truncate font-display text-[11px] font-semibold">
-                        {g.shortName}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+            <div className="mt-1.5 h-1.5 w-full bg-white/15">
+              <div
+                className={`h-full transition-[width] duration-75 ${
+                  hud.bombInteractPrompt.action === 'plant' ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+                style={{
+                  width: `${Math.max(4, Math.min(100, Math.round(hud.bombInteractPrompt.progress * 100)))}%`,
+                }}
+              />
             </div>
           </div>
-        </div>
+        )}
+
+      {/* Interactive Death / Respawn Screen with Visual Gun Switcher */}
+      {!hud.isAlive && hud.match.phase === 'playing' && !hud.showScoreboard && (
+        <DeathScreen
+          hud={hud}
+          chatOpen={chatOpen}
+          onSelectGun={(gunId) => onSelectGun?.(gunId)}
+          onSelectKnifeCharm={onSelectKnifeCharm}
+          onRespawn={() => onRespawn?.()}
+        />
       )}
 
-      {/* Top-Center TDM Score Bug, Compass & Killstreak Notification Banner */}
+      {/* Top-Center Mode Score Bug, Compass & Killstreak Notification Banner */}
       <div className="absolute top-4 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
-        <div className="flex items-center border border-slate-400/20 bg-slate-950/80 shadow-lg shadow-black/20 backdrop-blur-md">
-          <div className="flex items-center gap-2.5 border-r border-white/10 px-4 py-1.5">
-            <span className="text-[11px] font-medium text-blue-400">BLUE</span>
-            <span className="font-mono-tabular font-display text-xl font-bold text-white">
-              {hud.match.blueScore}
-            </span>
-          </div>
-
-          <div className="px-4 py-1 text-center">
-            <div className="font-mono-tabular font-display text-base font-bold text-amber-400">
-              {formatMatchTime(hud.match.timeRemainingSec)}
+        {mode === 'ffa' ? (
+          <div className="flex items-center border border-slate-400/20 bg-slate-950/80 shadow-lg shadow-black/20 backdrop-blur-md">
+            <div className="flex items-center gap-2 border-r border-white/10 px-4 py-1.5">
+              <span className="text-[11px] font-medium text-amber-300">RANK</span>
+              <span className="font-mono-tabular font-display text-xl font-bold text-white">
+                #{hud.ffaRank ?? 1}
+              </span>
+              <span className="font-mono-tabular text-xs text-slate-400">{hud.eliminations}K</span>
             </div>
-            <div className="font-mono-tabular text-[10px] text-slate-400">
-              Limit {hud.match.killLimit}
+
+            <div className="px-4 py-1 text-center">
+              <div className="font-mono-tabular font-display text-base font-bold text-amber-400">
+                {formatMatchTime(hud.match.timeRemainingSec)}
+              </div>
+              <div className="font-mono-tabular text-[10px] text-slate-400">
+                FFA · Limit {hud.match.killLimit}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 border-l border-white/10 px-4 py-1.5">
+              <span className="max-w-24 truncate font-display text-xs font-semibold text-slate-200">
+                {hud.ffaLeaderName ?? '—'}
+              </span>
+              <span className="font-mono-tabular font-display text-xl font-bold text-amber-300">
+                {hud.ffaLeaderKills}
+              </span>
+              <span className="text-[10px] font-medium text-slate-400">LDR</span>
             </div>
           </div>
+        ) : mode === 'bomb' ? (
+          <div className="flex items-center border border-slate-400/20 bg-slate-950/80 shadow-lg shadow-black/20 backdrop-blur-md">
+            <div className="flex items-center gap-2.5 border-r border-white/10 px-4 py-1.5">
+              <span className="text-[11px] font-medium text-blue-400">ATK</span>
+              <span className="font-mono-tabular font-display text-xl font-bold text-white">
+                {hud.match.blueScore}
+              </span>
+            </div>
 
-          <div className="flex items-center gap-2.5 border-l border-white/10 px-4 py-1.5">
-            <span className="font-mono-tabular font-display text-xl font-bold text-white">
-              {hud.match.redScore}
-            </span>
-            <span className="text-[11px] font-medium text-red-400">RED</span>
+            <div className="px-4 py-1 text-center">
+              {bombState?.phase === 'planted' ? (
+                <>
+                  <div className="animate-pulse font-mono-tabular font-display text-base font-bold text-red-400">
+                    DETONATE {Math.ceil(bombState.detonateRemainingSec)}s
+                  </div>
+                  <div className="font-mono-tabular text-[10px] font-semibold text-red-300">
+                    SITE {bombState.siteId} ARMED
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="font-mono-tabular font-display text-base font-bold text-amber-400">
+                    {formatMatchTime(hud.match.timeRemainingSec)}
+                  </div>
+                  <div className="font-mono-tabular text-[10px] text-slate-400">
+                    RND {hud.match.roundNumber} · 1ST TO {hud.match.roundsToWin}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2.5 border-l border-white/10 px-4 py-1.5">
+              <span className="font-mono-tabular font-display text-xl font-bold text-white">
+                {hud.match.redScore}
+              </span>
+              <span className="text-[11px] font-medium text-red-400">DEF</span>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center border border-slate-400/20 bg-slate-950/80 shadow-lg shadow-black/20 backdrop-blur-md">
+            <div className="flex items-center gap-2.5 border-r border-white/10 px-4 py-1.5">
+              <span className="text-[11px] font-medium text-blue-400">BLUE</span>
+              <span className="font-mono-tabular font-display text-xl font-bold text-white">
+                {hud.match.blueScore}
+              </span>
+            </div>
+
+            <div className="px-4 py-1 text-center">
+              <div className="font-mono-tabular font-display text-base font-bold text-amber-400">
+                {formatMatchTime(hud.match.timeRemainingSec)}
+              </div>
+              <div className="font-mono-tabular text-[10px] text-slate-400">
+                Limit {hud.match.killLimit}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5 border-l border-white/10 px-4 py-1.5">
+              <span className="font-mono-tabular font-display text-xl font-bold text-white">
+                {hud.match.redScore}
+              </span>
+              <span className="text-[11px] font-medium text-red-400">RED</span>
+            </div>
+          </div>
+        )}
 
         <div className="border border-white/10 bg-black/45 px-3 py-0.5 font-mono-tabular text-[11px] text-slate-300">
           <span className="font-semibold text-amber-400">{getCardinalLabel(hud.headingDeg)}</span>{' '}
           <span className="text-slate-500">/</span> {String(hud.headingDeg).padStart(3, '0')}°
         </div>
+
+        {mode === 'bomb' && bombState && (
+          <div
+            className={`border px-3 py-1 font-mono-tabular text-[10px] font-bold tracking-wider shadow-md backdrop-blur-sm ${
+              bombState.phase === 'round_end'
+                ? bombState.roundWinner === 'blue'
+                  ? 'border-blue-400/60 bg-blue-950/90 text-blue-200'
+                  : 'border-red-400/60 bg-red-950/90 text-red-200'
+                : bombState.phase === 'planted'
+                  ? 'border-red-400/60 bg-red-950/85 text-red-200'
+                  : bombState.carrierId === localParticipantId
+                    ? 'border-amber-400/65 bg-amber-500/20 text-amber-200'
+                    : 'border-white/15 bg-slate-950/75 text-slate-300'
+            }`}
+          >
+            {bombState.phase === 'round_end'
+              ? `${bombState.roundWinner === 'blue' ? 'ATTACKERS WIN ROUND' : 'DEFENDERS WIN ROUND'} · ${bombState.roundEndReason ?? ''}`
+              : bombState.phase === 'planted'
+                ? `BOMB PLANTED AT SITE ${bombState.siteId} · ${bombState.detonateRemainingSec.toFixed(1)}s`
+                : bombState.carrierId === localParticipantId
+                  ? 'CARRYING BOMB — HOLD [E] AT SITE A OR B TO PLANT'
+                  : hud.localTeam === 'blue'
+                    ? `BOMB CARRIER: ${bombState.carrierName ?? 'Unassigned'}`
+                    : 'DEFEND SITES A & B'}
+          </div>
+        )}
 
         {showFps && (
           <div className="border border-slate-400/20 bg-slate-950/75 px-2.5 py-1 font-mono-tabular text-[10px] text-slate-300 backdrop-blur-sm">
@@ -817,7 +892,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <span className={hud.uavActive ? 'text-sky-400' : 'text-slate-300'}>
                 {hud.uavActive ? 'UAV SWEEP' : '2D MINIMAP'}
               </span>
-              <span className="text-sky-300/80">{teammateCount} ALLY</span>
+              <span className={mode === 'ffa' ? 'text-amber-300/85' : 'text-sky-300/80'}>
+                {mode === 'ffa' ? 'FREE-FOR-ALL' : `${teammateCount} ALLY`}
+              </span>
             </div>
 
             <div className="relative h-[132px] w-[132px] shrink-0 overflow-hidden bg-[#06090e]">
@@ -887,7 +964,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     );
                   }
 
-                  const isFriend = actor.team === minimap.localTeam;
+                  const isFriend = mode !== 'ffa' && actor.kind === 'teammate';
                   if (isFriend) {
                     const deg = yawRadToCompassDeg(actor.yawRad);
                     return (
@@ -1064,15 +1141,22 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             >
               <button
                 type="button"
-                onClick={() => onChangeChatChannel?.(chatChannel === 'all' ? 'team' : 'all')}
-                title="Switch channel (Tab)"
-                className={`shrink-0 cursor-pointer border px-1.5 py-1 font-mono-tabular text-[10px] font-bold ${
-                  chatChannel === 'team'
+                disabled={mode === 'ffa'}
+                onClick={() => {
+                  if (mode !== 'ffa') {
+                    onChangeChatChannel?.(chatChannel === 'all' ? 'team' : 'all');
+                  }
+                }}
+                title={mode === 'ffa' ? 'All chat only in Free-For-All' : 'Switch channel (Tab)'}
+                className={`shrink-0 border px-1.5 py-1 font-mono-tabular text-[10px] font-bold ${
+                  mode === 'ffa' ? 'cursor-default opacity-80' : 'cursor-pointer'
+                } ${
+                  effectiveChatChannel === 'team'
                     ? 'border-sky-400/50 bg-sky-500/20 text-sky-200'
                     : 'border-amber-400/50 bg-amber-400/20 text-amber-200'
                 }`}
               >
-                [{chatChannel.toUpperCase()}]
+                [{effectiveChatChannel.toUpperCase()}]
               </button>
               <input
                 ref={chatInputRef}
@@ -1104,7 +1188,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         visibleChatMessages.length === 0 && (
           <div className="absolute bottom-24 left-4 flex items-center gap-1.5 border border-white/10 bg-black/45 px-2 py-0.5 font-mono-tabular text-[10px] text-slate-400">
             <MessageSquare className="h-3 w-3 text-slate-400" />
-            <span>[Enter / T] All · [Y] Team Chat</span>
+            <span>
+              {mode === 'ffa' ? '[Enter / T] All Chat' : '[Enter / T] All · [Y] Team Chat'}
+            </span>
           </div>
         )}
 
@@ -1178,7 +1264,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
         {/* Weapon & Ammo Card */}
         <div className="border border-slate-400/20 bg-slate-950/80 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
-          <div className="flex items-baseline justify-between gap-6">
+          <div className="flex items-center justify-between gap-5">
             <div>
               <div className="font-display text-sm font-semibold text-white">
                 {hud.activeWeapon.name}
@@ -1191,30 +1277,40 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     }`}
               </div>
             </div>
-            {hud.activeWeapon.isMelee ? (
-              <div className="flex items-baseline gap-1.5 font-mono-tabular">
-                <span className="font-display text-2xl font-bold text-emerald-300">∞</span>
-                <span className="text-[11px] font-semibold tracking-wider text-slate-400">
-                  MELEE
-                </span>
+            <div className="flex items-center gap-3">
+              <div className="hidden border border-white/10 bg-black/40 px-2 py-0.5 sm:block">
+                <WeaponPreview
+                  weaponId={hud.activeWeapon.id}
+                  charmId={hud.knifeCharmId}
+                  variant="compact"
+                  className="h-9 w-24"
+                />
               </div>
-            ) : (
-              <div className="flex items-baseline gap-1.5 font-mono-tabular">
-                <span
-                  className={`font-display text-3xl font-bold ${
-                    (activeSlot?.ammoInMag ?? 0) <= Math.ceil(hud.activeWeapon.magSize * 0.25)
-                      ? 'text-red-400'
-                      : 'text-white'
-                  }`}
-                >
-                  {String(activeSlot?.ammoInMag ?? 0).padStart(2, '0')}
-                </span>
-                <span className="text-sm text-slate-500">/</span>
-                <span className="text-sm text-slate-300">
-                  {String(activeSlot?.reserveAmmo ?? 0).padStart(2, '0')}
-                </span>
-              </div>
-            )}
+              {hud.activeWeapon.isMelee ? (
+                <div className="flex items-baseline gap-1.5 font-mono-tabular">
+                  <span className="font-display text-2xl font-bold text-emerald-300">∞</span>
+                  <span className="text-[11px] font-semibold tracking-wider text-slate-400">
+                    MELEE
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-baseline gap-1.5 font-mono-tabular">
+                  <span
+                    className={`font-display text-3xl font-bold ${
+                      (activeSlot?.ammoInMag ?? 0) <= Math.ceil(hud.activeWeapon.magSize * 0.25)
+                        ? 'text-red-400'
+                        : 'text-white'
+                    }`}
+                  >
+                    {String(activeSlot?.ammoInMag ?? 0).padStart(2, '0')}
+                  </span>
+                  <span className="text-sm text-slate-500">/</span>
+                  <span className="text-sm text-slate-300">
+                    {String(activeSlot?.reserveAmmo ?? 0).padStart(2, '0')}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-white/10 pt-2 text-xs">

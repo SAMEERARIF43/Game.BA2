@@ -1,3 +1,4 @@
+import { normalizeGameMode } from '../game/gameModeRules';
 import {
   normalizeCharacterId,
   normalizeGunId,
@@ -33,9 +34,15 @@ export const DEFAULT_SETTINGS: GameSettings = {
   killLimit: 30,
   botsPerTeam: 4,
   screenShakeScale: 1.0,
+  selectedGameMode: 'tdm',
   selectedCharacterId: 'assault',
   selectedGunId: 'ak47',
   knifeCharmId: 'tactical_tag',
+  slideEnabled: true,
+  slideInputMode: 'tap',
+  slidePostStance: 'stand',
+  slideJumpCancel: true,
+  slideCameraTilt: true,
   slideTrigger: 'tap',
   postSlideStance: 'stand',
   jumpCancelsSlide: true,
@@ -64,6 +71,102 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     ? (obj.graphicsQuality as GraphicsQuality)
     : fallback.graphicsQuality;
 
+  const fallbackInputMode: SlideTriggerMode = VALID_SLIDE_TRIGGER.has(fallback.slideInputMode)
+    ? fallback.slideInputMode
+    : VALID_SLIDE_TRIGGER.has(fallback.slideTrigger)
+      ? fallback.slideTrigger
+      : 'tap';
+  const rawInputValid = VALID_SLIDE_TRIGGER.has(obj.slideInputMode as SlideTriggerMode);
+  const rawLegacyTriggerValid = VALID_SLIDE_TRIGGER.has(obj.slideTrigger as SlideTriggerMode);
+  let resolvedInputMode: SlideTriggerMode = fallbackInputMode;
+  if (rawInputValid && rawLegacyTriggerValid) {
+    resolvedInputMode =
+      obj.slideTrigger !== fallback.slideTrigger && obj.slideInputMode === fallbackInputMode
+        ? (obj.slideTrigger as SlideTriggerMode)
+        : (obj.slideInputMode as SlideTriggerMode);
+  } else if (rawInputValid) {
+    resolvedInputMode = obj.slideInputMode as SlideTriggerMode;
+  } else if (rawLegacyTriggerValid) {
+    resolvedInputMode = obj.slideTrigger as SlideTriggerMode;
+  }
+
+  const fallbackPostStance: PostSlideStance = VALID_POST_SLIDE.has(fallback.slidePostStance)
+    ? fallback.slidePostStance
+    : VALID_POST_SLIDE.has(fallback.postSlideStance)
+      ? fallback.postSlideStance
+      : 'stand';
+  const rawPostValid = VALID_POST_SLIDE.has(obj.slidePostStance as PostSlideStance);
+  const rawLegacyPostValid = VALID_POST_SLIDE.has(obj.postSlideStance as PostSlideStance);
+  let resolvedPostStance: PostSlideStance = fallbackPostStance;
+  if (rawPostValid && rawLegacyPostValid) {
+    resolvedPostStance =
+      obj.postSlideStance !== fallback.postSlideStance && obj.slidePostStance === fallbackPostStance
+        ? (obj.postSlideStance as PostSlideStance)
+        : (obj.slidePostStance as PostSlideStance);
+  } else if (rawPostValid) {
+    resolvedPostStance = obj.slidePostStance as PostSlideStance;
+  } else if (rawLegacyPostValid) {
+    resolvedPostStance = obj.postSlideStance as PostSlideStance;
+  }
+
+  const fallbackJumpCancel =
+    typeof fallback.slideJumpCancel === 'boolean'
+      ? fallback.slideJumpCancel
+      : (fallback.jumpCancelsSlide ?? true);
+  const rawJumpValid = typeof obj.slideJumpCancel === 'boolean';
+  const rawLegacyJumpValid = typeof obj.jumpCancelsSlide === 'boolean';
+  let resolvedJumpCancel = fallbackJumpCancel;
+  if (rawJumpValid && rawLegacyJumpValid) {
+    resolvedJumpCancel =
+      obj.jumpCancelsSlide !== fallback.jumpCancelsSlide &&
+      obj.slideJumpCancel === fallbackJumpCancel
+        ? (obj.jumpCancelsSlide as boolean)
+        : (obj.slideJumpCancel as boolean);
+  } else if (rawJumpValid) {
+    resolvedJumpCancel = obj.slideJumpCancel as boolean;
+  } else if (rawLegacyJumpValid) {
+    resolvedJumpCancel = obj.jumpCancelsSlide as boolean;
+  }
+
+  const fallbackCameraTilt =
+    typeof fallback.slideCameraTilt === 'boolean'
+      ? fallback.slideCameraTilt
+      : (fallback.slideCameraIntensity ?? 1.0) > 0;
+  const fallbackCameraIntensity = clampNumber(
+    fallback.slideCameraIntensity,
+    0,
+    1,
+    fallbackCameraTilt ? 1.0 : 0
+  );
+  const rawTiltValid = typeof obj.slideCameraTilt === 'boolean';
+  const rawIntensityValid =
+    typeof obj.slideCameraIntensity === 'number' && Number.isFinite(obj.slideCameraIntensity);
+  const clampedIntensity = clampNumber(obj.slideCameraIntensity, 0, 1, fallbackCameraIntensity);
+
+  let resolvedCameraTilt = fallbackCameraTilt;
+  let resolvedCameraIntensity = fallbackCameraIntensity;
+  if (rawTiltValid && rawIntensityValid) {
+    if (obj.slideCameraTilt !== fallbackCameraTilt && obj.slideCameraIntensity === fallbackCameraIntensity) {
+      resolvedCameraTilt = obj.slideCameraTilt as boolean;
+      resolvedCameraIntensity = resolvedCameraTilt ? (fallbackCameraIntensity > 0 ? fallbackCameraIntensity : 1.0) : 0;
+    } else if (
+      obj.slideCameraIntensity !== fallbackCameraIntensity &&
+      obj.slideCameraTilt === fallbackCameraTilt
+    ) {
+      resolvedCameraIntensity = clampedIntensity;
+      resolvedCameraTilt = clampedIntensity > 0;
+    } else {
+      resolvedCameraTilt = obj.slideCameraTilt as boolean;
+      resolvedCameraIntensity = resolvedCameraTilt ? (clampedIntensity > 0 ? clampedIntensity : 1.0) : 0;
+    }
+  } else if (rawTiltValid) {
+    resolvedCameraTilt = obj.slideCameraTilt as boolean;
+    resolvedCameraIntensity = resolvedCameraTilt ? (fallbackCameraIntensity > 0 ? fallbackCameraIntensity : 1.0) : 0;
+  } else if (rawIntensityValid) {
+    resolvedCameraIntensity = clampedIntensity;
+    resolvedCameraTilt = clampedIntensity > 0;
+  }
+
   return {
     callsign: sanitizeCallsign(obj.callsign, fallback.callsign),
     sensitivity: clampNumber(obj.sensitivity, 0.0005, 0.008, fallback.sensitivity),
@@ -84,28 +187,22 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     killLimit: Math.round(clampNumber(obj.killLimit, 5, 100, fallback.killLimit)),
     botsPerTeam: Math.round(clampNumber(obj.botsPerTeam, 1, 6, fallback.botsPerTeam)),
     screenShakeScale: clampNumber(obj.screenShakeScale, 0, 1, fallback.screenShakeScale ?? 1.0),
+    selectedGameMode: normalizeGameMode(obj.selectedGameMode, fallback.selectedGameMode ?? 'tdm'),
     selectedCharacterId: normalizeCharacterId(
       obj.selectedCharacterId,
       fallback.selectedCharacterId ?? 'assault'
     ),
     selectedGunId: normalizeGunId(obj.selectedGunId, fallback.selectedGunId ?? 'ak47'),
     knifeCharmId: normalizeKnifeCharmId(obj.knifeCharmId, fallback.knifeCharmId ?? 'tactical_tag'),
-    slideTrigger: VALID_SLIDE_TRIGGER.has(obj.slideTrigger as SlideTriggerMode)
-      ? (obj.slideTrigger as SlideTriggerMode)
-      : (fallback.slideTrigger ?? 'tap'),
-    postSlideStance: VALID_POST_SLIDE.has(obj.postSlideStance as PostSlideStance)
-      ? (obj.postSlideStance as PostSlideStance)
-      : (fallback.postSlideStance ?? 'stand'),
-    jumpCancelsSlide:
-      typeof obj.jumpCancelsSlide === 'boolean'
-        ? obj.jumpCancelsSlide
-        : (fallback.jumpCancelsSlide ?? true),
-    slideCameraIntensity: clampNumber(
-      obj.slideCameraIntensity,
-      0,
-      1,
-      fallback.slideCameraIntensity ?? 1.0
-    ),
+    slideEnabled: typeof obj.slideEnabled === 'boolean' ? obj.slideEnabled : (fallback.slideEnabled ?? true),
+    slideInputMode: resolvedInputMode,
+    slidePostStance: resolvedPostStance,
+    slideJumpCancel: resolvedJumpCancel,
+    slideCameraTilt: resolvedCameraTilt,
+    slideTrigger: resolvedInputMode,
+    postSlideStance: resolvedPostStance,
+    jumpCancelsSlide: resolvedJumpCancel,
+    slideCameraIntensity: resolvedCameraIntensity,
     keybindings: validateKeybindings(obj.keybindings, fallback.keybindings ?? DEFAULT_KEYBINDINGS),
   };
 }

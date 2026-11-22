@@ -301,100 +301,141 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         {activeTab === 'controls' && (
           <div className="space-y-4">
             <section
-              aria-label="Slide Settings"
+              aria-label="Tactical Slide"
               className="space-y-2.5 border border-white/12 bg-black/30 p-3"
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="font-display text-[11px] font-bold tracking-wider text-amber-300 uppercase">
-                  Slide Settings
-                </div>
-                <span className="text-[10px] text-slate-400">
-                  Sprint + Crouch to initiate tactical slide
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-display text-xs font-bold tracking-wider text-amber-300 uppercase">
+                  Tactical Slide
+                </h3>
+                <span className="text-[11px] text-slate-400">
+                  Sprint + Crouch while moving forward
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                <div className="border border-white/10 bg-black/25 p-2.5">
-                  <div className={LABEL_CLASS}>Slide Trigger</div>
-                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                    {(
-                      [
-                        { id: 'tap', label: 'Tap Crouch' },
-                        { id: 'hold', label: 'Hold Crouch' },
-                      ] as { id: SlideTriggerMode; label: string }[]
-                    ).map((opt) => {
-                      const active = (settings.slideTrigger ?? 'tap') === opt.id;
-                      return (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          aria-pressed={active}
-                          onClick={() =>
-                            onUpdateSettings({ ...settings, slideTrigger: opt.id })
-                          }
-                          className={`cursor-pointer border px-2 py-1.5 text-[11px] font-semibold transition-colors ${FOCUS_CLASS} ${
-                            active
-                              ? 'border-amber-400 bg-amber-400/15 text-amber-200'
-                              : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+              {(() => {
+                const slideEnabled = settings.slideEnabled ?? true;
+                const slideInputMode = settings.slideInputMode ?? settings.slideTrigger ?? 'tap';
+                const slidePostStance =
+                  settings.slidePostStance ?? settings.postSlideStance ?? 'stand';
+                const slideJumpCancel =
+                  settings.slideJumpCancel ?? settings.jumpCancelsSlide ?? true;
+                const slideCameraTilt =
+                  settings.slideCameraTilt ?? (settings.slideCameraIntensity ?? 1.0) > 0;
 
-                <div className="border border-white/10 bg-black/25 p-2.5">
-                  <div className={LABEL_CLASS}>Post-Slide Stance</div>
-                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                    {(
-                      [
-                        { id: 'stand', label: 'Auto-Stand' },
-                        { id: 'crouch', label: 'Stay Crouched' },
-                      ] as { id: PostSlideStance; label: string }[]
-                    ).map((opt) => {
-                      const active = (settings.postSlideStance ?? 'stand') === opt.id;
-                      return (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          aria-pressed={active}
-                          onClick={() =>
-                            onUpdateSettings({ ...settings, postSlideStance: opt.id })
-                          }
-                          className={`cursor-pointer border px-2 py-1.5 text-[11px] font-semibold transition-colors ${FOCUS_CLASS} ${
-                            active
-                              ? 'border-amber-400 bg-amber-400/15 text-amber-200'
-                              : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
+                return (
+                  <>
+                    {renderToggle(
+                      `Enable Tactical Slide (${slideEnabled ? 'On' : 'Off'})`,
+                      slideEnabled,
+                      () =>
+                        onUpdateSettings({
+                          ...settings,
+                          slideEnabled: !slideEnabled,
+                        })
+                    )}
 
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                {renderToggle('Jump Cancels Slide', settings.jumpCancelsSlide ?? true, () =>
-                  onUpdateSettings({
-                    ...settings,
-                    jumpCancelsSlide: !(settings.jumpCancelsSlide ?? true),
-                  })
-                )}
-                {renderSlider(
-                  'Slide Camera Tilt & FOV',
-                  settings.slideCameraIntensity ?? 1.0,
-                  0,
-                  1,
-                  0.05,
-                  `${Math.round((settings.slideCameraIntensity ?? 1.0) * 100)}%`,
-                  (slideCameraIntensity) =>
-                    onUpdateSettings({ ...settings, slideCameraIntensity })
-                )}
-              </div>
+                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                      <div className="border border-white/10 bg-black/25 p-2.5">
+                        <div className={LABEL_CLASS}>Slide Trigger</div>
+                        <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                          {(
+                            [
+                              { id: 'tap', label: 'Tap Crouch' },
+                              { id: 'hold', label: 'Hold Crouch' },
+                            ] as { id: SlideTriggerMode; label: string }[]
+                          ).map((opt) => {
+                            const active = slideInputMode === opt.id;
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() =>
+                                  onUpdateSettings({
+                                    ...settings,
+                                    slideInputMode: opt.id,
+                                    slideTrigger: opt.id,
+                                  })
+                                }
+                                className={`cursor-pointer border px-2 py-1.5 text-[11px] font-semibold whitespace-nowrap shrink-0 transition-colors ${FOCUS_CLASS} ${
+                                  active
+                                    ? 'border-amber-400 bg-amber-400/15 text-amber-200'
+                                    : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="border border-white/10 bg-black/25 p-2.5">
+                        <div className={LABEL_CLASS}>End-of-Slide Stance</div>
+                        <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                          {(
+                            [
+                              { id: 'stand', label: 'Auto-Stand' },
+                              { id: 'crouch', label: 'Stay Crouched' },
+                            ] as { id: PostSlideStance; label: string }[]
+                          ).map((opt) => {
+                            const active = slidePostStance === opt.id;
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() =>
+                                  onUpdateSettings({
+                                    ...settings,
+                                    slidePostStance: opt.id,
+                                    postSlideStance: opt.id,
+                                  })
+                                }
+                                className={`cursor-pointer border px-2 py-1.5 text-[11px] font-semibold whitespace-nowrap shrink-0 transition-colors ${FOCUS_CLASS} ${
+                                  active
+                                    ? 'border-amber-400 bg-amber-400/15 text-amber-200'
+                                    : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                      {renderToggle(
+                        `Jump-Cancel Slide (${slideJumpCancel ? 'On' : 'Off'})`,
+                        slideJumpCancel,
+                        () => {
+                          const next = !slideJumpCancel;
+                          onUpdateSettings({
+                            ...settings,
+                            slideJumpCancel: next,
+                            jumpCancelsSlide: next,
+                          });
+                        }
+                      )}
+                      {renderToggle(
+                        `Slide Camera Tilt & FOV Boost (${slideCameraTilt ? 'On' : 'Off'})`,
+                        slideCameraTilt,
+                        () => {
+                          const next = !slideCameraTilt;
+                          onUpdateSettings({
+                            ...settings,
+                            slideCameraTilt: next,
+                            slideCameraIntensity: next ? 1.0 : 0,
+                          });
+                        }
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </section>
 
             <div className="flex flex-wrap items-center justify-between gap-2 border border-white/10 bg-black/30 px-3 py-2">

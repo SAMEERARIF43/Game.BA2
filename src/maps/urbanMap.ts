@@ -56,6 +56,10 @@ export const URBAN_MAP_DEF: MapDefinition = {
     new Vector3(18, 0.2, 16),
     new Vector3(-13, 3.3, 0),
   ],
+  bombSites: [
+    { id: 'A', label: 'Site A', position: new Vector3(-8, 0, 8), radius: 4.5 },
+    { id: 'B', label: 'Site B', position: new Vector3(20.5, 0, 6), radius: 4.5 },
+  ],
   previewCameraTarget: new Vector3(0, 2.2, 0),
 };
 

@@ -25,6 +25,7 @@ import {
   getVfxQualityBudget,
   getWeaponFeelProfile,
 } from './combatVfx';
+import { GameMode, isHostile } from './gameModeRules';
 import {
   normalizeGunId,
   normalizeKnifeCharmId,
@@ -233,6 +234,7 @@ export class WeaponSystem {
   private scopeMagnification: 4 | 6 | 8 = 4;
 
   private multiplayerMode = false;
+  private gameMode: GameMode = 'tdm';
   private localTeam: TeamId = 'blue';
   private friendlyFire = false;
   private onNetworkShot?: (payload: NetworkShotPayload) => void;
@@ -539,6 +541,20 @@ export class WeaponSystem {
     this.multiplayerMode = enabled;
     this.localTeam = team;
     this.friendlyFire = friendlyFire;
+  }
+
+  public setGameMode(mode: GameMode): void {
+    this.gameMode = mode;
+  }
+
+  private isTargetHostile(targetId: string | undefined, targetTeam: TeamId | undefined): boolean {
+    if (!targetId || !targetTeam) return false;
+    return isHostile(
+      this.gameMode,
+      { id: this.multiplayerMode ? 'local_player' : 'player', team: this.localTeam },
+      { id: targetId, team: targetTeam },
+      this.friendlyFire
+    );
   }
 
   public recordNetworkHitConfirm(zone: HitZone, killed: boolean): void {
@@ -1077,11 +1093,11 @@ export class WeaponSystem {
       if (!pick?.hit || !pick.pickedMesh || !pick.pickedPoint) continue;
 
       const meta = pick.pickedMesh.metadata as
-        | { isBot?: boolean; isRemotePlayer?: boolean; team?: TeamId; zone?: HitZone }
+        | { isBot?: boolean; botId?: string; isRemotePlayer?: boolean; playerId?: string; team?: TeamId; zone?: HitZone }
         | undefined;
       const isEnemy = this.multiplayerMode
-        ? Boolean(meta?.isRemotePlayer && (meta.team !== this.localTeam || this.friendlyFire))
-        : Boolean(meta?.isBot && meta.team === 'red');
+        ? Boolean(meta?.isRemotePlayer && this.isTargetHostile(meta.playerId, meta.team))
+        : Boolean(meta?.isBot && this.isTargetHostile(meta.botId, meta.team));
 
       if (isEnemy) {
         if (!bestEnemyPick || pick.distance < bestEnemyPick.distance) {
@@ -1116,7 +1132,7 @@ export class WeaponSystem {
       let isTargetHit = false;
 
       if (meta?.isRemotePlayer && meta.playerId && meta.zone) {
-        const validTarget = meta.team !== this.localTeam || this.friendlyFire;
+        const validTarget = this.isTargetHostile(meta.playerId, meta.team);
         if (validTarget) {
           hitPlayerId = meta.playerId;
           hitZone = meta.zone;
@@ -1140,7 +1156,7 @@ export class WeaponSystem {
       | { isBot?: boolean; botId?: string; team?: TeamId; zone?: HitZone }
       | undefined;
 
-    if (meta?.isBot && meta.botId && meta.zone && meta.team === 'red') {
+    if (meta?.isBot && meta.botId && meta.zone && this.isTargetHostile(meta.botId, meta.team)) {
       const distanceMeters = Math.round(chosenPick.distance * 10) / 10;
       const result = this.bots.applyDamageToBot(
         meta.botId,
@@ -1251,7 +1267,7 @@ export class WeaponSystem {
             | undefined;
 
           if (meta?.isRemotePlayer && meta.playerId && meta.zone) {
-            const validTarget = meta.team !== this.localTeam || this.friendlyFire;
+            const validTarget = this.isTargetHostile(meta.playerId, meta.team);
             if (validTarget) {
               hitPlayerId = meta.playerId;
               hitZone = meta.zone;
@@ -1290,7 +1306,7 @@ export class WeaponSystem {
         | undefined;
       const hitNormal = pick.getNormal(true) ?? dir.scale(-1);
 
-      if (meta?.isBot && meta.botId && meta.zone && meta.team === 'red') {
+      if (meta?.isBot && meta.botId && meta.zone && this.isTargetHostile(meta.botId, meta.team)) {
         const distanceMeters = Math.round(pick.distance * 10) / 10;
         const result = this.bots.applyDamageToBot(
           meta.botId,
@@ -1377,14 +1393,14 @@ export class WeaponSystem {
     if (pick?.hit) {
       this.rangeDistanceMeters = Math.round(pick.distance);
       const meta = pick.pickedMesh?.metadata as
-        | { isBot?: boolean; isRemotePlayer?: boolean; team?: TeamId }
+        | { isBot?: boolean; botId?: string; isRemotePlayer?: boolean; playerId?: string; team?: TeamId }
         | undefined;
       if (this.multiplayerMode) {
         this.targetingEnemy = Boolean(
-          meta?.isRemotePlayer && (meta.team !== this.localTeam || this.friendlyFire)
+          meta?.isRemotePlayer && this.isTargetHostile(meta.playerId, meta.team)
         );
       } else {
-        this.targetingEnemy = Boolean(meta?.isBot && meta.team === 'red');
+        this.targetingEnemy = Boolean(meta?.isBot && this.isTargetHostile(meta.botId, meta.team));
       }
     } else {
       this.rangeDistanceMeters = null;

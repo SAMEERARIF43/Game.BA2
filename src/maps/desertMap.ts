@@ -57,6 +57,10 @@ export const DESERT_MAP_DEF: MapDefinition = {
     new Vector3(-20, 3.0, -10),
     new Vector3(20, 3.0, 10),
   ],
+  bombSites: [
+    { id: 'A', label: 'Site A', position: new Vector3(-8, 0, 7), radius: 4.5 },
+    { id: 'B', label: 'Site B', position: new Vector3(8, 0, 7), radius: 4.5 },
+  ],
   previewCameraTarget: new Vector3(0, 2.0, 0),
 };
 

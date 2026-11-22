@@ -1,3 +1,4 @@
+import { BOMB_ROUNDS_TO_WIN, normalizeGameMode } from '../game/gameModeRules';
 import { ARENA_HALF_EXTENT } from '../game/minimap';
 import { GameSettings, HudState, MatchParticipant, WEAPONS } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
@@ -154,15 +155,28 @@ export const INITIAL_HUD: HudState = {
   showScoreboard: false,
   showOnboarding: false,
   lowHealthPulse: false,
+  gameMode: 'tdm',
+  localTeam: 'blue',
+  bombSites: [],
+  bombInteractPrompt: null,
+  ffaRank: null,
+  ffaLeaderName: null,
+  ffaLeaderKills: 0,
   match: {
     phase: 'menu',
+    mode: 'tdm',
     mapId: 'urban',
     mapName: 'Urban Strike',
     blueScore: 0,
     redScore: 0,
     killLimit: DEFAULT_KILL_LIMIT,
+    roundNumber: 1,
+    roundsToWin: BOMB_ROUNDS_TO_WIN,
     timeRemainingSec: MATCH_DURATION_SEC,
     winner: null,
+    winnerParticipantId: null,
+    winnerName: null,
+    bombState: null,
     participants: [],
     killFeed: [],
   },
@@ -203,6 +217,7 @@ export function createInitialMatchState({
       break;
   }
 
+  const selectedGameMode = normalizeGameMode(settings.selectedGameMode, 'tdm');
   return {
     status,
     selectedMapId,
@@ -223,12 +238,14 @@ export function createInitialMatchState({
       rankLevel: rank.level,
       rankTitle: rank.title,
       rankProgressPct: rank.progressPct,
+      gameMode: selectedGameMode,
       minimap: {
         ...INITIAL_HUD.minimap,
         mapId: selectedMapId,
       },
       match: {
         ...INITIAL_HUD.match,
+        mode: selectedGameMode,
         mapId: selectedMapId,
       },
     },

@@ -28,6 +28,7 @@ export const MatchState = schema({
   roomCode: t.string(),
   roomName: t.string(),
   mapId: t.string(),
+  mode: t.string(), // 'tdm' | 'ffa' | 'bomb'
   phase: t.string(), // 'lobby' | 'playing' | 'ended'
   killLimit: t.number(),
   timeLimit: t.number(),
@@ -39,7 +40,24 @@ export const MatchState = schema({
   hostId: t.string(),
   blueScore: t.number(),
   redScore: t.number(),
+  roundNumber: t.number(),
+  roundsToWin: t.number(),
   winner: t.string(), // '' | 'blue' | 'red' | 'draw'
+  winnerId: t.string(),
+  winnerName: t.string(),
+  bombPhase: t.string(), // 'unplanted' | 'planted' | 'defused' | 'detonated' | 'round_end'
+  bombSite: t.string(), // '' | 'A' | 'B'
+  bombCarrierId: t.string(),
+  bombX: t.number(),
+  bombY: t.number(),
+  bombZ: t.number(),
+  bombDetonateTimer: t.number(),
+  bombActionPlayerId: t.string(),
+  bombActionType: t.string(), // '' | 'plant' | 'defuse'
+  bombActionProgress: t.number(),
+  roundWinner: t.string(), // '' | 'blue' | 'red'
+  roundEndReason: t.string(),
+  roundTransitionTimer: t.number(),
   players: t.map(PlayerSchema),
 });
 

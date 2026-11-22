@@ -41,7 +41,7 @@ const PLAYER_CROUCH_ELLIPSOID_OFFSET_Y = -(PLAYER_HALF_HEIGHT - PLAYER_CROUCH_HA
 const PLAYER_RADIUS = 0.42;
 const STAND_EYE_OFFSET = 0.72;
 const CROUCH_EYE_OFFSET = 0.14;
-const SLIDE_EYE_OFFSET = -0.05;
+const SLIDE_EYE_OFFSET = 0.05;
 const DEAD_EYE_OFFSET = -0.58;
 
 const WALK_SPEED = 6.2;
@@ -53,7 +53,7 @@ const SLIDE_END_SPEED = CROUCH_SPEED * 1.15;
 const SLIDE_DURATION_SEC = 0.75;
 const SLIDE_COOLDOWN_SEC = 0.6;
 const SLIDE_ROLL_RAD = (5 * Math.PI) / 180;
-const SLIDE_FOV_BOOST_RAD = (5.2 * Math.PI) / 180;
+const SLIDE_FOV_BOOST_RAD = (6 * Math.PI) / 180;
 const JUMP_BUFFER_SEC = 0.12;
 const COYOTE_TIME_SEC = 0.12;
 const ADS_SPEED_MULTIPLIER = 0.65;
@@ -115,15 +115,17 @@ export class PlayerController {
   private slideJumpCarryTimer = 0;
   private slideRollDirection = 1;
   private slideDir = new Vector3(0, 0, 1);
+  private slideEnabled = true;
   private slideTrigger: SlideTriggerMode = 'tap';
   private postSlideStance: PostSlideStance = 'stand';
   private jumpCancelsSlide = true;
+  private slideCameraTilt = true;
   private slideCameraIntensity = 1.0;
   private prevSlideGroundY: number | null = null;
   private adsEnabled = true;
   private isAds = false;
   private currentEyeOffset = STAND_EYE_OFFSET;
-  private currentRoll = 0;
+  private slideCameraRoll = 0;
 
   private sensitivity = 0.0021;
   private adsSensitivityMultiplier = 0.68;
@@ -137,7 +139,7 @@ export class PlayerController {
   private landDip = 0;
   private shakeIntensity = 0;
   private flinchPitch = 0;
-  private flinchRoll = 0;
+  private damageFlinchRoll = 0;
   private flinchYaw = 0;
   private screenShakeScale = 1.0;
   private moveSpeedMultiplier = 1.0;
@@ -219,6 +221,7 @@ export class PlayerController {
     if (!enabled) {
       this.chatInputOpen = false;
       this.keys.clear();
+      this.velocity.setAll(0);
       this.isFireHeld = false;
       this.isAds = false;
       this.isCrouching = false;
@@ -233,7 +236,11 @@ export class PlayerController {
       this.fovKick = 0;
       this.camera.fov = this.baseFovRad;
       this.currentEyeOffset = STAND_EYE_OFFSET;
-      this.currentRoll = 0;
+      this.slideCameraRoll = 0;
+      this.damageFlinchRoll = 0;
+      this.flinchPitch = 0;
+      this.flinchYaw = 0;
+      this.shakeIntensity = 0;
       this.landDip = 0;
       this.recoilPitch = 0;
       this.recoilYaw = 0;
@@ -264,13 +271,20 @@ export class PlayerController {
 
   public setDeadState(dead: boolean): void {
     this.isDead = dead;
+    this.slideCameraRoll = 0;
+    this.damageFlinchRoll = 0;
+    this.flinchPitch = 0;
+    this.flinchYaw = 0;
+    this.shakeIntensity = 0;
     if (dead) {
       this.chatInputOpen = false;
       this.keys.clear();
+      this.velocity.set(0, Math.min(0, this.velocity.y), 0);
       this.isFireHeld = false;
       this.isAds = false;
       this.isSliding = false;
       this.slideTimer = 0;
+      this.slideCooldown = 0;
       this.crouchToggled = false;
       this.isCrouching = false;
       this.jumpBufferTimer = 0;
@@ -279,7 +293,6 @@ export class PlayerController {
       this.currentFovRad = this.baseFovRad;
       this.fovKick = 0;
       this.camera.fov = this.baseFovRad;
-      this.currentRoll = 0;
       this.recoilPitch = 0;
       this.recoilYaw = 0;
       this.prevSlideGroundY = null;
@@ -288,6 +301,7 @@ export class PlayerController {
       this.callbacks.onAdsChange(false);
       this.callbacks.onScoreboardChange(false);
     }
+    this.syncCameraTransform();
   }
 
   public spawnAt(pos: Vector3, yawRad: number): void {
@@ -319,10 +333,10 @@ export class PlayerController {
     this.landDip = 0;
     this.shakeIntensity = 0;
     this.flinchPitch = 0;
-    this.flinchRoll = 0;
+    this.damageFlinchRoll = 0;
     this.flinchYaw = 0;
     this.currentEyeOffset = STAND_EYE_OFFSET;
-    this.currentRoll = 0;
+    this.slideCameraRoll = 0;
     this.prevSlideGroundY = null;
     this.syncColliderStanceHeight();
     this.callbacks.onFireRelease();
@@ -354,7 +368,7 @@ export class PlayerController {
     const storedScale = this.screenShakeScale;
     const currentShake = this.shakeIntensity;
     const currentPitch = this.flinchPitch;
-    const currentRoll = this.flinchRoll;
+    const currentRoll = this.damageFlinchRoll;
     const currentYaw = this.flinchYaw;
 
     const storedScaleValid =
@@ -369,10 +383,10 @@ export class PlayerController {
     }
 
     const MAX_PITCH = 0.045;
-    const MAX_ROLL = 0.030;
+    const MAX_ROLL = 0.035;
     const MAX_YAW = 0.018;
-    const MAX_NORM = 0.050;
-    const FLINCH_EPSILON = 0.0005;
+    const MAX_NORM = 0.055;
+    const FLINCH_EPSILON = 0.0002;
 
     let candPitch = 0.0;
     let candRoll = 0.0;
@@ -508,13 +522,13 @@ export class PlayerController {
       this.screenShakeScale = targetScale;
       this.shakeIntensity = targetShake;
       this.flinchPitch = targetPitch;
-      this.flinchRoll = targetRoll;
+      this.damageFlinchRoll = targetRoll;
       this.flinchYaw = targetYaw;
     } else {
       this.screenShakeScale = Number.isFinite(newScale) ? Math.max(0.0, Math.min(1.0, newScale)) : 0.0;
       this.shakeIntensity = 0.0;
       this.flinchPitch = 0.0;
-      this.flinchRoll = 0.0;
+      this.damageFlinchRoll = 0.0;
       this.flinchYaw = 0.0;
     }
   }
@@ -590,13 +604,13 @@ export class PlayerController {
 
   private accumulateFlinch(dPitch: number, dRoll: number, dYaw: number): void {
     const MAX_PITCH = 0.045;
-    const MAX_ROLL = 0.030;
+    const MAX_ROLL = 0.035;
     const MAX_YAW = 0.018;
-    const MAX_NORM = 0.05;
-    const FLINCH_EPSILON = 0.0005;
+    const MAX_NORM = 0.055;
+    const FLINCH_EPSILON = 0.0002;
 
     let curP = this.flinchPitch;
-    let curR = this.flinchRoll;
+    let curR = this.damageFlinchRoll;
     let curY = this.flinchYaw;
 
     if (!Number.isFinite(curP) || !Number.isFinite(curR) || !Number.isFinite(curY)) {
@@ -626,7 +640,7 @@ export class PlayerController {
 
     if (!Number.isFinite(dPitch) || !Number.isFinite(dRoll) || !Number.isFinite(dYaw)) {
       this.flinchPitch = curP;
-      this.flinchRoll = curR;
+      this.damageFlinchRoll = curR;
       this.flinchYaw = curY;
       return;
     }
@@ -663,13 +677,14 @@ export class PlayerController {
 
     if (Number.isFinite(p) && Number.isFinite(r) && Number.isFinite(y)) {
       this.flinchPitch = p;
-      this.flinchRoll = r;
+      this.damageFlinchRoll = r;
       this.flinchYaw = y;
     } else {
       this.flinchPitch = 0.0;
-      this.flinchRoll = 0.0;
+      this.damageFlinchRoll = 0.0;
       this.flinchYaw = 0.0;
     }
+    this.syncCameraTransform();
   }
 
   public setSensitivity(sens: number): void {
@@ -703,22 +718,46 @@ export class PlayerController {
   }
 
   public setSlideSettings(cfg: {
+    slideEnabled?: boolean;
+    slideInputMode?: SlideTriggerMode;
+    slidePostStance?: PostSlideStance;
+    slideJumpCancel?: boolean;
+    slideCameraTilt?: boolean;
     slideTrigger?: SlideTriggerMode;
     postSlideStance?: PostSlideStance;
     jumpCancelsSlide?: boolean;
     slideCameraIntensity?: number;
   }): void {
-    if (cfg.slideTrigger === 'tap' || cfg.slideTrigger === 'hold') {
-      this.slideTrigger = cfg.slideTrigger;
+    if (typeof cfg.slideEnabled === 'boolean') {
+      this.slideEnabled = cfg.slideEnabled;
+      if (!cfg.slideEnabled && this.isSliding) {
+        this.endSlide(false);
+      }
     }
-    if (cfg.postSlideStance === 'stand' || cfg.postSlideStance === 'crouch') {
-      this.postSlideStance = cfg.postSlideStance;
+    const nextTrigger = cfg.slideInputMode ?? cfg.slideTrigger;
+    if (nextTrigger === 'tap' || nextTrigger === 'hold') {
+      this.slideTrigger = nextTrigger;
     }
-    if (typeof cfg.jumpCancelsSlide === 'boolean') {
-      this.jumpCancelsSlide = cfg.jumpCancelsSlide;
+    const nextPostStance = cfg.slidePostStance ?? cfg.postSlideStance;
+    if (nextPostStance === 'stand' || nextPostStance === 'crouch') {
+      this.postSlideStance = nextPostStance;
+    }
+    const nextJumpCancel =
+      typeof cfg.slideJumpCancel === 'boolean' ? cfg.slideJumpCancel : cfg.jumpCancelsSlide;
+    if (typeof nextJumpCancel === 'boolean') {
+      this.jumpCancelsSlide = nextJumpCancel;
+    }
+    if (typeof cfg.slideCameraTilt === 'boolean') {
+      this.slideCameraTilt = cfg.slideCameraTilt;
+      if (cfg.slideCameraTilt && cfg.slideCameraIntensity === undefined && this.slideCameraIntensity === 0) {
+        this.slideCameraIntensity = 1.0;
+      }
     }
     if (typeof cfg.slideCameraIntensity === 'number' && Number.isFinite(cfg.slideCameraIntensity)) {
       this.slideCameraIntensity = Math.max(0, Math.min(1, cfg.slideCameraIntensity));
+      if (typeof cfg.slideCameraTilt !== 'boolean') {
+        this.slideCameraTilt = this.slideCameraIntensity > 0;
+      }
     }
   }
 
@@ -730,10 +769,23 @@ export class PlayerController {
       slideCooldown: this.slideCooldown,
       colliderHalfHeight: this.collider.ellipsoid.y,
       colliderEllipsoidOffsetY: this.collider.ellipsoidOffset.y,
+      slideEnabled: this.slideEnabled,
+      slideInputMode: this.slideTrigger,
+      slidePostStance: this.postSlideStance,
+      slideJumpCancel: this.jumpCancelsSlide,
+      slideCameraTilt: this.slideCameraTilt,
       slideTrigger: this.slideTrigger,
       postSlideStance: this.postSlideStance,
       jumpCancelsSlide: this.jumpCancelsSlide,
       slideCameraIntensity: this.slideCameraIntensity,
+    };
+  }
+
+  public getCameraRollDebugState() {
+    return {
+      slideCameraRoll: this.slideCameraRoll,
+      damageFlinchRoll: this.damageFlinchRoll,
+      cameraRollZ: this.camera.rotation.z,
     };
   }
 
@@ -754,8 +806,9 @@ export class PlayerController {
     this.recoilYaw = 0;
     this.shakeIntensity = 0;
     this.flinchPitch = 0;
-    this.flinchRoll = 0;
+    this.damageFlinchRoll = 0;
     this.flinchYaw = 0;
+    this.slideCameraRoll = 0;
     this.landDip = 0;
     this.camera.fov = this.currentFovRad;
     this.syncCameraTransform();
@@ -801,6 +854,16 @@ export class PlayerController {
       this.canControl &&
       !this.isDead &&
       !this.chatInputOpen
+    );
+  }
+
+  public isInteractHeld(): boolean {
+    return (
+      this.isPointerLocked &&
+      this.canControl &&
+      !this.isDead &&
+      !this.chatInputOpen &&
+      this.keys.has('KeyE')
     );
   }
 
@@ -1022,12 +1085,16 @@ export class PlayerController {
     if (strafeInput !== 0 && this.isSliding) {
       this.slideRollDirection = Math.sign(strafeInput);
     }
-    const targetRoll = this.isDead
-      ? 0.28
-      : this.isSliding
-        ? SLIDE_ROLL_RAD * this.slideCameraIntensity * this.slideRollDirection
+    const slideCameraScale = this.slideCameraTilt ? this.slideCameraIntensity : 0;
+    const targetSlideRoll =
+      !this.isDead && this.isSliding
+        ? SLIDE_ROLL_RAD * slideCameraScale * this.slideRollDirection
         : 0;
-    this.currentRoll += (targetRoll - this.currentRoll) * (1 - Math.exp(-14 * clampedDt));
+    this.slideCameraRoll +=
+      (targetSlideRoll - this.slideCameraRoll) * (1 - Math.exp(-14 * clampedDt));
+    if (!this.isSliding && Math.abs(this.slideCameraRoll) < 0.0002) {
+      this.slideCameraRoll = 0;
+    }
 
     const horizSpeed = this.getHorizontalSpeed();
     if (this.isGrounded && !this.isSliding && horizSpeed > 1.4 && activeInput) {
@@ -1045,26 +1112,26 @@ export class PlayerController {
 
     const flinchDecay = Math.exp(-26 * clampedDt);
     this.flinchPitch *= flinchDecay;
-    this.flinchRoll *= flinchDecay;
+    this.damageFlinchRoll *= flinchDecay;
     this.flinchYaw *= flinchDecay;
 
-    if (Math.abs(this.flinchPitch) < 0.0005) {
+    if (Math.abs(this.flinchPitch) < 0.0002) {
       this.flinchPitch = 0.0;
     }
-    if (Math.abs(this.flinchRoll) < 0.0005) {
-      this.flinchRoll = 0.0;
+    if (Math.abs(this.damageFlinchRoll) < 0.0002) {
+      this.damageFlinchRoll = 0.0;
     }
-    if (Math.abs(this.flinchYaw) < 0.0005) {
+    if (Math.abs(this.flinchYaw) < 0.0002) {
       this.flinchYaw = 0.0;
     }
 
     const flinchNormSq =
       this.flinchPitch * this.flinchPitch +
-      this.flinchRoll * this.flinchRoll +
+      this.damageFlinchRoll * this.damageFlinchRoll +
       this.flinchYaw * this.flinchYaw;
-    if (flinchNormSq < 0.0005 * 0.0005) {
+    if (flinchNormSq < 0.0002 * 0.0002) {
       this.flinchPitch = 0.0;
-      this.flinchRoll = 0.0;
+      this.damageFlinchRoll = 0.0;
       this.flinchYaw = 0.0;
     }
 
@@ -1089,9 +1156,9 @@ export class PlayerController {
     let desiredFov = effectiveAds
       ? this.baseFovRad * targetAdsFovRatio
       : this.baseFovRad;
-    if (!effectiveAds && this.isSliding && !this.isDead && this.slideCameraIntensity > 0) {
+    if (!effectiveAds && this.isSliding && !this.isDead && slideCameraScale > 0) {
       const progress = 1 - Math.max(0, this.slideTimer) / SLIDE_DURATION_SEC;
-      const slideBoost = SLIDE_FOV_BOOST_RAD * this.slideCameraIntensity * (1 - progress * 0.45);
+      const slideBoost = SLIDE_FOV_BOOST_RAD * slideCameraScale * (1 - progress * 0.45);
       desiredFov += slideBoost;
     }
     const zoomDepth = 1 - Math.max(0.08, Math.min(1, targetAdsFovRatio));
@@ -1123,6 +1190,7 @@ export class PlayerController {
 
   private tryStartSlide(): boolean {
     if (
+      !this.slideEnabled ||
       this.isDead ||
       !this.isGrounded ||
       this.isSliding ||
@@ -1252,10 +1320,13 @@ export class PlayerController {
       Math.min(1.48, this.pitch - this.recoilPitch - this.flinchPitch)
     );
     const effectiveYaw = this.yaw + this.recoilYaw + this.flinchYaw;
+    const totalRoll =
+      (Number.isFinite(this.slideCameraRoll) ? this.slideCameraRoll : 0) +
+      (Number.isFinite(this.damageFlinchRoll) ? this.damageFlinchRoll : 0);
     this.camera.rotation.set(
       effectivePitch,
       effectiveYaw,
-      this.currentRoll + this.flinchRoll
+      totalRoll
     );
   }
 
@@ -1310,7 +1381,7 @@ export class PlayerController {
 
     this.keys.add(e.code);
 
-    if (e.code === kb.jump && !e.repeat) {
+    if (e.code === kb.jump && !e.repeat && !this.isDead) {
       this.jumpBufferTimer = JUMP_BUFFER_SEC;
     }
 
@@ -1380,7 +1451,7 @@ export class PlayerController {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
-    if (!this.canControl || this.chatInputOpen) return;
+    if (!this.canControl || this.chatInputOpen || this.isDead) return;
 
     if (!this.isPointerLocked) {
       if (e.target === this.canvas) {
@@ -1388,8 +1459,6 @@ export class PlayerController {
       }
       return;
     }
-
-    if (this.isDead) return;
 
     if (e.button === 0) {
       this.isFireHeld = true;
@@ -1458,10 +1527,15 @@ export class PlayerController {
     this.jumpBufferTimer = 0;
     this.coyoteTimer = 0;
     this.slideJumpCarryTimer = 0;
-    this.currentRoll = 0;
+    this.slideCameraRoll = 0;
+    this.damageFlinchRoll = 0;
+    this.flinchPitch = 0;
+    this.flinchYaw = 0;
+    this.shakeIntensity = 0;
     this.callbacks.onFireRelease();
     this.callbacks.onAdsChange(false);
     this.callbacks.onScoreboardChange(false);
+    this.syncCameraTransform();
   }
 
   private onWindowBlur = (): void => {

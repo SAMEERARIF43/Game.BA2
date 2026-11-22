@@ -1,5 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, KeyRound, Loader2, Plus, Shield, Users } from 'lucide-react';
+import {
+  GAME_MODE_IDS,
+  GAME_MODE_META,
+  GameMode,
+  getModeDefaultLimits,
+  normalizeGameMode,
+} from '../game/gameModeRules';
 import { MAP_LIST } from '../maps/MapManager';
 import { MapId } from '../maps/types';
 import { CreatePrivateMatchOptions, RoomLookupSummary } from '../multiplayer/types';
@@ -7,6 +14,7 @@ import { CreatePrivateMatchOptions, RoomLookupSummary } from '../multiplayer/typ
 interface CustomMatchMenuProps {
   initialJoinCode?: string;
   initialMapId: MapId;
+  initialMode?: GameMode;
   initialCallsign: string;
   errorBanner: string | null;
   onCallsignChange?: (callsign: string) => void;
@@ -20,6 +28,7 @@ interface CustomMatchMenuProps {
 export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
   initialJoinCode,
   initialMapId,
+  initialMode,
   initialCallsign,
   errorBanner,
   onCallsignChange,
@@ -31,11 +40,15 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
 }) => {
   const [playerName, setPlayerName] = useState<string>(() => initialCallsign || 'Operator-101');
 
+  const resolvedInitialMode = normalizeGameMode(initialMode, 'tdm');
+  const initialDefaults = getModeDefaultLimits(resolvedInitialMode);
+
   // Create form state
   const [roomName, setRoomName] = useState('Strike Force Private');
   const [mapId, setMapId] = useState<MapId>(initialMapId);
-  const [killLimit, setKillLimit] = useState(30);
-  const [timeLimit, setTimeLimit] = useState(300);
+  const [mode, setMode] = useState<GameMode>(resolvedInitialMode);
+  const [killLimit, setKillLimit] = useState(initialDefaults.killLimit);
+  const [timeLimit, setTimeLimit] = useState(initialDefaults.timeLimitSec);
   const [friendlyFire, setFriendlyFire] = useState(false);
   const [botCount, setBotCount] = useState(4);
   const [createPassword, setCreatePassword] = useState('');
@@ -96,17 +109,31 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
     return clean;
   };
 
-  const buildCreateOptions = (): CreatePrivateMatchOptions => ({
-    playerName: persistCallsign(playerName),
-    roomName: roomName.trim() || 'Strike Force Private',
-    mapId,
-    killLimit,
-    timeLimit,
-    respawnDelay: 3,
-    friendlyFire,
-    botCount,
-    password: createPassword.trim() || undefined,
-  });
+  const handleSelectMode = (nextMode: GameMode) => {
+    setMode(nextMode);
+    const defaults = getModeDefaultLimits(nextMode);
+    setKillLimit(defaults.killLimit);
+    setTimeLimit(defaults.timeLimitSec);
+    if (nextMode === 'ffa') {
+      setFriendlyFire(false);
+    }
+  };
+
+  const buildCreateOptions = (): CreatePrivateMatchOptions => {
+    const defaults = getModeDefaultLimits(mode);
+    return {
+      playerName: persistCallsign(playerName),
+      roomName: roomName.trim() || 'Strike Force Private',
+      mapId,
+      mode,
+      killLimit,
+      timeLimit,
+      respawnDelay: defaults.respawnDelaySec,
+      friendlyFire: mode === 'ffa' ? false : friendlyFire,
+      botCount,
+      password: createPassword.trim() || undefined,
+    };
+  };
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -212,6 +239,39 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
                 />
               </label>
 
+              <div className="sm:col-span-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-300">Game Mode</span>
+                  <span className="font-mono-tabular text-[11px] text-amber-300">
+                    {GAME_MODE_META[mode].targetLabel}
+                  </span>
+                </div>
+                <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                  {GAME_MODE_IDS.map((m) => {
+                    const meta = GAME_MODE_META[m];
+                    const active = mode === m;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => handleSelectMode(m)}
+                        className={`cursor-pointer border px-2.5 py-2 text-left transition-colors ${
+                          active
+                            ? 'border-amber-400 bg-amber-400/15 text-white'
+                            : 'border-white/10 bg-white/5 text-slate-300 hover:border-white/25 hover:text-white'
+                        }`}
+                      >
+                        <div className="font-display text-xs font-bold">{meta.label}</div>
+                        <div className="font-mono-tabular text-[10px] text-amber-300/90">
+                          {meta.shortLabel}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <label className="block">
                 <span className="text-xs text-slate-300">Map</span>
                 <select
@@ -240,9 +300,11 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
               </label>
 
               <div>
-                <span className="text-xs text-slate-300">Kill Limit</span>
+                <span className="text-xs text-slate-300">
+                  {mode === 'bomb' ? 'Rounds to Win' : 'Kill Limit'}
+                </span>
                 <div className="mt-1.5 flex gap-1.5">
-                  {[15, 30, 50].map((v) => (
+                  {(mode === 'bomb' ? [3, 5, 7] : mode === 'ffa' ? [10, 20, 30] : [15, 30, 50]).map((v) => (
                     <button
                       key={v}
                       type="button"
@@ -260,13 +322,22 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
               </div>
 
               <div>
-                <span className="text-xs text-slate-300">Time Limit</span>
+                <span className="text-xs text-slate-300">
+                  {mode === 'bomb' ? 'Round Timer' : 'Time Limit'}
+                </span>
                 <div className="mt-1.5 flex gap-1.5">
-                  {[
-                    { label: '3m', sec: 180 },
-                    { label: '5m', sec: 300 },
-                    { label: '10m', sec: 600 },
-                  ].map((opt) => (
+                  {(mode === 'bomb'
+                    ? [
+                        { label: '60s', sec: 60 },
+                        { label: '90s', sec: 90 },
+                        { label: '120s', sec: 120 },
+                      ]
+                    : [
+                        { label: '3m', sec: 180 },
+                        { label: '5m', sec: 300 },
+                        { label: '10m', sec: 600 },
+                      ]
+                  ).map((opt) => (
                     <button
                       key={opt.sec}
                       type="button"
@@ -300,23 +371,33 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
               </label>
 
               <div className="flex items-end">
-                <button
-                  type="button"
-                  onClick={() => setFriendlyFire((v) => !v)}
-                  className={`flex w-full cursor-pointer items-center justify-between border px-3 py-2 text-xs ${
-                    friendlyFire
-                      ? 'border-red-400/60 bg-red-500/15 text-red-200'
-                      : 'border-white/15 bg-white/5 text-slate-300'
-                  }`}
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <Shield className="h-3.5 w-3.5" />
-                    Friendly Fire
-                  </span>
-                  <span className="font-mono-tabular font-semibold">
-                    {friendlyFire ? 'ON' : 'OFF'}
-                  </span>
-                </button>
+                {mode === 'ffa' ? (
+                  <div className="flex w-full items-center justify-between border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Shield className="h-3.5 w-3.5" />
+                      Hostility
+                    </span>
+                    <span className="font-mono-tabular font-semibold">SOLO FFA</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setFriendlyFire((v) => !v)}
+                    className={`flex w-full cursor-pointer items-center justify-between border px-3 py-2 text-xs ${
+                      friendlyFire
+                        ? 'border-red-400/60 bg-red-500/15 text-red-200'
+                        : 'border-white/15 bg-white/5 text-slate-300'
+                    }`}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <Shield className="h-3.5 w-3.5" />
+                      Friendly Fire
+                    </span>
+                    <span className="font-mono-tabular font-semibold">
+                      {friendlyFire ? 'ON' : 'OFF'}
+                    </span>
+                  </button>
+                )}
               </div>
             </div>
 

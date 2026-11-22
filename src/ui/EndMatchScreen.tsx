@@ -1,5 +1,6 @@
 import React from 'react';
 import { Award, LogOut, RotateCcw } from 'lucide-react';
+import { GAME_MODE_META, normalizeGameMode } from '../game/gameModeRules';
 import { MatchSnapshot } from '../game/types';
 import { selectMatchMvp } from '../match/matchMachine';
 import { getRankSummary } from '../settings/progressionStorage';
@@ -33,32 +34,68 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
   onReturnToLobby,
   onReturnToMenu,
 }) => {
+  const mode = normalizeGameMode(match.mode, 'tdm');
+  const modeMeta = GAME_MODE_META[mode];
+
+  const localPlayer = match.participants.find((p) => p.isPlayer);
+  const ffaPlayerWon =
+    mode === 'ffa' &&
+    Boolean(
+      match.winnerParticipantId === 'player' ||
+        (localPlayer && match.winnerParticipantId === localPlayer.id) ||
+        (localPlayer && match.winnerName && match.winnerName === localPlayer.name),
+    );
+
   const headline =
-    match.winner === 'blue'
-      ? 'Victory — Blue Task Force'
-      : match.winner === 'red'
-        ? 'Defeat — Red Opposition'
-        : 'Draw Match';
+    mode === 'ffa'
+      ? match.winner === 'draw' || !match.winnerName
+        ? 'Draw Match'
+        : `Victory — ${match.winnerName}`
+      : mode === 'bomb'
+        ? match.winner === 'blue'
+          ? 'Victory — Attackers (Blue)'
+          : match.winner === 'red'
+            ? 'Defeat — Defenders (Red)'
+            : 'Draw Match'
+        : match.winner === 'blue'
+          ? 'Victory — Blue Task Force'
+          : match.winner === 'red'
+            ? 'Defeat — Red Opposition'
+            : 'Draw Match';
 
   const headlineColor =
-    match.winner === 'blue'
-      ? 'text-blue-400'
-      : match.winner === 'red'
-        ? 'text-red-400'
-        : 'text-amber-400';
+    mode === 'ffa'
+      ? match.winner === 'draw' || !match.winnerName
+        ? 'text-amber-400'
+        : ffaPlayerWon
+          ? 'text-emerald-400'
+          : 'text-amber-300'
+      : match.winner === 'blue'
+        ? 'text-blue-400'
+        : match.winner === 'red'
+          ? 'text-red-400'
+          : 'text-amber-400';
 
   const mvp = selectMatchMvp(match.participants, playerStats);
   const rank = getRankSummary(xp);
 
   const mvpTeamLabel = mvp
-    ? mvp.team === 'blue'
-      ? 'Blue Task Force'
-      : 'Red Opposition'
+    ? mode === 'ffa'
+      ? 'Free-For-All'
+      : mode === 'bomb'
+        ? mvp.team === 'blue'
+          ? 'Attackers (Blue)'
+          : 'Defenders (Red)'
+        : mvp.team === 'blue'
+          ? 'Blue Task Force'
+          : 'Red Opposition'
     : null;
   const mvpTeamColor = mvp
-    ? mvp.team === 'blue'
-      ? 'text-blue-300'
-      : 'text-red-300'
+    ? mode === 'ffa'
+      ? 'text-amber-300'
+      : mvp.team === 'blue'
+        ? 'text-blue-300'
+        : 'text-red-300'
     : 'text-slate-300';
   const mvpRoleLabel = mvp ? (mvp.isPlayer ? 'You' : mvp.isBot ? 'Bot' : 'Operator') : null;
 
@@ -68,7 +105,8 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
         <div className="flex flex-col items-start justify-between gap-5 border border-slate-400/20 bg-[#0e131b]/95 p-4 shadow-xl shadow-black/30 sm:flex-row sm:items-center sm:p-6">
           <div className="min-w-0">
             <div className="text-xs font-medium text-slate-400">
-              Match Complete · {match.mapName}
+              {modeMeta.label} Complete · {match.mapName}
+              {mode === 'bomb' ? ` · ${match.blueScore} – ${match.redScore} Rounds` : ''}
             </div>
             <h1 className={`mt-1 font-display text-2xl font-bold sm:text-3xl ${headlineColor}`}>
               {headline}

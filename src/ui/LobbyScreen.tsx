@@ -14,6 +14,13 @@ import {
   Shield,
   UserX,
 } from 'lucide-react';
+import {
+  GAME_MODE_IDS,
+  GAME_MODE_META,
+  GameMode,
+  getModeDefaultLimits,
+  normalizeGameMode,
+} from '../game/gameModeRules';
 import { MAP_LIST } from '../maps/MapManager';
 import { MapId } from '../maps/types';
 import {
@@ -74,6 +81,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
 
   const localPlayer = lobby.players.find((p) => p.id === lobby.localPlayerId);
   const isHost = lobby.hostId === lobby.localPlayerId;
+  const mode = normalizeGameMode(lobby.mode, 'tdm');
+  const modeMeta = GAME_MODE_META[mode];
+  const effectiveChatChannel: ChatChannel = mode === 'ffa' ? 'all' : chatChannel;
 
   const bluePlayers = lobby.players.filter((p) => p.team === 'blue');
   const redPlayers = lobby.players.filter((p) => p.team === 'red');
@@ -129,12 +139,12 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
     e.preventDefault();
     const trimmed = chatText.trim();
     if (!trimmed) return;
-    onSendChat(trimmed, chatChannel);
+    onSendChat(trimmed, effectiveChatChannel);
     setChatText('');
   };
 
   const handleCallout = (callout: string) => {
-    onSendChat(callout, chatChannel);
+    onSendChat(callout, effectiveChatChannel);
   };
 
   const renderRosterRow = (p: LobbyPlayerInfo) => {
@@ -194,6 +204,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           <div>
             <div className="flex items-center gap-2.5">
               <h1 className="font-display text-xl font-bold text-white md:text-2xl">{lobby.roomName}</h1>
+              <span className="border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 font-mono-tabular text-[10px] font-bold text-amber-300">
+                {modeMeta.shortLabel}
+              </span>
               {lobby.hasPassword && <Lock className="h-4 w-4 text-amber-400" />}
               {lobby.isLocalSolo && (
                 <span className="border border-sky-400/40 bg-sky-500/15 px-2 py-0.5 font-mono-tabular text-[10px] font-semibold text-sky-300">
@@ -209,10 +222,14 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                 </strong>
               </span>
               <span>·</span>
+              <span>{modeMeta.label}</span>
+              <span>·</span>
               <span>Map: {MAP_LIST.find((m) => m.id === lobby.mapId)?.name ?? lobby.mapId}</span>
               <span>·</span>
               <span className="font-mono-tabular">
-                First to {lobby.killLimit} · {Math.round(lobby.timeLimit / 60)}m
+                {mode === 'bomb'
+                  ? `First to ${lobby.roundsToWin ?? lobby.killLimit} Rounds · ${lobby.timeLimit}s/rnd`
+                  : `First to ${lobby.killLimit} · ${Math.round(lobby.timeLimit / 60)}m`}
               </span>
             </div>
           </div>
@@ -262,48 +279,70 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           </div>
         )}
 
-        {/* Team Rosters */}
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="border border-blue-500/30 bg-black/40">
+        {/* Team Rosters or FFA Roster */}
+        {mode === 'ffa' ? (
+          <div className="mt-4 border border-amber-400/30 bg-black/40">
             <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
-              <span className="font-display text-sm font-bold text-blue-400">
-                Blue Task Force
+              <span className="font-display text-sm font-bold text-amber-300">
+                Free-For-All Roster
               </span>
               <span className="font-mono-tabular text-xs text-slate-400">
-                {bluePlayers.length} Operators
+                {lobby.players.length} Combatants · Every Operator Hostile
               </span>
             </div>
-            <div className="max-h-40 overflow-y-auto">
-              {bluePlayers.length === 0 ? (
+            <div className="max-h-44 overflow-y-auto">
+              {lobby.players.length === 0 ? (
                 <div className="px-4 py-5 text-center text-xs text-slate-500">
-                  No operators assigned
+                  No operators in lobby
                 </div>
               ) : (
-                bluePlayers.map(renderRosterRow)
+                lobby.players.map(renderRosterRow)
               )}
             </div>
           </div>
+        ) : (
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="border border-blue-500/30 bg-black/40">
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
+                <span className="font-display text-sm font-bold text-blue-400">
+                  {mode === 'bomb' ? 'Blue — Attackers' : 'Blue Task Force'}
+                </span>
+                <span className="font-mono-tabular text-xs text-slate-400">
+                  {bluePlayers.length} Operators
+                </span>
+              </div>
+              <div className="max-h-40 overflow-y-auto">
+                {bluePlayers.length === 0 ? (
+                  <div className="px-4 py-5 text-center text-xs text-slate-500">
+                    No operators assigned
+                  </div>
+                ) : (
+                  bluePlayers.map(renderRosterRow)
+                )}
+              </div>
+            </div>
 
-          <div className="border border-red-500/30 bg-black/40">
-            <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
-              <span className="font-display text-sm font-bold text-red-400">
-                Red Opposition
-              </span>
-              <span className="font-mono-tabular text-xs text-slate-400">
-                {redPlayers.length} Operators
-              </span>
-            </div>
-            <div className="max-h-40 overflow-y-auto">
-              {redPlayers.length === 0 ? (
-                <div className="px-4 py-5 text-center text-xs text-slate-500">
-                  No operators assigned
-                </div>
-              ) : (
-                redPlayers.map(renderRosterRow)
-              )}
+            <div className="border border-red-500/30 bg-black/40">
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
+                <span className="font-display text-sm font-bold text-red-400">
+                  {mode === 'bomb' ? 'Red — Defenders' : 'Red Opposition'}
+                </span>
+                <span className="font-mono-tabular text-xs text-slate-400">
+                  {redPlayers.length} Operators
+                </span>
+              </div>
+              <div className="max-h-40 overflow-y-auto">
+                {redPlayers.length === 0 ? (
+                  <div className="px-4 py-5 text-center text-xs text-slate-500">
+                    No operators assigned
+                  </div>
+                ) : (
+                  redPlayers.map(renderRosterRow)
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Lobby Comms Chat Panel */}
         <div
@@ -318,13 +357,13 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                 LOBBY COMMS
               </span>
               <div className="ml-1 flex border border-white/15 bg-black/40">
-                {(['all', 'team'] as const).map((ch) => (
+                {(mode === 'ffa' ? (['all'] as const) : (['all', 'team'] as const)).map((ch) => (
                   <button
                     key={ch}
                     type="button"
                     onClick={() => setChatChannel(ch)}
                     className={`cursor-pointer px-2 py-0.5 font-mono-tabular text-[10px] font-bold transition-colors ${
-                      chatChannel === ch
+                      effectiveChatChannel === ch
                         ? ch === 'team'
                           ? 'bg-sky-500/25 text-sky-200'
                           : 'bg-amber-400/25 text-amber-200'
@@ -409,7 +448,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               maxLength={CHAT_MAX_LENGTH}
               value={chatText}
               onChange={(e) => setChatText(e.target.value)}
-              placeholder={`Message ${chatChannel === 'team' ? 'team' : 'lobby'}...`}
+              placeholder={`Message ${effectiveChatChannel === 'team' ? 'team' : 'lobby'}...`}
               className="min-w-0 flex-1 border border-white/15 bg-black/55 px-3 py-1.5 text-xs text-white outline-none placeholder:text-slate-500 focus:border-amber-400"
             />
             <button
@@ -430,7 +469,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               <span className="text-xs font-medium text-slate-400">
                 {isHost ? 'Host Match Configuration' : 'Match Configuration (Host Controlled)'}
               </span>
-              {isHost && (
+              {isHost && mode !== 'ffa' && (
                 <button
                   type="button"
                   onClick={onBalanceTeams}
@@ -442,7 +481,33 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <label className="block text-xs">
+                <span className="text-slate-400">Mode</span>
+                <select
+                  disabled={!isHost}
+                  value={mode}
+                  onChange={(e) => {
+                    const nextMode = e.target.value as GameMode;
+                    const defaults = getModeDefaultLimits(nextMode);
+                    onUpdateConfig({
+                      mode: nextMode,
+                      killLimit: defaults.killLimit,
+                      timeLimit: defaults.timeLimitSec,
+                      respawnDelay: defaults.respawnDelaySec,
+                      friendlyFire: nextMode === 'ffa' ? false : lobby.friendlyFire,
+                    });
+                  }}
+                  className="mt-1 w-full border border-white/15 bg-[#0b1017] px-2.5 py-1.5 text-xs text-white disabled:opacity-60"
+                >
+                  {GAME_MODE_IDS.map((m) => (
+                    <option key={m} value={m}>
+                      {GAME_MODE_META[m].label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <label className="block text-xs">
                 <span className="text-slate-400">Map</span>
                 <select
@@ -460,18 +525,20 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               </label>
 
               <label className="block text-xs">
-                <span className="text-slate-400">Score Limit</span>
+                <span className="text-slate-400">
+                  {mode === 'bomb' ? 'Rounds to Win' : 'Score Limit'}
+                </span>
                 <select
                   disabled={!isHost}
-                  value={lobby.killLimit}
+                  value={mode === 'bomb' ? (lobby.roundsToWin ?? lobby.killLimit) : lobby.killLimit}
                   onChange={(e) =>
                     onUpdateConfig({ killLimit: parseInt(e.target.value, 10) })
                   }
                   className="mt-1 w-full border border-white/15 bg-[#0b1017] px-2.5 py-1.5 font-mono-tabular text-xs text-white disabled:opacity-60"
                 >
-                  {[15, 30, 50, 75].map((k) => (
+                  {(mode === 'bomb' ? [3, 5, 7, 9] : [15, 20, 30, 50, 75]).map((k) => (
                     <option key={k} value={k}>
-                      {k} Kills
+                      {mode === 'bomb' ? `${k} Rounds` : `${k} Kills`}
                     </option>
                   ))}
                 </select>
@@ -503,34 +570,45 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               </label>
 
               <div className="text-xs">
-                <span className="text-slate-400">Friendly Fire</span>
-                <button
-                  type="button"
-                  disabled={!isHost}
-                  onClick={() => onUpdateConfig({ friendlyFire: !lobby.friendlyFire })}
-                  className={`mt-1 flex w-full cursor-pointer items-center justify-between border px-2.5 py-1.5 disabled:opacity-60 ${
-                    lobby.friendlyFire
-                      ? 'border-red-400/50 bg-red-500/15 text-red-200'
-                      : 'border-white/15 bg-black/40 text-slate-300'
-                  }`}
-                >
-                  <Shield className="h-3.5 w-3.5" />
-                  <span className="font-mono-tabular">{lobby.friendlyFire ? 'ON' : 'OFF'}</span>
-                </button>
+                <span className="text-slate-400">
+                  {mode === 'ffa' ? 'Rule' : 'Friendly Fire'}
+                </span>
+                {mode === 'ffa' ? (
+                  <div className="mt-1 flex w-full items-center justify-between border border-amber-400/25 bg-amber-500/10 px-2.5 py-1.5 font-mono-tabular text-amber-200">
+                    <Shield className="h-3.5 w-3.5" />
+                    <span>FFA</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!isHost}
+                    onClick={() => onUpdateConfig({ friendlyFire: !lobby.friendlyFire })}
+                    className={`mt-1 flex w-full cursor-pointer items-center justify-between border px-2.5 py-1.5 disabled:opacity-60 ${
+                      lobby.friendlyFire
+                        ? 'border-red-400/50 bg-red-500/15 text-red-200'
+                        : 'border-white/15 bg-black/40 text-slate-300'
+                    }`}
+                  >
+                    <Shield className="h-3.5 w-3.5" />
+                    <span className="font-mono-tabular">{lobby.friendlyFire ? 'ON' : 'OFF'}</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
 
           {/* Right Action Stack */}
           <div className="flex flex-col justify-end gap-2 lg:col-span-4">
-            <button
-              type="button"
-              onClick={onSwitchTeam}
-              className="flex w-full cursor-pointer items-center justify-center gap-2 border border-white/15 bg-white/5 px-4 py-2 font-display text-xs font-semibold text-white hover:bg-white/10"
-            >
-              <ArrowLeftRight className="h-3.5 w-3.5" />
-              Switch Team ({localPlayer?.team === 'blue' ? 'to Red' : 'to Blue'})
-            </button>
+            {mode !== 'ffa' && (
+              <button
+                type="button"
+                onClick={onSwitchTeam}
+                className="flex w-full cursor-pointer items-center justify-center gap-2 border border-white/15 bg-white/5 px-4 py-2 font-display text-xs font-semibold text-white hover:bg-white/10"
+              >
+                <ArrowLeftRight className="h-3.5 w-3.5" />
+                Switch Team ({localPlayer?.team === 'blue' ? 'to Red' : 'to Blue'})
+              </button>
+            )}
 
             {isHost ? (
               <button

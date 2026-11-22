@@ -1,4 +1,4 @@
-import { CharacterId, GunId, Stance, WeaponId } from '../game/types';
+import { BombStateSnapshot, CharacterId, GameMode, GunId, Stance, WeaponId } from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 export type { ChatChannel, ChatMessage, ChatPayload } from './chat';
 
@@ -6,6 +6,7 @@ export interface CreatePrivateMatchOptions {
   playerName: string;
   roomName: string;
   mapId: MapId;
+  mode?: GameMode;
   killLimit: number;
   timeLimit: number;
   respawnDelay: number;
@@ -52,6 +53,7 @@ export interface LobbyRoomSnapshot {
   roomCode: string;
   roomName: string;
   mapId: MapId;
+  mode?: GameMode;
   phase: 'lobby' | 'playing' | 'ended';
   killLimit: number;
   timeLimit: number;
@@ -63,7 +65,12 @@ export interface LobbyRoomSnapshot {
   hostId: string;
   blueScore: number;
   redScore: number;
+  roundNumber?: number;
+  roundsToWin?: number;
   winner: TeamId | 'draw' | '';
+  winnerId?: string;
+  winnerName?: string;
+  bombState?: BombStateSnapshot | null;
   players: LobbyPlayerInfo[];
   localPlayerId: string;
   isLocalSolo?: boolean;

@@ -17,6 +17,7 @@ import {
   createOperatorPalette,
 } from '../game/OperatorMeshBuilder';
 import { PooledTracerRingBuffer, getVfxQualityBudget } from '../game/combatVfx';
+import { GameMode, isHostile } from '../game/gameModeRules';
 import { getCharacterForWeaponId } from '../game/loadoutRules';
 import { GraphicsQuality, HitZone, MatchParticipant, WeaponId } from '../game/types';
 import { MapDefinition, TeamId } from '../maps/types';
@@ -122,6 +123,7 @@ export class BotManager {
   private callbacks: BotManagerCallbacks;
 
   private mapDef: MapDefinition | null = null;
+  private gameMode: GameMode = 'tdm';
   private bots: BotAgent[] = [];
   private tracerPool: PooledTracerRingBuffer;
   private sharedMaterials: Material[] = [];
@@ -162,6 +164,16 @@ export class BotManager {
     this.tracerPool.setMaxActive(budget.maxTracers);
   }
 
+  public setGameMode(mode: GameMode): void {
+    this.gameMode = mode;
+  }
+
+  public resetBotsForNewRound(): void {
+    for (const bot of this.bots) {
+      this.respawnBot(bot);
+    }
+  }
+
   public spawnBotsForMatch(
     mapDef: MapDefinition,
     blueBots: MatchParticipant[],
@@ -187,14 +199,18 @@ export class BotManager {
     });
 
     redBots.forEach((p, idx) => {
-      const spawn = mapDef.redSpawns[idx % mapDef.redSpawns.length] ?? new Vector3(16, 1, 20);
+      const spawns =
+        this.gameMode === 'ffa'
+          ? [...mapDef.blueSpawns, ...mapDef.redSpawns]
+          : mapDef.redSpawns;
+      const spawn = spawns[idx % spawns.length] ?? new Vector3(16, 1, 20);
       this.createBotAgent(
         p.id,
         p.name,
         'red',
         redWeaponNames[idx % redWeaponNames.length],
         spawn,
-        Math.PI
+        this.gameMode === 'ffa' ? Math.atan2(-spawn.x, -spawn.z) : Math.PI
       );
     });
   }
@@ -270,7 +286,10 @@ export class BotManager {
   ): number {
     let hits = 0;
     for (const bot of this.bots) {
-      if (!bot.isAlive || bot.team !== 'red') continue;
+      if (!bot.isAlive) continue;
+      if (!isHostile(this.gameMode, { id: 'player', team: 'blue' }, { id: bot.id, team: bot.team })) {
+        continue;
+      }
       const dist = Vector3.Distance(
         new Vector3(bot.root.position.x, impactPos.y, bot.root.position.z),
         impactPos
@@ -302,24 +321,36 @@ export class BotManager {
     return hits;
   }
 
-  public getLivingEnemyPositions(forTeam: TeamId): Vector3[] {
+  public getLivingEnemyPositions(forTeam: TeamId, excludeBotId?: string): Vector3[] {
     const out: Vector3[] = [];
     for (const bot of this.bots) {
-      if (bot.isAlive && bot.team !== forTeam) {
+      if (!bot.isAlive || bot.id === excludeBotId) continue;
+      if (
+        isHostile(
+          this.gameMode,
+          { id: excludeBotId ?? 'player', team: forTeam },
+          { id: bot.id, team: bot.team }
+        )
+      ) {
         out.push(bot.root.position.clone());
       }
     }
-    if (forTeam === 'red') {
+    if ((forTeam === 'red' || this.gameMode === 'ffa') && excludeBotId !== 'player') {
       const p = this.callbacks.getPlayerTarget();
       if (p.isAlive) out.push(p.position.clone());
     }
     return out;
   }
 
-  public pickBestSpawn(team: TeamId): Vector3 {
+  public pickBestSpawn(team: TeamId, excludeActorId?: string): Vector3 {
     if (!this.mapDef) return new Vector3(0, 1, 0);
-    const candidates = team === 'blue' ? this.mapDef.blueSpawns : this.mapDef.redSpawns;
-    const enemies = this.getLivingEnemyPositions(team);
+    const candidates =
+      this.gameMode === 'ffa'
+        ? [...this.mapDef.blueSpawns, ...this.mapDef.redSpawns]
+        : team === 'blue'
+          ? this.mapDef.blueSpawns
+          : this.mapDef.redSpawns;
+    const enemies = this.getLivingEnemyPositions(team, excludeActorId);
 
     if (enemies.length === 0) {
       return candidates[Math.floor(Math.random() * candidates.length)].clone();
@@ -421,6 +452,10 @@ export class BotManager {
         bot.pivot.position.y = Math.max(-0.08, bot.pivot.position.y - clampedDt * 0.6);
         bot.legLPivot.rotation.x = this.lerp(bot.legLPivot.rotation.x, -0.35, clampedDt * 10);
         bot.legRPivot.rotation.x = this.lerp(bot.legRPivot.rotation.x, 0.28, clampedDt * 10);
+        if (this.gameMode === 'bomb') {
+          this.match.setParticipantAlive(bot.id, false, 0);
+          continue;
+        }
         bot.respawnTimer -= clampedDt;
         this.match.setParticipantAlive(bot.id, false, Math.max(0, bot.respawnTimer));
         if (bot.respawnTimer <= 0) {
@@ -537,6 +572,56 @@ export class BotManager {
       return;
     }
 
+    // Objective behavior in Secure Bomb mode
+    if (this.gameMode === 'bomb') {
+      const bombState = this.match.getBombState();
+      if (bombState && bombState.phase === 'unplanted' && bot.team === 'blue' && bombState.carrierId === bot.id) {
+        const sites = this.mapDef?.bombSites ?? [];
+        const targetSite = sites[bot.id.charCodeAt(bot.id.length - 1) % Math.max(1, sites.length)];
+        if (targetSite) {
+          const sdx = targetSite.position.x - bot.root.position.x;
+          const sdz = targetSite.position.z - bot.root.position.z;
+          const sdist = Math.hypot(sdx, sdz);
+          if (sdist <= targetSite.radius * 0.72) {
+            this.match.updateBombInteraction(
+              {
+                id: bot.id,
+                team: bot.team,
+                x: bot.root.position.x,
+                y: bot.root.position.y,
+                z: bot.root.position.z,
+                isAlive: bot.isAlive,
+              },
+              true,
+              dt
+            );
+            return;
+          }
+          bot.currentWaypoint = targetSite.position.clone();
+        }
+      } else if (bombState && bombState.phase === 'planted' && bot.team === 'red') {
+        const bdx = bombState.plantX - bot.root.position.x;
+        const bdz = bombState.plantZ - bot.root.position.z;
+        const bdist = Math.hypot(bdx, bdz);
+        if (bdist <= 3.6) {
+          this.match.updateBombInteraction(
+            {
+              id: bot.id,
+              team: bot.team,
+              x: bot.root.position.x,
+              y: bot.root.position.y,
+              z: bot.root.position.z,
+              isAlive: bot.isAlive,
+            },
+            true,
+            dt
+          );
+          return;
+        }
+        bot.currentWaypoint = new Vector3(bombState.plantX, 0.2, bombState.plantZ);
+      }
+    }
+
     const toWaypointX = bot.currentWaypoint.x - bot.root.position.x;
     const toWaypointZ = bot.currentWaypoint.z - bot.root.position.z;
     const flatDist = Math.hypot(toWaypointX, toWaypointZ);
@@ -638,7 +723,16 @@ export class BotManager {
     let closestDist = BOT_DETECT_RANGE;
 
     for (const other of this.bots) {
-      if (!other.isAlive || other.team === bot.team) continue;
+      if (
+        !other.isAlive ||
+        !isHostile(
+          this.gameMode,
+          { id: bot.id, team: bot.team },
+          { id: other.id, team: other.team }
+        )
+      ) {
+        continue;
+      }
       const targetCenter = bot.scanTargetScratch.set(
         other.root.position.x,
         other.root.position.y + 1.25,
@@ -657,7 +751,7 @@ export class BotManager {
       }
     }
 
-    if (bot.team === 'red') {
+    if (this.gameMode === 'ffa' || bot.team === 'red') {
       const player = this.callbacks.getPlayerTarget();
       if (player.isAlive) {
         const playerChest = bot.scanTargetScratch.set(
@@ -743,7 +837,7 @@ export class BotManager {
     bot.shotRay.length = 90;
 
     const prevPickable = player.collider.isPickable;
-    player.collider.isPickable = player.isAlive && bot.team === 'red';
+    player.collider.isPickable = player.isAlive && (this.gameMode === 'ffa' || bot.team === 'red');
 
     let pick;
     try {
@@ -751,7 +845,11 @@ export class BotManager {
         if (!mesh.isPickable || !mesh.isEnabled()) return false;
         const meta = mesh.metadata as { isBot?: boolean; botId?: string; team?: TeamId } | undefined;
         if (meta?.isBot) {
-          return meta.botId !== bot.id && meta.team !== bot.team;
+          return isHostile(
+            this.gameMode,
+            { id: bot.id, team: bot.team },
+            { id: meta.botId ?? '', team: meta.team ?? 'red' }
+          );
         }
         return true;
       });
@@ -782,7 +880,11 @@ export class BotManager {
 
     const hitDist = Math.round(pick.distance * 10) / 10;
 
-    if (pick.pickedMesh === player.collider && bot.team === 'red' && player.isAlive) {
+    if (
+      pick.pickedMesh === player.collider &&
+      (this.gameMode === 'ffa' || bot.team === 'red') &&
+      player.isAlive
+    ) {
       const headshot = Math.random() < 0.14;
       const dmg = headshot ? Math.round(BOT_WEAPON_DAMAGE * 1.6) : BOT_WEAPON_DAMAGE;
       this.callbacks.onPlayerDamaged(
@@ -829,7 +931,7 @@ export class BotManager {
   }
 
   private respawnBot(bot: BotAgent): void {
-    const spawn = this.pickBestSpawn(bot.team);
+    const spawn = this.pickBestSpawn(bot.team, bot.id);
     const groundY = this.sampleGroundY(null, spawn.x, spawn.y + 1.0, spawn.z) ?? 0;
     bot.root.position.set(spawn.x, groundY, spawn.z);
     bot.prevPos.copyFrom(bot.root.position);
