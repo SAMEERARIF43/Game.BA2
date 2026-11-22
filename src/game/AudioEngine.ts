@@ -487,6 +487,60 @@ export class AudioEngine {
     this.triggerTone(now, 90, 26, 0.72, 'sawtooth', 0.5);
   }
 
+  public playGrenadeThrow(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+    const p = this.getPitchVariance(0.05);
+    // Metallic pin pull + sleeve whoosh
+    this.triggerTone(now, 1480 * p, 2100 * p, 0.04, 'triangle', 0.16);
+    this.triggerNoiseBurst(now + 0.03, 0.12, 820 * p, 1.3, 0.28);
+  }
+
+  public playSmokeDeploy(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || !this.ambientNoiseBuffer || this.muted || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+    this.triggerTone(now, 240, 140, 0.08, 'triangle', 0.22);
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.ambientNoiseBuffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1600, now);
+    filter.frequency.exponentialRampToValueAtTime(620, now + 0.9);
+    filter.Q.setValueAtTime(0.9, now);
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.01, now);
+    gain.gain.linearRampToValueAtTime(0.32, now + 0.06);
+    gain.gain.exponentialRampToValueAtTime(0.002, now + 0.95);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.sfxGain);
+    src.start(now);
+    src.stop(now + 0.98);
+  }
+
+  public playFlashbangDetonate(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+    this.triggerNoiseBurst(now, 0.2, 2400, 0.55, 0.85);
+    this.triggerTone(now, 190, 52, 0.16, 'triangle', 0.65);
+    this.triggerTone(now + 0.03, 3400, 2950, 0.45, 'sine', 0.14);
+  }
+
+  public playStunDetonate(): void {
+    this.unlock();
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer || this.muted || !this.sfxEnabled) return;
+    const now = this.ctx.currentTime;
+    this.triggerNoiseBurst(now, 0.18, 1250, 0.7, 0.72);
+    this.triggerTone(now, 360, 68, 0.28, 'sawtooth', 0.42);
+    this.triggerTone(now + 0.02, 920, 420, 0.22, 'sine', 0.22);
+  }
+
   private startAmbientLoop(): void {
     if (!this.ctx || !this.musicGain || !this.ambientNoiseBuffer || this.ambientStarted) return;
     this.ambientStarted = true;

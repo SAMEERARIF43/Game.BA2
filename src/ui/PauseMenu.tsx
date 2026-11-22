@@ -12,10 +12,15 @@ import {
   KNIFE_CHARMS,
   KNIFE_CHARM_IDS,
   KnifeCharmId,
+  TACTICAL_EQUIPMENT,
+  TACTICAL_EQUIPMENT_IDS,
+  TacticalEquipmentId,
   WEAPONS,
 } from '../game/types';
+import { normalizeTacticalEquipmentId } from '../game/loadoutRules';
+import { DEFAULT_KEYBINDINGS, formatKeyCode } from '../settings/keybindings';
 import { SettingsPanel } from './SettingsPanel';
-import { WeaponPreview } from './WeaponPreview';
+import { TacticalEquipmentPreview, WeaponPreview } from './WeaponPreview';
 
 interface PauseMenuProps {
   hud: HudState;
@@ -27,6 +32,7 @@ interface PauseMenuProps {
   onSelectCharacter: (id: CharacterId, equipSignatureGun?: boolean) => void;
   onSelectGun: (id: GunId) => void;
   onSelectKnifeCharm: (id: KnifeCharmId) => void;
+  onSelectTacticalEquipment?: (id: TacticalEquipmentId) => void;
   onUpdateSettings: (next: GameSettings) => void;
   onResetSettings?: () => void;
 }
@@ -41,10 +47,12 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   onSelectCharacter,
   onSelectGun,
   onSelectKnifeCharm,
+  onSelectTacticalEquipment,
   onUpdateSettings,
   onResetSettings,
 }) => {
   const [showSettings, setShowSettings] = useState(false);
+  const [hoveredTacticalId, setHoveredTacticalId] = useState<TacticalEquipmentId | null>(null);
   const resumeButtonRef = useRef<HTMLButtonElement>(null);
   const settingsBackRef = useRef<HTMLButtonElement>(null);
 
@@ -76,6 +84,27 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   const equippedGun = WEAPONS[hud.equippedGunId];
   const queuedGun = WEAPONS[hud.queuedGunId];
   const selectedCharm = KNIFE_CHARMS[hud.knifeCharmId];
+  const equippedTacticalId = normalizeTacticalEquipmentId(
+    hud.tacticalEquipmentId ?? settings.tacticalEquipmentId
+  );
+  const queuedTacticalId = normalizeTacticalEquipmentId(
+    hud.queuedTacticalEquipmentId ?? equippedTacticalId
+  );
+  const equippedTactical = TACTICAL_EQUIPMENT[equippedTacticalId];
+  const queuedTactical = TACTICAL_EQUIPMENT[queuedTacticalId];
+  const inspectedTacticalId = hoveredTacticalId ?? (hud.isGunSwitchLocked ? queuedTacticalId : equippedTacticalId);
+  const inspectedTactical = TACTICAL_EQUIPMENT[inspectedTacticalId];
+  const kb = settings.keybindings ?? DEFAULT_KEYBINDINGS;
+  const handleSelectTactical = (id: TacticalEquipmentId) => {
+    if (onSelectTacticalEquipment) {
+      onSelectTacticalEquipment(id);
+    } else {
+      onUpdateSettings({
+        ...settings,
+        tacticalEquipmentId: id,
+      });
+    }
+  };
 
   return (
     <div
@@ -162,12 +191,14 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
             <div className="mt-5 border-t border-white/10 pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-xs font-medium text-slate-300">
-                  Loadout · [1] {equippedGun.name} + [2] {WEAPONS.knife.shortName}
+                  Loadout · [1] {equippedGun.name} + [2] {WEAPONS.knife.shortName} + [{formatKeyCode(kb.useTactical)}] {equippedTactical.shortName}
                 </div>
                 <div className="font-mono-tabular text-[11px] text-slate-400">
                   {hud.queuedGunId !== hud.equippedGunId
                     ? `Next Spawn: ${queuedGun.name}`
-                    : 'Knife always ready via [2] or [V / F]'}
+                    : queuedTacticalId !== equippedTacticalId
+                      ? `Next Tactical: ${queuedTactical.shortName}`
+                      : 'Knife always ready via [2] or [V / F]'}
                 </div>
               </div>
 
@@ -323,6 +354,97 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                       </button>
                     );
                   })}
+                </div>
+              </div>
+
+              {/* Tactical Equipment Selector (Slot 03) */}
+              <div className="mt-3 border border-white/10 bg-black/30 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <span className="font-medium text-slate-200">
+                    [{formatKeyCode(kb.useTactical)}] Tactical Equipment (Slot 03) · {equippedTactical.name}
+                  </span>
+                  <span className="font-mono-tabular text-[10px] text-sky-300">
+                    {hud.tacticalCharges ?? equippedTactical.chargesPerSpawn}/{equippedTactical.chargesPerSpawn} CHARGES
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {TACTICAL_EQUIPMENT_IDS.map((tacId) => {
+                    const tac = TACTICAL_EQUIPMENT[tacId];
+                    const isEquipped = equippedTacticalId === tacId;
+                    const isQueued = queuedTacticalId === tacId;
+                    return (
+                      <button
+                        key={tacId}
+                        type="button"
+                        aria-pressed={hud.isGunSwitchLocked ? isQueued : isEquipped}
+                        title={`${tac.name}: ${tac.tooltip}`}
+                        onMouseEnter={() => setHoveredTacticalId(tacId)}
+                        onMouseLeave={() => setHoveredTacticalId(null)}
+                        onFocus={() => setHoveredTacticalId(tacId)}
+                        onBlur={() => setHoveredTacticalId(null)}
+                        onClick={() => handleSelectTactical(tacId)}
+                        className={`flex min-w-0 cursor-pointer flex-col justify-between gap-1 border p-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                          isEquipped
+                            ? 'border-sky-400 bg-sky-400/15'
+                            : isQueued
+                              ? 'border-amber-400/75 bg-amber-400/12'
+                              : 'border-white/10 bg-white/[0.03] hover:border-white/25 hover:bg-white/[0.06]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="truncate font-display text-xs font-semibold text-white">
+                            {tac.shortName}
+                          </span>
+                          {isEquipped && (
+                            <span className="shrink-0 border border-sky-400/40 bg-sky-400/20 px-1 py-0.5 font-mono-tabular text-[9px] font-bold text-sky-300">
+                              ACTIVE
+                            </span>
+                          )}
+                          {!isEquipped && isQueued && (
+                            <span className="shrink-0 border border-amber-400/40 bg-amber-400/20 px-1 py-0.5 font-mono-tabular text-[9px] font-bold text-amber-300">
+                              NEXT
+                            </span>
+                          )}
+                        </div>
+                        <div className="border border-white/[0.06] bg-slate-950/60 px-1 py-0.5">
+                          <TacticalEquipmentPreview
+                            equipmentId={tacId}
+                            className="h-9 w-full"
+                          />
+                        </div>
+                        <div className="truncate font-mono-tabular text-[10px] text-slate-300">
+                          {tac.radiusMeters}m ·{' '}
+                          {tacId === 'frag_grenade' ? `${tac.fuseSec}s Fuse` : `${tac.durationSec}s Dur`} ·{' '}
+                          {tac.cooldownSec}s CD
+                        </div>
+                        <div className="truncate font-mono-tabular text-[9px] text-slate-400">
+                          ×{tac.chargesPerSpawn} · {tac.category}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div
+                  data-tactical-tooltip={inspectedTactical.id}
+                  className="mt-2 flex flex-wrap items-center justify-between gap-2 border border-sky-400/20 bg-slate-950/75 px-2.5 py-2 text-[11px]"
+                >
+                  <div className="min-w-0 flex-1">
+                    <span className="font-display font-semibold text-sky-300">
+                      {inspectedTactical.name}:
+                    </span>{' '}
+                    <span className="text-slate-300">{inspectedTactical.tooltip}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 font-mono-tabular text-[10px] text-slate-300">
+                    <span>RAD {inspectedTactical.radiusMeters}m</span>
+                    <span>·</span>
+                    <span>
+                      {inspectedTactical.id === 'frag_grenade'
+                        ? `FUSE ${inspectedTactical.fuseSec}s`
+                        : `DUR ${inspectedTactical.durationSec}s`}
+                    </span>
+                    <span>·</span>
+                    <span>CD {inspectedTactical.cooldownSec}s</span>
+                  </div>
                 </div>
               </div>
             </div>

@@ -31,6 +31,7 @@ export interface PlayerInputCallbacks {
   onPointerLockChange: (locked: boolean) => void;
   onFocusLost?: () => void;
   onCycleScopeMagnification?: () => void;
+  onUseTactical?: () => void;
   onPing?: () => void;
   onOpenChat?: (channel: ChatChannel) => void;
 }
@@ -152,7 +153,7 @@ export class PlayerController {
   private chatInputOpen = false;
   private chatTriggersEnabled = true;
   private orbitPreviewActive = true;
-  private lastWheelTime = 0;
+  private lastWheelTime = -Infinity;
 
   constructor(
     scene: Scene,
@@ -798,7 +799,10 @@ export class PlayerController {
   public addFovKick(amountRad: number): void {
     if (this.isDead || !this.canControl) return;
     if (typeof amountRad !== 'number' || !Number.isFinite(amountRad) || amountRad <= 0) return;
-    this.fovKick = Math.min(0.055, this.fovKick + amountRad);
+    const maxKick = 0.055;
+    const headroom = Math.max(0, maxKick - this.fovKick) / maxKick;
+    this.fovKick = Math.min(maxKick, this.fovKick + amountRad * (0.45 + 0.55 * headroom));
+    this.camera.fov = this.currentFovRad + this.fovKick;
   }
 
   public resetTransientMotion(): void {
@@ -1165,6 +1169,9 @@ export class PlayerController {
     const zoomDepth = 1 - Math.max(0.08, Math.min(1, targetAdsFovRatio));
     const fovRate = effectiveAds ? 9.5 + zoomDepth * 4.5 : 13.5;
     this.currentFovRad += (desiredFov - this.currentFovRad) * (1 - Math.exp(-fovRate * clampedDt));
+    if (!Number.isFinite(this.fovKick) || this.fovKick < 0) {
+      this.fovKick = 0;
+    }
     this.fovKick *= Math.exp(-18 * clampedDt);
     if (this.fovKick < 0.0001) {
       this.fovKick = 0;
@@ -1425,6 +1432,8 @@ export class PlayerController {
       this.callbacks.onActivateKillstreak?.(6);
     } else if (e.code === kb.cycleOptic && !e.repeat) {
       this.callbacks.onCycleScopeMagnification?.();
+    } else if (e.code === kb.useTactical && !e.repeat) {
+      this.callbacks.onUseTactical?.();
     } else if (e.code === kb.ping && !e.repeat) {
       this.callbacks.onPing?.();
     }
@@ -1499,7 +1508,7 @@ export class PlayerController {
     const now = performance.now();
     if (now - this.lastWheelTime < 120) return;
     this.lastWheelTime = now;
-    const delta: 1 | -1 = e.deltaY > 0 ? 1 : -1;
+    const delta: 1 | -1 = e.deltaY < 0 ? 1 : -1;
     this.callbacks.onCycleSlot?.(delta);
   };
 

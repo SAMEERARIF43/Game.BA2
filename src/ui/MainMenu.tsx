@@ -12,7 +12,6 @@ import {
   Swords,
   UserCheck,
   Users,
-  X,
 } from 'lucide-react';
 import {
   GAME_MODE_IDS,
@@ -30,11 +29,15 @@ import {
   KNIFE_CHARMS,
   KNIFE_CHARM_IDS,
   KnifeCharmId,
+  TACTICAL_EQUIPMENT,
+  TACTICAL_EQUIPMENT_IDS,
+  TacticalEquipmentId,
   WEAPONS,
 } from '../game/types';
+import { normalizeTacticalEquipmentId } from '../game/loadoutRules';
 import { MAP_LIST, MAP_REGISTRY } from '../maps/MapManager';
 import { MapPreview, MapPreviewMode, MapViewModeToggle } from './MapPreview';
-import { WeaponPreview } from './WeaponPreview';
+import { TacticalEquipmentPreview, WeaponPreview } from './WeaponPreview';
 import { MapId } from '../maps/types';
 import { getRankSummary } from '../settings/progressionStorage';
 import { DEFAULT_KEYBINDINGS, formatKeyCode } from '../settings/keybindings';
@@ -46,17 +49,18 @@ interface MainMenuProps {
   selectedCharacterId: CharacterId;
   selectedGunId: GunId;
   knifeCharmId: KnifeCharmId;
+  tacticalEquipmentId?: TacticalEquipmentId;
   settings: GameSettings;
   xp: number;
   onSelectCharacter: (id: CharacterId, equipSignatureGun?: boolean) => void;
   onSelectGun: (id: GunId) => void;
   onSelectKnifeCharm: (id: KnifeCharmId) => void;
+  onSelectTacticalEquipment?: (id: TacticalEquipmentId) => void;
   onPreviewMap?: (id: MapId) => void;
   onPreviewShowcase?: (focus: 'gun' | 'knife', offsetX?: number) => void;
   onPlayOfflineTdm: () => void;
   onOpenCustomMatch: () => void;
   onOpenMapSelect: () => void;
-  onQuickMatch: (modeFilter?: string) => Promise<void>;
   onUpdateSettings: (next: GameSettings) => void;
   onResetSettings?: () => void;
 }
@@ -68,55 +72,25 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   selectedCharacterId,
   selectedGunId,
   knifeCharmId,
+  tacticalEquipmentId,
   settings,
   xp,
   onSelectCharacter,
   onSelectGun,
   onSelectKnifeCharm,
+  onSelectTacticalEquipment,
   onPreviewMap,
   onPreviewShowcase,
   onPlayOfflineTdm,
   onOpenCustomMatch,
   onOpenMapSelect,
-  onQuickMatch,
   onUpdateSettings,
   onResetSettings,
 }) => {
   const [activeTab, setActiveTab] = useState<MenuTab>('play');
   const [showcaseFocus, setShowcaseFocus] = useState<'gun' | 'knife'>('gun');
   const [mapViewMode, setMapViewMode] = useState<MapPreviewMode>('scenic');
-
-  const [quickMatchMode, setQuickMatchMode] = useState<string>('any');
-  const [quickMatchLoading, setQuickMatchLoading] = useState(false);
-  const [quickMatchError, setQuickMatchError] = useState<string | null>(null);
-  const [showPublicBrowser, setShowPublicBrowser] = useState(false);
-  const [publicRooms, setPublicRooms] = useState<any[]>([]);
-  const [loadingPublicRooms, setLoadingPublicRooms] = useState(false);
-
-  const handleQuickMatch = async () => {
-    setQuickMatchError(null);
-    setQuickMatchLoading(true);
-    try {
-      await onQuickMatch(quickMatchMode);
-    } catch (err) {
-      setQuickMatchError(err instanceof Error ? err.message : 'Quick match failed.');
-      setQuickMatchLoading(false);
-    }
-  };
-
-  const handleOpenPublicBrowser = async () => {
-    setShowPublicBrowser(true);
-    setLoadingPublicRooms(true);
-    try {
-      const res = await fetch('/api/rooms/public');
-      const body = await res.json().catch(() => ({}));
-      setPublicRooms(body.rooms || []);
-    } catch {
-      setPublicRooms([]);
-    } finally {
-      setLoadingPublicRooms(false);
-    }
-  };
+  const [hoveredTacticalId, setHoveredTacticalId] = useState<TacticalEquipmentId | null>(null);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -144,6 +118,22 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const selectedCharacter = CHARACTERS[selectedCharacterId];
   const selectedGun = WEAPONS[selectedGunId];
   const selectedCharm = KNIFE_CHARMS[knifeCharmId];
+  const activeTacticalId = normalizeTacticalEquipmentId(
+    tacticalEquipmentId ?? settings.tacticalEquipmentId
+  );
+  const selectedTactical = TACTICAL_EQUIPMENT[activeTacticalId];
+  const inspectedTactical = TACTICAL_EQUIPMENT[hoveredTacticalId ?? activeTacticalId];
+  const kb = settings.keybindings ?? DEFAULT_KEYBINDINGS;
+  const handleSelectTactical = (id: TacticalEquipmentId) => {
+    if (onSelectTacticalEquipment) {
+      onSelectTacticalEquipment(id);
+    } else {
+      onUpdateSettings({
+        ...settings,
+        tacticalEquipmentId: id,
+      });
+    }
+  };
   const selectedMode: GameMode = normalizeGameMode(settings.selectedGameMode, 'tdm');
   const selectedModeMeta = GAME_MODE_META[selectedMode];
   const rank = getRankSummary(xp);
@@ -514,171 +504,123 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     </div>
                   </div>
 
+                  {/* Slot 3 Tactical Equipment Summary + Quick Picker */}
+                  <div className="mt-2 border border-sky-400/25 bg-sky-950/20 p-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono-tabular text-[10px] font-bold text-sky-300">
+                        SLOT 03 · TACTICAL EQUIPMENT [{formatKeyCode(kb.useTactical)}]
+                      </span>
+                      <span className="font-mono-tabular text-[10px] text-slate-300">
+                        ×{selectedTactical.chargesPerSpawn}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-2.5">
+                      <div className="border border-white/10 bg-slate-950/65 px-1.5 py-0.5">
+                        <TacticalEquipmentPreview
+                          equipmentId={activeTacticalId}
+                          className="h-8 w-14"
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-display text-xs font-semibold text-white">
+                          {selectedTactical.name}
+                        </div>
+                        <div className="truncate font-mono-tabular text-[10px] text-slate-300">
+                          {selectedTactical.radiusMeters}m Rad ·{' '}
+                          {selectedTactical.id === 'frag_grenade'
+                            ? `${selectedTactical.fuseSec}s Fuse`
+                            : `${selectedTactical.durationSec}s Dur`}{' '}
+                          · {selectedTactical.cooldownSec}s CD
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-4 gap-1">
+                      {TACTICAL_EQUIPMENT_IDS.map((tacId) => {
+                        const tac = TACTICAL_EQUIPMENT[tacId];
+                        const active = activeTacticalId === tacId;
+                        return (
+                          <button
+                            key={tacId}
+                            type="button"
+                            aria-pressed={active}
+                            title={`${tac.name}: ${tac.tooltip}`}
+                            onMouseEnter={() => setHoveredTacticalId(tacId)}
+                            onMouseLeave={() => setHoveredTacticalId(null)}
+                            onFocus={() => setHoveredTacticalId(tacId)}
+                            onBlur={() => setHoveredTacticalId(null)}
+                            onClick={() => handleSelectTactical(tacId)}
+                            className={`cursor-pointer truncate border px-1.5 py-1 font-mono-tabular text-[9px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                              active
+                                ? 'border-sky-400 bg-sky-400/20 text-sky-200'
+                                : 'border-white/10 bg-black/45 text-slate-300 hover:border-white/25 hover:text-white'
+                            }`}
+                          >
+                            {tac.shortName}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div
+                      data-tactical-tooltip={inspectedTactical.id}
+                      className="mt-2 border border-white/10 bg-black/45 px-2 py-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2 font-mono-tabular text-[9px] text-sky-300">
+                        <span className="truncate font-semibold">{inspectedTactical.name}</span>
+                        <span className="shrink-0 text-slate-300">
+                          {inspectedTactical.radiusMeters}m ·{' '}
+                          {inspectedTactical.id === 'frag_grenade'
+                            ? `${inspectedTactical.fuseSec}s FUSE`
+                            : `${inspectedTactical.durationSec}s DUR`}{' '}
+                          · {inspectedTactical.cooldownSec}s CD
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[10px] leading-snug text-slate-300">
+                        {inspectedTactical.tooltip}
+                      </p>
+                    </div>
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => setActiveTab('loadout')}
                     className="mt-2.5 flex w-full cursor-pointer items-center justify-center gap-2 border border-white/15 bg-white/[0.06] py-2 font-display text-xs font-bold tracking-wider text-white transition-colors hover:border-amber-400/60 hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
                   >
                     <Swords className="h-3.5 w-3.5 text-amber-400" />
-                    CUSTOMIZE OPERATOR & GUN
+                    CUSTOMIZE LOADOUT
                   </button>
                 </section>
               </div>
             </div>
 
             {/* Bottom-Center Dominant Play CTA Dock */}
-            <div className="mx-auto flex w-full max-w-4xl flex-col items-center gap-3">
-              {quickMatchError && (
-                <div className="border border-red-500/40 bg-red-950/80 px-4 py-1.5 font-mono-tabular text-xs text-red-200">
-                  {quickMatchError}
-                </div>
-              )}
-              <div className="flex w-full flex-col items-center gap-2 sm:flex-row sm:items-stretch sm:justify-center sm:gap-3">
-                <div className="flex items-center border border-amber-400/60 bg-[#0b1322]/95 shadow-xl shadow-amber-950/30 backdrop-blur-md">
-                  <select
-                    value={quickMatchMode}
-                    onChange={(e) => setQuickMatchMode(e.target.value)}
-                    aria-label="Quick Match Mode Filter"
-                    className="cursor-pointer border-r border-white/12 bg-black/60 px-3 py-3.5 font-mono-tabular text-xs font-bold text-amber-300 focus:outline-none"
-                  >
-                    <option value="any">ANY MODE</option>
-                    <option value="tdm">TDM</option>
-                    <option value="ffa">FFA</option>
-                    <option value="bomb">BOMB</option>
-                  </select>
-                  <button
-                    type="button"
-                    disabled={quickMatchLoading}
-                    onClick={handleQuickMatch}
-                    className="flex cursor-pointer items-center justify-center gap-3 bg-amber-500 px-6 py-3.5 font-display text-base font-bold tracking-widest text-slate-950 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 disabled:opacity-50 whitespace-nowrap"
-                  >
-                    <Play className="h-5 w-5 fill-slate-950" />
-                    <span>{quickMatchLoading ? 'FINDING MATCH...' : 'QUICK MATCH'}</span>
-                  </button>
-                </div>
+            <div className="mx-auto flex w-full max-w-3xl flex-col items-center gap-2 sm:flex-row sm:items-stretch sm:justify-center sm:gap-3">
+              <button
+                type="button"
+                onClick={onOpenCustomMatch}
+                className="flex cursor-pointer items-center justify-center gap-2.5 border border-blue-400/45 bg-[#0b1322]/90 px-5 py-3 font-display text-xs font-bold tracking-wider text-blue-100 backdrop-blur-md transition-colors hover:border-blue-400 hover:bg-blue-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 whitespace-nowrap sm:min-w-[180px]"
+              >
+                <Users className="h-4 w-4 text-blue-300" />
+                <span>MULTIPLAYER</span>
+              </button>
 
-                <button
-                  type="button"
-                  onClick={handleOpenPublicBrowser}
-                  className="flex cursor-pointer items-center justify-center gap-2 border border-emerald-400/45 bg-emerald-950/50 px-5 py-3.5 font-display text-xs font-bold tracking-wider text-emerald-200 backdrop-blur-md transition-colors hover:border-emerald-400 hover:bg-emerald-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 whitespace-nowrap"
-                >
-                  <Users className="h-4 w-4 text-emerald-300" />
-                  <span>PUBLIC LOBBIES</span>
-                </button>
+              <button
+                type="button"
+                onClick={onPlayOfflineTdm}
+                className="flex cursor-pointer items-center justify-center gap-3 border border-amber-300 bg-amber-500 px-8 py-3.5 font-display text-base font-bold tracking-widest text-slate-950 shadow-xl shadow-amber-950/35 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 whitespace-nowrap sm:min-w-[260px]"
+              >
+                <Crosshair className="h-5 w-5" />
+                <span>PLAY · SOLO BOTS ({selectedModeMeta.shortLabel})</span>
+              </button>
 
-                <button
-                  type="button"
-                  onClick={onOpenCustomMatch}
-                  className="flex cursor-pointer items-center justify-center gap-2 border border-blue-400/45 bg-[#0b1322]/90 px-4 py-3.5 font-display text-xs font-bold tracking-wider text-blue-100 backdrop-blur-md transition-colors hover:border-blue-400 hover:bg-blue-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 whitespace-nowrap"
-                >
-                  <span>CUSTOM / HOST</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={onPlayOfflineTdm}
-                  className="flex cursor-pointer items-center justify-center gap-2 border border-white/20 bg-[#0b1017]/90 px-4 py-3.5 font-display text-xs font-bold tracking-wider text-white backdrop-blur-md transition-colors hover:border-amber-400/60 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 whitespace-nowrap"
-                >
-                  <Crosshair className="h-4 w-4 text-amber-400" />
-                  <span>SOLO BOTS</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={onOpenMapSelect}
+                className="flex cursor-pointer items-center justify-center gap-2.5 border border-white/20 bg-[#0b1017]/90 px-5 py-3 font-display text-xs font-bold tracking-wider text-white backdrop-blur-md transition-colors hover:border-amber-400/60 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 whitespace-nowrap sm:min-w-[180px]"
+              >
+                <Compass className="h-4 w-4 text-amber-400" />
+                <span>THEATERS</span>
+              </button>
             </div>
-
-            {/* Public Rooms Browser Modal */}
-            {showPublicBrowser && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-                <div className="flex max-h-[85vh] w-full max-w-2xl flex-col border border-white/20 bg-[#0b1017] p-6 shadow-2xl">
-                  <div className="flex items-center justify-between border-b border-white/10 pb-4">
-                    <div>
-                      <div className="font-mono-tabular text-[10px] font-bold tracking-widest text-emerald-400">
-                        MULTIPLAYER · PUBLIC ROOM BROWSER
-                      </div>
-                      <h2 className="font-display text-xl font-bold text-white">
-                        Active Public Lobbies
-                      </h2>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowPublicBrowser(false)}
-                      className="cursor-pointer border border-white/15 bg-white/[0.05] p-2 text-slate-300 hover:bg-white/10 hover:text-white"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  <div className="mt-4 min-h-[240px] flex-1 overflow-y-auto space-y-2">
-                    {loadingPublicRooms ? (
-                      <div className="flex h-32 items-center justify-center text-slate-400 font-mono-tabular text-xs">
-                        Querying master server...
-                      </div>
-                    ) : publicRooms.length === 0 ? (
-                      <div className="flex h-32 flex-col items-center justify-center gap-2 text-slate-400 font-mono-tabular text-xs">
-                        <span>No public lobbies found.</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowPublicBrowser(false);
-                            void handleQuickMatch();
-                          }}
-                          className="cursor-pointer border border-amber-400 bg-amber-500/20 px-3 py-1.5 font-display font-semibold text-amber-300 hover:bg-amber-500/30"
-                        >
-                          Spin up public match via Quick Match
-                        </button>
-                      </div>
-                    ) : (
-                      publicRooms.map((room) => (
-                        <div
-                          key={room.roomCode}
-                          className="flex items-center justify-between border border-white/10 bg-black/50 p-3.5 transition-colors hover:border-amber-400/50"
-                        >
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-display text-sm font-bold text-white">
-                                {room.roomName}
-                              </span>
-                              <span className="border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 font-mono-tabular text-[9px] font-bold text-amber-300">
-                                {String(room.mode || 'tdm').toUpperCase()}
-                              </span>
-                            </div>
-                            <div className="mt-1 font-mono-tabular text-[10px] text-slate-400">
-                              Map: <span className="text-white">{room.mapId.toUpperCase()}</span> · Region:{' '}
-                              <span className="text-slate-300">{room.region || 'US-East'}</span> · Code:{' '}
-                              <span className="text-amber-400">{room.roomCode}</span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <span className="font-mono-tabular text-xs text-slate-300">
-                              {room.playerCount}/{room.maxPlayers} PLAYERS
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowPublicBrowser(false);
-                                onOpenCustomMatch();
-                              }}
-                              className="cursor-pointer border border-amber-400 bg-amber-500 px-4 py-2 font-display text-xs font-bold text-slate-950 hover:bg-amber-400"
-                            >
-                              JOIN
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="mt-4 flex justify-end border-t border-white/10 pt-4">
-                    <button
-                      type="button"
-                      onClick={() => setShowPublicBrowser(false)}
-                      className="cursor-pointer border border-white/20 bg-white/[0.06] px-5 py-2 font-display text-xs font-bold text-white hover:bg-white/12"
-                    >
-                      CLOSE
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -691,7 +633,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     ARMORY · PRE-SPAWN LOADOUT
                   </div>
                   <h2 className="mt-0.5 font-display text-xl font-bold text-white">
-                    Select Operator, Gun & Knife Charm
+                    Select Operator, Gun, Tactical &amp; Charm
                   </h2>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -906,6 +848,82 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 </div>
               </div>
 
+              {/* Slot 03 Tactical Equipment Armory Selector */}
+              <div className="mt-4">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-display font-semibold text-white">
+                    Tactical Equipment (Slot 03)
+                  </span>
+                  <span className="font-mono-tabular text-[10px] text-sky-300">
+                    DEPLOY WITH [{formatKeyCode(kb.useTactical)}]
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {TACTICAL_EQUIPMENT_IDS.map((tacId) => {
+                    const tac = TACTICAL_EQUIPMENT[tacId];
+                    const selected = activeTacticalId === tacId;
+                    return (
+                      <button
+                        key={tacId}
+                        type="button"
+                        aria-pressed={selected}
+                        title={`${tac.name}: ${tac.tooltip}`}
+                        onClick={() => handleSelectTactical(tacId)}
+                        className={`min-w-0 cursor-pointer border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                          selected
+                            ? 'border-sky-400/90 bg-sky-400/14 shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]'
+                            : 'border-white/10 bg-black/40 hover:border-white/25 hover:bg-white/[0.05]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className="truncate font-mono-tabular text-[10px] font-semibold"
+                            style={{ color: tac.accentHex }}
+                          >
+                            {tac.category.toUpperCase()} · ×{tac.chargesPerSpawn}
+                          </span>
+                          {selected && (
+                            <span className="font-mono-tabular text-[9px] font-bold tracking-wider text-sky-300">
+                              EQUIPPED
+                            </span>
+                          )}
+                        </div>
+                        <div className="my-2 border border-white/[0.06] bg-slate-950/65 px-2 py-1">
+                          <TacticalEquipmentPreview
+                            equipmentId={tacId}
+                            className="h-11 w-full"
+                          />
+                        </div>
+                        <div className="truncate font-display text-sm font-bold text-white">
+                          {tac.name}
+                        </div>
+                        <p className="mt-1 text-[10px] leading-snug text-slate-300">
+                          {tac.tooltip}
+                        </p>
+                        <div className="mt-2 grid grid-cols-3 gap-1 border-t border-white/10 pt-2 font-mono-tabular text-[9px]">
+                          <div className="border border-white/10 bg-black/45 px-1.5 py-1">
+                            <div className="text-slate-400">RADIUS</div>
+                            <div className="font-bold text-white">{tac.radiusMeters}m</div>
+                          </div>
+                          <div className="border border-white/10 bg-black/45 px-1.5 py-1">
+                            <div className="text-slate-400">
+                              {tacId === 'frag_grenade' ? 'FUSE' : 'DURATION'}
+                            </div>
+                            <div className="font-bold text-white">
+                              {tacId === 'frag_grenade' ? `${tac.fuseSec}s` : `${tac.durationSec}s`}
+                            </div>
+                          </div>
+                          <div className="border border-white/10 bg-black/45 px-1.5 py-1">
+                            <div className="text-slate-400">COOLDOWN</div>
+                            <div className="font-bold text-white">{tac.cooldownSec}s</div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/10 pt-3">
                 <span className="text-[11px] text-slate-400">
                   Gun switches lock while alive and unlock on death or pre-spawn.
@@ -1061,7 +1079,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
               <div className="space-y-4 text-xs text-slate-300">
                 <p className="leading-relaxed">
-                  Choose 1 of 4 distinct operator archetypes (Assault, Vanguard, Breacher, Marksman) paired with their signature firearm or any of the 5 guns (Slot 1), plus your K-Bar Combat Knife (Slot 2) with a custom 3D charm. Guns lock while alive and swap before spawn or on death; your Knife stays ready at all times via [2] or quick-melee [V / F].
+                  Choose 1 of 4 distinct operator archetypes (Assault, Vanguard, Breacher, Marksman) paired with their signature firearm or any of the 5 guns (Slot 1), your K-Bar Combat Knife (Slot 2) with a custom 3D charm, and Tactical Equipment (Slot 3: Smoke Grenade, Flashbang, Frag Grenade, or Stun Grenade). Guns and tactical gear lock while alive and swap before spawn or on death; your Knife stays ready at all times via [2] or quick-melee [V / F].
                 </p>
 
                 {(() => {
@@ -1116,6 +1134,12 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                         <span className="text-slate-400">Quick Melee Knife</span>
                         <span className="font-mono-tabular text-amber-300">
                           {formatKeyCode(kb.quickMelee)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Tactical Equipment</span>
+                        <span className="font-mono-tabular text-sky-300">
+                          {formatKeyCode(kb.useTactical)}
                         </span>
                       </div>
                       <div className="flex justify-between">

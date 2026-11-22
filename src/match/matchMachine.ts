@@ -1,6 +1,14 @@
 import { BOMB_ROUNDS_TO_WIN, normalizeGameMode } from '../game/gameModeRules';
+import { createEmptyHighlightReelState } from '../game/highlightReel';
+import { normalizeTacticalEquipmentId } from '../game/loadoutRules';
 import { ARENA_HALF_EXTENT } from '../game/minimap';
-import { GameSettings, HudState, MatchParticipant, WEAPONS } from '../game/types';
+import {
+  GameSettings,
+  HudState,
+  MatchParticipant,
+  TACTICAL_EQUIPMENT,
+  WEAPONS,
+} from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 import { LobbyRoomSnapshot } from '../multiplayer/types';
 import { AppRoute } from '../utils/router';
@@ -54,11 +62,11 @@ export type MatchMachineAction =
   | { type: 'MP_CONNECT_START' }
   | { type: 'MP_CONNECT_SUCCESS'; epoch: number; snapshot: LobbyRoomSnapshot }
   | { type: 'MP_CONNECT_FAILURE'; epoch: number }
-  | { type: 'MP_CONNECT_CANCEL' }
+  | { type: 'MP_CONNECT_CANCEL'; epoch?: number }
   | { type: 'MP_STATE_SYNC'; snapshot: LobbyRoomSnapshot; epoch?: number }
-  | { type: 'MP_SYSTEM_NOTICE'; message: string }
+  | { type: 'MP_SYSTEM_NOTICE'; message: string; epoch?: number }
   | { type: 'CLEAR_SYSTEM_NOTICE' }
-  | { type: 'MP_DISCONNECTED'; reason: string }
+  | { type: 'MP_DISCONNECTED'; reason: string; epoch?: number }
   | { type: 'LEAVE_MULTIPLAYER' }
   | { type: 'POPSTATE_ROUTE'; route: AppRoute }
   | { type: 'HUD_UPDATED'; hud: HudState }
@@ -108,6 +116,11 @@ export const INITIAL_HUD: HudState = {
   equippedGunId: 'ak47',
   queuedGunId: 'ak47',
   knifeCharmId: 'tactical_tag',
+  tacticalEquipmentId: 'smoke_grenade',
+  queuedTacticalEquipmentId: 'smoke_grenade',
+  tacticalCharges: TACTICAL_EQUIPMENT.smoke_grenade.chargesPerSpawn,
+  tacticalMaxCharges: TACTICAL_EQUIPMENT.smoke_grenade.chargesPerSpawn,
+  flashBlindIntensity: 0,
   isGunSwitchLocked: false,
   gunLockMessage: null,
   weaponSlots: [
@@ -146,6 +159,7 @@ export const INITIAL_HUD: HudState = {
   },
   pings: [],
   xp: 0,
+  highlightReel: createEmptyHighlightReelState(),
   sessionXpEarned: 0,
   rankLevel: 1,
   rankTitle: 'Private',
@@ -182,7 +196,6 @@ export const INITIAL_HUD: HudState = {
   },
   scopeMagnification: 4,
   fps: 0,
-  ping: 0,
 };
 
 export interface CreateInitialMatchStateOptions {
@@ -219,6 +232,8 @@ export function createInitialMatchState({
   }
 
   const selectedGameMode = normalizeGameMode(settings.selectedGameMode, 'tdm');
+  const tacticalId = normalizeTacticalEquipmentId(settings.tacticalEquipmentId);
+  const tacticalCfg = TACTICAL_EQUIPMENT[tacticalId];
   return {
     status,
     selectedMapId,
@@ -231,6 +246,11 @@ export function createInitialMatchState({
       equippedGunId: gun.id === 'knife' ? 'ak47' : gun.id,
       queuedGunId: gun.id === 'knife' ? 'ak47' : gun.id,
       knifeCharmId: settings.knifeCharmId,
+      tacticalEquipmentId: tacticalId,
+      queuedTacticalEquipmentId: tacticalId,
+      tacticalCharges: tacticalCfg.chargesPerSpawn,
+      tacticalMaxCharges: tacticalCfg.chargesPerSpawn,
+      flashBlindIntensity: 0,
       weaponSlots: [
         { id: gun.id === 'knife' ? 'ak47' : gun.id, ammoInMag: gun.magSize, reserveAmmo: gun.reserveMax },
         { id: 'knife', ammoInMag: 0, reserveAmmo: 0 },
@@ -311,14 +331,6 @@ export function derivePostMatchStats(hud: HudState): PostMatchStats {
   };
 }
 
-export function calculateCombatScore(
-  kills: number,
-  headshots: number = 0,
-  accuracyPct: number = 0
-): number {
-  return kills * 100 + headshots * 50 + (kills > 0 ? Math.round(accuracyPct * 0.5) : 0);
-}
-
 export function selectMatchMvp(
   participants: readonly MatchParticipant[],
   playerStats: PostMatchStats
@@ -327,11 +339,10 @@ export function selectMatchMvp(
     if (playerStats.kills === 0 && playerStats.deaths === 0 && playerStats.headshots === 0) {
       return null;
     }
-    const combatScore = calculateCombatScore(
-      playerStats.kills,
-      playerStats.headshots,
-      playerStats.accuracyPct
-    );
+    const combatScore =
+      playerStats.kills * 100 +
+      playerStats.headshots * 50 +
+      (playerStats.kills > 0 ? Math.round(playerStats.accuracyPct * 0.5) : 0);
     const kdRatio =
       playerStats.deaths > 0
         ? Math.round((playerStats.kills / playerStats.deaths) * 100) / 100
@@ -356,11 +367,10 @@ export function selectMatchMvp(
     const deaths = participant.isPlayer ? playerStats.deaths : participant.deaths;
     const headshots = participant.isPlayer ? playerStats.headshots : null;
     const accuracyPct = participant.isPlayer ? playerStats.accuracyPct : null;
-    const combatScore = calculateCombatScore(
-      kills,
-      headshots ?? 0,
-      accuracyPct ?? 0
-    );
+    const combatScore =
+      kills * 100 +
+      (headshots !== null ? headshots * 50 : 0) +
+      (accuracyPct !== null && kills > 0 ? Math.round(accuracyPct * 0.5) : 0);
     const kdRatio = deaths > 0 ? Math.round((kills / deaths) * 100) / 100 : kills;
 
     return {
@@ -590,6 +600,9 @@ export function matchReducer(
     }
 
     case 'MP_CONNECT_CANCEL': {
+      if (action.epoch !== undefined && action.epoch !== state.connectionEpoch) {
+        return state;
+      }
       if (state.status !== 'mp_connecting') {
         return state;
       }
@@ -620,6 +633,9 @@ export function matchReducer(
     }
 
     case 'MP_SYSTEM_NOTICE': {
+      if (action.epoch !== undefined && action.epoch !== state.connectionEpoch) {
+        return state;
+      }
       if (!isActiveMultiplayerStatus(state.status) && state.status !== 'local_custom_lobby') {
         return state;
       }
@@ -640,6 +656,9 @@ export function matchReducer(
     }
 
     case 'MP_DISCONNECTED': {
+      if (action.epoch !== undefined && action.epoch !== state.connectionEpoch) {
+        return state;
+      }
       if (!isMultiplayerOrConnecting(state.status)) {
         return state;
       }

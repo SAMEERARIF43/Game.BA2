@@ -238,6 +238,38 @@ export class RemotePlayerRenderer {
     };
   }
 
+  public getActorSnapshot(playerId: string): {
+    id: string;
+    name: string;
+    team: TeamId;
+    characterId: CharacterId;
+    weaponId: WeaponId;
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+  } | null {
+    const avatar = this.avatars.get(playerId);
+    if (!avatar) return null;
+    return {
+      id: avatar.id,
+      name: avatar.name,
+      team: avatar.team,
+      characterId: avatar.characterId,
+      weaponId: avatar.weaponId,
+      x: avatar.root.position.x,
+      y: avatar.root.position.y,
+      z: avatar.root.position.z,
+      yaw: avatar.root.rotation.y,
+    };
+  }
+
+  public setAvatarsVisible(visible: boolean): void {
+    for (const avatar of this.avatars.values()) {
+      avatar.root.setEnabled(visible);
+    }
+  }
+
   public spawnRemoteFire(evt: RemoteFireEvent): void {
     if (evt.weaponId === 'knife') return;
     const feel = getWeaponFeelProfile(evt.weaponId);

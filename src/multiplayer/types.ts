@@ -17,20 +17,15 @@ export interface CreatePrivateMatchOptions {
   weaponId?: GunId;
 }
 
-export interface PublicRoomSummary {
+export interface RoomLookupSummary {
   roomCode: string;
   roomName: string;
   mapId: MapId;
-  mode: GameMode;
   phase: string;
   playerCount: number;
   maxPlayers: number;
   hasPassword: boolean;
-  botCount: number;
-  region: string;
 }
-
-export type RoomLookupSummary = PublicRoomSummary;
 
 export interface LobbyPlayerInfo {
   id: string;

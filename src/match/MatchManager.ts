@@ -200,6 +200,36 @@ export class MatchManager {
     return this.phase;
   }
 
+  public initMatch(options: {
+    mapId: MapId;
+    mode?: GameMode;
+    roomName?: string;
+    mapName?: string;
+    killLimit?: number;
+    timeLimit?: number;
+    timeLimitSec?: number;
+    botCount?: number;
+    botsPerTeam?: number;
+    roundsToWin?: number;
+    isCustomMatch?: boolean;
+    playerName?: string;
+    bombSites?: MatchBombSite[];
+  }): void {
+    const botsPerTeam =
+      options.botsPerTeam ?? Math.max(1, Math.ceil((options.botCount ?? 0) / 2));
+    const resolvedMapName = options.mapName ?? options.roomName ?? options.mapId;
+    const killLimit = options.killLimit ?? DEFAULT_KILL_LIMIT;
+    const timeLimitSec = options.timeLimitSec ?? options.timeLimit;
+    this.configureMatch(options.mapId, resolvedMapName, killLimit, botsPerTeam, {
+      mode: options.mode,
+      timeLimitSec,
+      roundsToWin: options.roundsToWin,
+      isCustomMatch: options.isCustomMatch,
+      playerName: options.playerName,
+      bombSites: options.bombSites,
+    });
+  }
+
   public configureMatch(
     mapId: MapId,
     mapName: string,
@@ -343,7 +373,7 @@ export class MatchManager {
 
     const now = performance.now();
     if (this.killFeed.length > 0) {
-      this.killFeed = this.killFeed.filter((k) => now - k.timestamp < 4000);
+      this.killFeed = this.killFeed.filter((k) => now - k.timestamp < 4500);
     }
 
     if (this.mode === 'bomb') {

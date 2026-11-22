@@ -29,6 +29,7 @@ import { GameMode, isHostile } from './gameModeRules';
 import {
   normalizeGunId,
   normalizeKnifeCharmId,
+  normalizeWeaponId,
 } from './loadoutRules';
 import { PlayerController } from './PlayerController';
 import { applyProceduralSurfaceToMaterial, SurfacePresetId } from './proceduralTextures';
@@ -642,8 +643,11 @@ export class WeaponSystem {
     this.selectWeapon(slot === 2 ? 'knife' : this.equippedGunId);
   }
 
-  public cycleSlot(_delta: 1 | -1): void {
-    this.selectSlot(this.activeSlot === 1 ? 2 : 1);
+  public cycleSlot(delta: 1 | -1): void {
+    const slotOrder: ReadonlyArray<1 | 2> = [1, 2];
+    const currentIdx = slotOrder.indexOf(this.activeSlot);
+    const nextIdx = (currentIdx + delta + slotOrder.length) % slotOrder.length;
+    this.selectSlot(slotOrder[nextIdx]);
   }
 
   public triggerQuickMelee(): void {
@@ -695,7 +699,16 @@ export class WeaponSystem {
   }
 
   public selectWeapon(id: WeaponId, silent = false): void {
-    const targetEnabled = this.models.get(id)?.root.isEnabled() ?? false;
+    const normalizedId = normalizeWeaponId(id, this.equippedGunId);
+    const targetEnabled = this.models.get(normalizedId)?.root.isEnabled() ?? false;
+    if (normalizedId !== 'knife') {
+      const nextGunId = normalizeGunId(normalizedId, this.equippedGunId);
+      this.equippedGunId = nextGunId;
+      const gunSlot = this.slots[nextGunId];
+      const gunCfg = WEAPONS[nextGunId];
+      gunSlot.ammoInMag = Math.max(0, Math.min(gunCfg.magSize, gunSlot.ammoInMag));
+      gunSlot.reserveAmmo = Math.max(0, Math.min(gunCfg.reserveMax, gunSlot.reserveAmmo));
+    }
     this.isReloading = false;
     this.reloadElapsed = 0;
     this.reloadMagClickPlayed = false;
@@ -713,12 +726,12 @@ export class WeaponSystem {
     this.kickYaw = 0;
     this.kickRoll = 0;
     this.hideKnifeTrail();
-    this.activeId = id;
-    this.activeSlot = id === 'knife' ? 2 : 1;
+    this.activeId = normalizedId;
+    this.activeSlot = normalizedId === 'knife' ? 2 : 1;
 
-    const cfg = WEAPONS[id];
+    const cfg = WEAPONS[normalizedId];
     this.player.setWeaponSpeedMultiplier(cfg.moveSpeedMultiplier ?? 1.0);
-    this.player.setAdsEnabled(id !== 'knife');
+    this.player.setAdsEnabled(normalizedId !== 'knife');
 
     if (this.activeId !== 'knife') {
       this.slashTimer = 0;
@@ -731,15 +744,15 @@ export class WeaponSystem {
     }
 
     if (!silent && !targetEnabled) {
-      this.equipDrop = id === 'knife' ? 0.11 : 0.14;
+      this.equipDrop = normalizedId === 'knife' ? 0.11 : 0.14;
       this.audio.playWeaponEquip();
     }
 
     this.models.forEach((rig, key) => {
-      rig.root.setEnabled(key === id);
+      rig.root.setEnabled(key === normalizedId);
     });
 
-    const activeRig = this.models.get(id);
+    const activeRig = this.models.get(normalizedId);
     if (activeRig) {
       this.muzzleFlashRoot.parent = activeRig.muzzlePoint;
       this.muzzleFlashRoot.position.setAll(0);
@@ -3023,10 +3036,14 @@ export class WeaponSystem {
     for (const seg of this.knifeTrailMeshes) seg.dispose();
     this.knifeTrailMeshes = [];
     this.vfxPoolRoot.dispose();
+    this.charmRoots.forEach((charmRoot) => charmRoot.dispose());
     this.charmRoots.clear();
+    this.charmPivot?.dispose();
     this.charmPivot = null;
+    this.knifeWristPivot?.dispose();
     this.knifeWristPivot = null;
     this.knifeHandMeshes = [];
+    this.gunHandMeshes = [];
     this.models.forEach((rig) => rig.root.dispose());
     this.models.clear();
     for (const m of this.muzzleFlashMeshes) m.dispose();

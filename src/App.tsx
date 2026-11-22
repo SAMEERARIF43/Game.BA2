@@ -49,17 +49,18 @@ export default function App() {
           selectedCharacterId={hud.selectedCharacterId}
           selectedGunId={hud.equippedGunId}
           knifeCharmId={hud.knifeCharmId}
+          tacticalEquipmentId={hud.tacticalEquipmentId}
           settings={settings}
           xp={hud.xp}
           onSelectCharacter={actions.selectCharacter}
           onSelectGun={actions.selectGun}
           onSelectKnifeCharm={actions.selectKnifeCharm}
+          onSelectTacticalEquipment={actions.selectTacticalEquipment}
           onPreviewMap={actions.previewMap}
           onPreviewShowcase={actions.previewShowcase}
           onPlayOfflineTdm={actions.playOfflineTdm}
           onOpenCustomMatch={actions.openCustomMatch}
           onOpenMapSelect={actions.openMapSelect}
-          onQuickMatch={actions.quickMatch}
           onUpdateSettings={actions.updateSettings}
           onResetSettings={actions.resetSettings}
         />
@@ -122,6 +123,7 @@ export default function App() {
             teamColors={settings.teamColors}
             onSelectGun={actions.selectGun}
             onSelectKnifeCharm={actions.selectKnifeCharm}
+            onSelectTacticalEquipment={actions.selectTacticalEquipment}
             onRespawn={actions.respawnPlayer}
             isCustomMatch
             chatMessages={derived.chatMessages}
@@ -145,6 +147,7 @@ export default function App() {
               onSelectCharacter={actions.selectCharacter}
               onSelectGun={actions.selectGun}
               onSelectKnifeCharm={actions.selectKnifeCharm}
+              onSelectTacticalEquipment={actions.selectTacticalEquipment}
               onUpdateSettings={actions.updateSettings}
               onResetSettings={actions.resetSettings}
             />
@@ -160,6 +163,9 @@ export default function App() {
               localTeam={hud.localTeam}
               isMultiplayer
               isHost={derived.isMultiplayerHost}
+              highlightReel={hud.highlightReel}
+              onStartHighlightReplay={actions.startHighlightReplay}
+              onStopHighlightReplay={actions.stopHighlightReplay}
               onPlayAgain={actions.restartMatch}
               onReturnToLobby={actions.returnToLobby}
               onReturnToMenu={() => {
@@ -180,6 +186,7 @@ export default function App() {
             teamColors={settings.teamColors}
             onSelectGun={actions.selectGun}
             onSelectKnifeCharm={actions.selectKnifeCharm}
+            onSelectTacticalEquipment={actions.selectTacticalEquipment}
             onRespawn={actions.respawnPlayer}
             isCustomMatch={derived.isCustomMatch}
             chatMessages={derived.chatMessages}
@@ -200,6 +207,7 @@ export default function App() {
               onSelectCharacter={actions.selectCharacter}
               onSelectGun={actions.selectGun}
               onSelectKnifeCharm={actions.selectKnifeCharm}
+              onSelectTacticalEquipment={actions.selectTacticalEquipment}
               onUpdateSettings={actions.updateSettings}
               onResetSettings={actions.resetSettings}
             />
@@ -213,6 +221,9 @@ export default function App() {
               sessionXpEarned={hud.sessionXpEarned}
               teamColors={settings.teamColors}
               localTeam={hud.localTeam}
+              highlightReel={hud.highlightReel}
+              onStartHighlightReplay={actions.startHighlightReplay}
+              onStopHighlightReplay={actions.stopHighlightReplay}
               onPlayAgain={actions.restartMatch}
               onReturnToLobby={lobbySnapshot?.isLocalSolo ? actions.returnToLobby : undefined}
               onReturnToMenu={actions.backToMenu}

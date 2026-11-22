@@ -7,7 +7,14 @@ import {
   getModeDefaultLimits,
   normalizeGameMode,
 } from '../game/gameModeRules';
-import { CharacterId, GameSettings, GunId, KnifeCharmId, WeaponId } from '../game/types';
+import {
+  CharacterId,
+  GameSettings,
+  GunId,
+  KnifeCharmId,
+  TacticalEquipmentId,
+  WeaponId,
+} from '../game/types';
 import { MapId, TeamId } from '../maps/types';
 import {
   createInitialMatchState,
@@ -144,10 +151,10 @@ export interface MatchMachineActions {
   selectCharacter: (id: CharacterId, equipSignatureGun?: boolean) => void;
   selectGun: (id: GunId) => void;
   selectKnifeCharm: (id: KnifeCharmId) => void;
+  selectTacticalEquipment: (id: TacticalEquipmentId) => void;
   previewShowcase: (focus: 'gun' | 'knife', offsetX?: number) => void;
   lookupRoom: (roomCode: string) => Promise<RoomLookupSummary>;
   createPrivateMatch: (options: CreatePrivateMatchOptions) => Promise<void>;
-  quickMatch: (modeFilter?: string) => Promise<void>;
   createSoloCustomLobby: (options: CreatePrivateMatchOptions) => void;
   joinPrivateMatch: (roomCode: string, playerName: string, password?: string) => Promise<void>;
   cancelMpConnect: () => void;
@@ -163,6 +170,8 @@ export interface MatchMachineActions {
   setChatChannel: (channel: ChatChannel) => void;
   closeInMatchChat: (restorePointerLock: boolean) => void;
   respawnPlayer: () => void;
+  startHighlightReplay: (mvpId?: string) => void;
+  stopHighlightReplay: () => void;
 }
 
 export function useMatchMachine() {
@@ -214,12 +223,18 @@ export function useMatchMachine() {
     if (!canvas) return;
 
     const network = new NetworkManager({
-      onStateUpdate: (snapshot) => {
+      onStateUpdate: (snapshot, epoch) => {
+        if (epoch !== undefined && epoch !== stateRef.current.connectionEpoch) {
+          return;
+        }
         const prevStatus = stateRef.current.status;
         if (!isMultiplayerOrConnecting(prevStatus)) {
           return;
         }
-        const nextState = dispatchAction({ type: 'MP_STATE_SYNC', snapshot });
+        const nextState = dispatchAction({ type: 'MP_STATE_SYNC', snapshot, epoch });
+        if (!isMultiplayerOrConnecting(nextState.status)) {
+          return;
+        }
         if (prevStatus === 'mp_connecting' && isActiveMultiplayerStatus(nextState.status)) {
           navigateToRoute(deriveActiveRoute(nextState));
         }
@@ -243,26 +258,29 @@ export function useMatchMachine() {
       onTeamPing: (event) => {
         engineRef.current?.handleNetworkPing(event);
       },
-      onPingUpdate: (pingMs) => {
-        engineRef.current?.updatePing(pingMs);
-      },
       onChatUpdate: (messages) => {
         setChatMessages(messages);
       },
-      onSystemNotice: (message) => {
+      onSystemNotice: (message, epoch) => {
+        if (epoch !== undefined && epoch !== stateRef.current.connectionEpoch) {
+          return;
+        }
         if (!isActiveMultiplayerStatus(stateRef.current.status)) {
           return;
         }
-        dispatchAction({ type: 'MP_SYSTEM_NOTICE', message });
+        dispatchAction({ type: 'MP_SYSTEM_NOTICE', message, epoch });
         clearNoticeTimer();
         noticeTimerRef.current = window.setTimeout(() => {
           noticeTimerRef.current = null;
           dispatchAction({ type: 'CLEAR_SYSTEM_NOTICE' });
         }, 3500);
       },
-      onDisconnected: (reason) => {
+      onDisconnected: (reason, epoch) => {
+        if (epoch !== undefined && epoch !== stateRef.current.connectionEpoch) {
+          return;
+        }
         const wasMp = isMultiplayerOrConnecting(stateRef.current.status);
-        const nextState = dispatchAction({ type: 'MP_DISCONNECTED', reason });
+        const nextState = dispatchAction({ type: 'MP_DISCONNECTED', reason, epoch });
         if (!wasMp) {
           return;
         }
@@ -428,48 +446,6 @@ export function useMatchMachine() {
     [dispatchAction]
   );
 
-  const quickMatch = useCallback(
-    async (modeFilter: string = 'any') => {
-      const network = networkRef.current;
-      if (!network) {
-        throw new Error('Network client not initialized.');
-      }
-      const started = dispatchAction({ type: 'MP_CONNECT_START' });
-      if (started.status !== 'mp_connecting') {
-        throw new Error('A multiplayer connection attempt is already in progress.');
-      }
-      setConnectStage('Finding quick match room...');
-      const epoch = started.connectionEpoch;
-      const latestSettings = stateRef.current.settings;
-
-      try {
-        const snapshot = await network.quickMatch(
-          modeFilter,
-          latestSettings.callsign || 'Operator-101',
-          latestSettings.selectedCharacterId,
-          latestSettings.selectedGunId
-        );
-
-        if (stateRef.current.connectionEpoch !== epoch) {
-          await network.leaveRoom();
-          return;
-        }
-
-        const synced = dispatchAction({ type: 'MP_CONNECT_SUCCESS', epoch, snapshot });
-        setConnectStage(null);
-        navigateToRoute(deriveActiveRoute(synced));
-        engineRef.current?.syncMultiplayerState(snapshot);
-      } catch (err) {
-        if (stateRef.current.connectionEpoch === epoch) {
-          setConnectStage(null);
-          dispatchAction({ type: 'MP_CONNECT_FAILURE', epoch });
-          throw err;
-        }
-      }
-    },
-    [dispatchAction]
-  );
-
   const updateCallsign = useCallback(
     (callsign: string) => {
       const saved = savePersistedSettings({ ...stateRef.current.settings, callsign });
@@ -615,6 +591,18 @@ export function useMatchMachine() {
     [dispatchAction]
   );
 
+  const selectTacticalEquipment = useCallback(
+    (id: TacticalEquipmentId) => {
+      engineRef.current?.selectTacticalEquipment(id);
+      const saved = savePersistedSettings({
+        ...stateRef.current.settings,
+        tacticalEquipmentId: id,
+      });
+      dispatchAction({ type: 'SETTINGS_UPDATED', settings: saved });
+    },
+    [dispatchAction]
+  );
+
   const previewShowcase = useCallback((focus: 'gun' | 'knife', offsetX = 0) => {
     engineRef.current?.setMenuShowcaseFocus(focus, offsetX);
   }, []);
@@ -645,14 +633,17 @@ export function useMatchMachine() {
       const latestSettings = stateRef.current.settings;
 
       try {
-        const snapshot = await network.createPrivateMatch({
-          ...options,
-          characterId: latestSettings.selectedCharacterId,
-          weaponId: latestSettings.selectedGunId,
-        });
+        const snapshot = await network.createPrivateMatch(
+          {
+            ...options,
+            characterId: latestSettings.selectedCharacterId,
+            weaponId: latestSettings.selectedGunId,
+          },
+          epoch
+        );
 
         if (stateRef.current.connectionEpoch !== epoch) {
-          await network.leaveRoom();
+          await network.leaveRoomIfEpoch(epoch);
           return;
         }
 
@@ -756,11 +747,12 @@ export function useMatchMachine() {
           playerName,
           password,
           latestSettings.selectedCharacterId,
-          latestSettings.selectedGunId
+          latestSettings.selectedGunId,
+          epoch
         );
 
         if (stateRef.current.connectionEpoch !== epoch) {
-          await network.leaveRoom();
+          await network.leaveRoomIfEpoch(epoch);
           return;
         }
 
@@ -780,8 +772,9 @@ export function useMatchMachine() {
   );
 
   const cancelMpConnect = useCallback(() => {
+    const cancelEpoch = stateRef.current.connectionEpoch;
     setConnectStage(null);
-    dispatchAction({ type: 'MP_CONNECT_CANCEL' });
+    dispatchAction({ type: 'MP_CONNECT_CANCEL', epoch: cancelEpoch });
     void networkRef.current?.leaveRoom();
   }, [dispatchAction]);
 
@@ -806,6 +799,7 @@ export function useMatchMachine() {
       networkRef.current?.pushSystemNoticeToChat('Returned to Solo Custom lobby.');
       return;
     }
+    engineRef.current?.stopHighlightReplay(false);
     networkRef.current?.returnToLobby();
   }, [dispatchAction]);
 
@@ -948,6 +942,14 @@ export function useMatchMachine() {
     engineRef.current?.closeChatInput(restorePointerLock);
   }, []);
 
+  const startHighlightReplay = useCallback((mvpId?: string) => {
+    engineRef.current?.startHighlightReplay(mvpId);
+  }, []);
+
+  const stopHighlightReplay = useCallback(() => {
+    engineRef.current?.stopHighlightReplay(true);
+  }, []);
+
   const derived = useMemo<MatchMachineDerived>(
     () => ({
       isMultiplayerInMatch:
@@ -985,10 +987,10 @@ export function useMatchMachine() {
       selectCharacter,
       selectGun,
       selectKnifeCharm,
+      selectTacticalEquipment,
       previewShowcase,
       lookupRoom,
       createPrivateMatch,
-      quickMatch,
       createSoloCustomLobby,
       joinPrivateMatch,
       cancelMpConnect,
@@ -1004,6 +1006,8 @@ export function useMatchMachine() {
       setChatChannel,
       closeInMatchChat,
       respawnPlayer,
+      startHighlightReplay,
+      stopHighlightReplay,
     }),
     [
       backToMenu,
@@ -1030,8 +1034,11 @@ export function useMatchMachine() {
       selectCharacter,
       selectGun,
       selectKnifeCharm,
+      selectTacticalEquipment,
       sendChatMessage,
+      startHighlightReplay,
       startRoomMatch,
+      stopHighlightReplay,
       switchRoomTeam,
       toggleRoomReady,
       updateCallsign,

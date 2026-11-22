@@ -3,7 +3,7 @@ import { matchMaker, Server } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import cors from 'cors';
 import express from 'express';
-import { getAllPublicRooms, getPublicRoomSummary, MatchRoom } from './rooms/MatchRoom.ts';
+import { getPublicRoomSummary, MatchRoom } from './rooms/MatchRoom.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -114,10 +114,6 @@ export async function startServer(): Promise<void> {
 
       app.get('/api/health', (_req, res) => {
         res.json({ ok: true, mode: IS_PROD ? 'production' : 'development' });
-      });
-
-      app.get('/api/rooms/public', (_req, res) => {
-        res.json({ rooms: getAllPublicRooms() });
       });
 
       app.get('/api/rooms/:code', (req, res) => {

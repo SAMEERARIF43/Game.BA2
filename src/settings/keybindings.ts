@@ -12,6 +12,7 @@ export type KeybindAction =
   | 'quickMelee'
   | 'reload'
   | 'cycleOptic'
+  | 'useTactical'
   | 'streakUav'
   | 'streakBarrage'
   | 'streakOverdrive'
@@ -43,6 +44,7 @@ export const DEFAULT_KEYBINDINGS: KeybindingsConfig = {
   quickMelee: 'KeyV',
   reload: 'KeyR',
   cycleOptic: 'KeyB',
+  useTactical: 'KeyX',
   streakUav: 'F1',
   streakBarrage: 'F2',
   streakOverdrive: 'F3',
@@ -69,6 +71,7 @@ export const KEYBIND_DEFINITIONS: readonly KeybindDefinition[] = [
   { action: 'cycleOptic', category: 'weapons', label: 'Cycle Sniper Zoom', description: 'Toggle 4x / 6x / 8x magnification' },
 
   // Abilities & Utility
+  { action: 'useTactical', category: 'abilities', label: 'Tactical Equipment (Slot 3)', description: 'Throw equipped tactical grenade (Smoke, Flashbang, Frag, Stun)' },
   { action: 'streakUav', category: 'abilities', label: 'UAV Sweep (3 Kills)', description: 'Reveal enemy radar pings' },
   { action: 'streakBarrage', category: 'abilities', label: 'Precision Barrage (5 Kills)', description: 'Call artillery strike on aim point' },
   { action: 'streakOverdrive', category: 'abilities', label: 'Tactical Overdrive (7 Kills)', description: 'Boost speed, reload & armor regen' },

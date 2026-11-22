@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Crosshair, RotateCcw, ShieldAlert, Sparkles } from 'lucide-react';
 import { resolveWeaponIdFromName } from '../game/ammoDisplay';
 import {
@@ -8,11 +8,15 @@ import {
   KNIFE_CHARMS,
   KNIFE_CHARM_IDS,
   KnifeCharmId,
+  TACTICAL_EQUIPMENT,
+  TACTICAL_EQUIPMENT_IDS,
+  TacticalEquipmentId,
   TeamColorsConfig,
   WEAPONS,
 } from '../game/types';
+import { normalizeTacticalEquipmentId } from '../game/loadoutRules';
 import { resolveSideColors } from '../settings/teamColorsConfig';
-import { WeaponPreview } from './WeaponPreview';
+import { TacticalEquipmentPreview, WeaponPreview } from './WeaponPreview';
 
 export interface DeathScreenProps {
   hud: HudState;
@@ -20,6 +24,7 @@ export interface DeathScreenProps {
   teamColors?: Partial<TeamColorsConfig>;
   onSelectGun: (id: GunId) => void;
   onSelectKnifeCharm?: (id: KnifeCharmId) => void;
+  onSelectTacticalEquipment?: (id: TacticalEquipmentId) => void;
   onRespawn: () => void;
 }
 
@@ -29,6 +34,7 @@ export const DeathScreen: React.FC<DeathScreenProps> = ({
   teamColors,
   onSelectGun,
   onSelectKnifeCharm,
+  onSelectTacticalEquipment,
   onRespawn,
 }) => {
   const mode = hud.gameMode ?? hud.match.mode ?? 'tdm';
@@ -43,6 +49,12 @@ export const DeathScreen: React.FC<DeathScreenProps> = ({
   const canRespawn = !isBombMode && hud.respawnTimer <= 0.05;
   const queuedGun = WEAPONS[hud.queuedGunId];
   const selectedCharm = KNIFE_CHARMS[hud.knifeCharmId];
+  const [hoveredTacticalId, setHoveredTacticalId] = useState<TacticalEquipmentId | null>(null);
+  const queuedTacticalId = normalizeTacticalEquipmentId(
+    hud.queuedTacticalEquipmentId ?? hud.tacticalEquipmentId
+  );
+  const queuedTactical = TACTICAL_EQUIPMENT[queuedTacticalId];
+  const inspectedTactical = TACTICAL_EQUIPMENT[hoveredTacticalId ?? queuedTacticalId];
   const killerWeaponId = resolveWeaponIdFromName(
     hud.killerBanner?.weaponName ?? hud.lastKillerWeapon
   );
@@ -319,13 +331,95 @@ export const DeathScreen: React.FC<DeathScreenProps> = ({
           )}
         </div>
 
+        {/* Slot 03 Tactical Equipment Strip */}
+        <div className="mt-2.5 border border-white/10 bg-black/30 p-2.5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="border border-white/10 bg-slate-950/70 px-2 py-1">
+                <TacticalEquipmentPreview
+                  equipmentId={queuedTacticalId}
+                  className="h-8 w-16"
+                />
+              </div>
+              <div>
+                <div className="font-display text-xs font-semibold text-white">
+                  Slot 03 · {queuedTactical.name}
+                </div>
+                <div className="font-mono-tabular text-[10px] text-sky-300">
+                  ×{queuedTactical.chargesPerSpawn} per spawn · {queuedTactical.radiusMeters}m ·{' '}
+                  {queuedTacticalId === 'frag_grenade'
+                    ? `${queuedTactical.fuseSec}s fuse`
+                    : `${queuedTactical.durationSec}s dur`}{' '}
+                  · {queuedTactical.cooldownSec}s CD
+                </div>
+              </div>
+            </div>
+
+            {onSelectTacticalEquipment && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {TACTICAL_EQUIPMENT_IDS.map((tacId) => {
+                  const tac = TACTICAL_EQUIPMENT[tacId];
+                  const active = queuedTacticalId === tacId;
+                  return (
+                    <button
+                      key={tacId}
+                      type="button"
+                      aria-pressed={active}
+                      title={`${tac.name}: ${tac.tooltip}`}
+                      onMouseEnter={() => setHoveredTacticalId(tacId)}
+                      onMouseLeave={() => setHoveredTacticalId(null)}
+                      onFocus={() => setHoveredTacticalId(tacId)}
+                      onBlur={() => setHoveredTacticalId(null)}
+                      onClick={(e) => {
+                        e.currentTarget.blur();
+                        onSelectTacticalEquipment(tacId);
+                      }}
+                      className={`flex cursor-pointer items-center gap-1.5 border px-2 py-1 text-[10px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                        active
+                          ? 'border-sky-400/85 bg-sky-400/18 text-white'
+                          : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      <span
+                        className="h-2 w-2 shrink-0 border border-white/35"
+                        style={{ backgroundColor: tac.accentHex }}
+                      />
+                      <span className="font-mono-tabular whitespace-nowrap">
+                        {tac.shortName} ×{tac.chargesPerSpawn}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div
+            data-tactical-tooltip={inspectedTactical.id}
+            className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-1.5 text-[10px]"
+          >
+            <span className="text-slate-300">
+              <strong className="font-semibold text-sky-300">{inspectedTactical.name}:</strong>{' '}
+              {inspectedTactical.tooltip}
+            </span>
+            <span className="font-mono-tabular text-slate-400">
+              Radius {inspectedTactical.radiusMeters}m ·{' '}
+              {inspectedTactical.id === 'frag_grenade'
+                ? `Fuse ${inspectedTactical.fuseSec}s`
+                : `Duration ${inspectedTactical.durationSec}s`}{' '}
+              · Cooldown {inspectedTactical.cooldownSec}s
+            </span>
+          </div>
+        </div>
+
         {/* Respawn Action Footer */}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
           {isBombMode ? (
             <>
               <div className="text-xs text-slate-300">
                 Secure Bomb rules: no mid-round respawn.{' '}
-                <span className="font-semibold text-white">{queuedGun.name}</span> equips next round.
+                <span className="font-semibold text-white">{queuedGun.name}</span> +{' '}
+                <span className="font-semibold text-sky-300">{queuedTactical.shortName}</span>{' '}
+                equips next round.
               </div>
               <span className="border border-sky-400/35 bg-sky-500/15 px-3 py-1.5 font-mono-tabular text-[11px] font-semibold text-sky-200 whitespace-nowrap">
                 NEXT ROUND LOADOUT LOCKED IN
@@ -336,7 +430,8 @@ export const DeathScreen: React.FC<DeathScreenProps> = ({
               <div className="flex items-center gap-2 text-xs text-slate-300">
                 <Crosshair className="h-3.5 w-3.5 text-amber-400" />
                 <span>
-                  Deploying with <span className="font-semibold text-white">{queuedGun.name}</span>
+                  Deploying with <span className="font-semibold text-white">{queuedGun.name}</span> ·{' '}
+                  <span className="font-semibold text-sky-300">{queuedTactical.shortName}</span>
                 </span>
               </div>
 

@@ -23,7 +23,10 @@ export function isOrdnanceKillName(name: string | null | undefined): boolean {
     lower.includes('airstrike') ||
     lower.includes('ordnance') ||
     lower.includes('bomb') ||
-    lower.includes('blast')
+    lower.includes('blast') ||
+    lower.includes('grenade') ||
+    lower.includes('frag') ||
+    lower.includes('shrapnel')
   );
 }
 

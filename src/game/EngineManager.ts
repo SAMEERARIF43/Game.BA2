@@ -1,6 +1,8 @@
 import {
+  AbstractMesh,
   Color3,
   Color4,
+  Constants,
   DefaultRenderingPipeline,
   DirectionalLight,
   Engine,
@@ -11,6 +13,7 @@ import {
   Mesh,
   MeshBuilder,
   PointLight,
+  Ray,
   Scene,
   ShadowGenerator,
   StandardMaterial,
@@ -31,6 +34,7 @@ import {
   NetworkPingEvent,
   RemoteFireEvent,
 } from '../multiplayer/types';
+import { selectMatchMvp } from '../match/matchMachine';
 import {
   addProgressionReward,
   getRankSummary,
@@ -38,20 +42,32 @@ import {
 } from '../settings/progressionStorage';
 import { resolveSideColors } from '../settings/teamColorsConfig';
 import { AudioEngine } from './AudioEngine';
+import { resolveWeaponIdFromName } from './ammoDisplay';
+import {
+  HIGHLIGHT_DURATION_SEC,
+  HIGHLIGHT_TIME_SCALE,
+  computeHighlightPoseVectors,
+  evaluateHighlightTimeline,
+  resolveMvpHighlightClip,
+} from './highlightReel';
 import {
   GUN_LOCKED_WHILE_ALIVE_MESSAGE,
   applyCharacterSelection,
   applyGunSelection,
+  applyTacticalEquipmentSelection,
   canSwitchGunImmediately,
   normalizeCharacterId,
   normalizeGunId,
   normalizeKnifeCharmId,
+  normalizeTacticalEquipmentId,
+  resolveRespawnTacticalEquipment,
 } from './loadoutRules';
 import {
   OperatorPalette,
   OperatorRig,
   buildOperatorRig,
   createOperatorPalette,
+  updateOperatorPaletteTeamColor,
 } from './OperatorMeshBuilder';
 import { PingSystem, resolvePingRaycast } from './PingSystem';
 import { PlayerController } from './PlayerController';
@@ -78,8 +94,10 @@ import {
   GameSettings,
   GraphicsQuality,
   GunId,
+  HighlightReelState,
   HudState,
   KillFeedEntry,
+  KillHighlightClip,
   KillerBannerInfo,
   KillstreakBanner,
   KillstreakId,
@@ -92,6 +110,8 @@ import {
   RadarBlip,
   ScorePopup,
   Stance,
+  TACTICAL_EQUIPMENT,
+  TacticalEquipmentId,
   WeaponId,
 } from './types';
 import { DEFAULT_KEYBINDINGS, formatKeyCode } from '../settings/keybindings';
@@ -166,6 +186,25 @@ interface BlastEffect {
   maxLife: number;
 }
 
+interface TacticalProjectile {
+  kind: TacticalEquipmentId;
+  mesh: Mesh;
+  mat: StandardMaterial;
+  velocity: Vector3;
+  fuseRemaining: number;
+}
+
+interface SmokeCloudEffect {
+  meshes: Mesh[];
+  mat: StandardMaterial;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  life: number;
+  maxLife: number;
+}
+
 const UAV_DURATION_SEC = 20;
 const OVERDRIVE_DURATION_SEC = 15;
 const RADAR_RANGE_METERS = 32;
@@ -206,7 +245,6 @@ export class EngineManager {
   private prevMpRoundNumber = 1;
   private lastBombPhase: BombPhase = 'unplanted';
   private bombBeepCooldown = 0;
-  private pingMs = 24;
 
   private bombSiteVisualRoot: TransformNode | null = null;
   private bombSiteVisualMaterials: StandardMaterial[] = [];
@@ -222,6 +260,7 @@ export class EngineManager {
   private elapsedTime = 0;
   private lastHudEmitTime = 0;
   private initFallbackTimer: number | null = null;
+  private initRafId: number | null = null;
   private disposed = false;
 
   private playerHealth = 100;
@@ -257,6 +296,16 @@ export class EngineManager {
   private scorePopupSeq = 0;
   private barrageShells: BarrageShell[] = [];
   private blastEffects: BlastEffect[] = [];
+  private tacticalProjectiles: TacticalProjectile[] = [];
+  private smokeClouds: SmokeCloudEffect[] = [];
+  private equippedTacticalId: TacticalEquipmentId;
+  private queuedTacticalId: TacticalEquipmentId;
+  private tacticalCharges = 2;
+  private tacticalThrowCooldown = 0;
+  private flashBlindIntensity = 0;
+  private readonly tacticalHitRay = new Ray(Vector3.Zero(), Vector3.Forward(), 2);
+  private readonly tacticalMeshPredicate = (mesh: AbstractMesh): boolean =>
+    mesh.checkCollisions && mesh.isEnabled() && !mesh.metadata?.isBot;
 
   private xpTotal = 0;
   private sessionXpEarned = 0;
@@ -272,10 +321,68 @@ export class EngineManager {
   private menuShowcaseFocus: 'gun' | 'knife' = 'gun';
   private showcaseTargetOffsetX = 0;
 
+  private lastKillClipByKillerId = new Map<string, KillHighlightClip>();
+  private latestKillClip: KillHighlightClip | null = null;
+  private highlightClipSeq = 0;
+  private mpActorPoseCache = new Map<
+    string,
+    {
+      id: string;
+      name: string;
+      team: TeamId;
+      characterId: CharacterId;
+      weaponId: WeaponId;
+      x: number;
+      y: number;
+      z: number;
+      yaw: number;
+    }
+  >();
+  private highlightReplay: {
+    isPlaying: boolean;
+    finished: boolean;
+    elapsedSec: number;
+    durationSec: number;
+    timeScale: number;
+    clip: KillHighlightClip | null;
+    shotCuePlayed: boolean;
+    impactCuePlayed: boolean;
+    killerPalette: OperatorPalette | null;
+    victimPalette: OperatorPalette | null;
+    killerRig: OperatorRig | null;
+    victimRig: OperatorRig | null;
+    tracerMesh: Mesh | null;
+    tracerMat: StandardMaterial | null;
+    flashMesh: Mesh | null;
+    flashMat: StandardMaterial | null;
+    baseFovRad: number;
+  } = {
+    isPlaying: false,
+    finished: false,
+    elapsedSec: 0,
+    durationSec: HIGHLIGHT_DURATION_SEC,
+    timeScale: HIGHLIGHT_TIME_SCALE,
+    clip: null,
+    shotCuePlayed: false,
+    impactCuePlayed: false,
+    killerPalette: null,
+    victimPalette: null,
+    killerRig: null,
+    victimRig: null,
+    tracerMesh: null,
+    tracerMat: null,
+    flashMesh: null,
+    flashMat: null,
+    baseFovRad: 1.3,
+  };
+
   constructor(canvas: HTMLCanvasElement, initialSettings: GameSettings, callbacks: EngineCallbacks) {
     this.canvas = canvas;
     this.settings = { ...initialSettings };
     this.selectedCharacterId = normalizeCharacterId(initialSettings.selectedCharacterId);
+    this.equippedTacticalId = normalizeTacticalEquipmentId(initialSettings.tacticalEquipmentId);
+    this.queuedTacticalId = this.equippedTacticalId;
+    this.tacticalCharges = TACTICAL_EQUIPMENT[this.equippedTacticalId].chargesPerSpawn;
     this.callbacks = callbacks;
     this.xpTotal = loadProgression().xp;
 
@@ -339,6 +446,9 @@ export class EngineManager {
       onQuickMelee: () => {
         this.weapons.triggerQuickMelee();
         this.emitHudState(true);
+      },
+      onUseTactical: () => {
+        this.useTacticalEquipment();
       },
       onDeadGunHotkey: (gunIndex) => {
         this.handleDeadGunHotkey(gunIndex);
@@ -456,6 +566,9 @@ export class EngineManager {
           attackerHpRemaining
         );
       },
+      onKillRecorded: (info) => {
+        this.captureOfflineBotKillClip(info);
+      },
     });
 
     this.weapons = new WeaponSystem(
@@ -514,12 +627,9 @@ export class EngineManager {
 
     let initSettled = false;
     const finishInit = () => {
+      this.clearInitTimers();
       if (initSettled || this.disposed) return;
       initSettled = true;
-      if (this.initFallbackTimer !== null) {
-        window.clearTimeout(this.initFallbackTimer);
-        this.initFallbackTimer = null;
-      }
       this.callbacks.onInitProgress?.({
         active: false,
         progress: 100,
@@ -529,7 +639,11 @@ export class EngineManager {
 
     this.initFallbackTimer = window.setTimeout(finishInit, 1800);
     this.scene.executeWhenReady(() => {
-      window.requestAnimationFrame(finishInit);
+      if (initSettled || this.disposed) {
+        this.clearInitTimers();
+        return;
+      }
+      this.initRafId = window.requestAnimationFrame(finishInit);
     });
 
     this.engine.runRenderLoop(() => {
@@ -545,6 +659,8 @@ export class EngineManager {
           const target = this.mapManager.getCurrentDefinition().previewCameraTarget;
           this.player.updateOrbitCamera(target, this.elapsedTime);
           this.animateMenuShowcase(dt);
+        } else if (phase === 'ended' && this.highlightReplay.isPlaying) {
+          this.updateHighlightReplay(dt);
         } else {
           this.updateOfflineMatchTick(dt);
           const activeCfg = this.weapons.getActiveConfig();
@@ -560,10 +676,6 @@ export class EngineManager {
       this.scene.render();
       this.emitHudState(false);
     });
-  }
-
-  public updatePing(pingMs: number): void {
-    this.pingMs = pingMs;
   }
 
   public setCustomChatEnabled(enabled: boolean): void {
@@ -625,6 +737,13 @@ export class EngineManager {
     this.pingSystem.clear();
     this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
     this.weapons.resetForNewMatch();
+    const resolvedTac = resolveRespawnTacticalEquipment({
+      equippedTacticalId: this.equippedTacticalId,
+      queuedTacticalId: this.queuedTacticalId,
+    });
+    this.equippedTacticalId = resolvedTac.equippedTacticalId;
+    this.queuedTacticalId = resolvedTac.queuedTacticalId;
+    this.tacticalCharges = TACTICAL_EQUIPMENT[this.equippedTacticalId].chargesPerSpawn;
     this.weapons.setGameMode(this.gameMode);
     this.weapons.setMultiplayerContext(false, 'blue', false);
     this.player.exitPointerLock();
@@ -804,7 +923,12 @@ export class EngineManager {
       this.lastKillerName = null;
       this.lastKillerWeapon = null;
       this.player.setDeadState(false);
+      const localLobby = snapshot.players.find((p) => p.id === snapshot.localPlayerId);
+      const localTeam: TeamId = localLobby?.team ?? 'blue';
+      this.pingSystem.setLocalTeam(localTeam);
+      this.syncTeamColorsToScene(localTeam);
       this.weapons.setGameMode(mode);
+      this.weapons.setMultiplayerContext(true, localTeam, snapshot.friendlyFire);
       this.weapons.setEquippedGun(this.weapons.getQueuedGunId());
       if (this.sessionMode === 'multiplayer') {
         this.remoteRenderer.clear();
@@ -853,11 +977,27 @@ export class EngineManager {
           this.closeChatInput(false);
         }
         this.pingSystem.setLocalTeam(local.team);
+        this.syncTeamColorsToScene(local.team);
         this.weapons.setGameMode(mode);
         this.weapons.setMultiplayerContext(true, local.team, snapshot.friendlyFire);
+      } else {
+        this.syncTeamColorsToScene();
       }
 
       this.remoteRenderer.syncPlayers(snapshot.players, snapshot.localPlayerId);
+      for (const p of snapshot.players) {
+        this.mpActorPoseCache.set(p.id, {
+          id: p.id,
+          name: p.name,
+          team: p.team,
+          characterId: p.characterId,
+          weaponId: p.weaponId,
+          x: p.x,
+          y: p.y,
+          z: p.z,
+          yaw: p.rotY,
+        });
+      }
     } else if (snapshot.phase === 'ended') {
       this.closeChatInput(false);
       this.mpPaused = false;
@@ -975,6 +1115,7 @@ export class EngineManager {
       },
       ...this.mpKillFeed.slice(0, 4),
     ];
+    this.captureMultiplayerKillClip(event);
     this.emitHudState(true);
   }
 
@@ -1046,6 +1187,23 @@ export class EngineManager {
     this.applyGraphicsQuality(settings.graphicsQuality);
     if (settings.knifeCharmId !== this.weapons.getKnifeCharmId()) {
       this.weapons.setKnifeCharm(settings.knifeCharmId);
+    }
+    const nextTactical = normalizeTacticalEquipmentId(settings.tacticalEquipmentId);
+    if (nextTactical !== this.queuedTacticalId) {
+      const outcome = applyTacticalEquipmentSelection(
+        {
+          equippedTacticalId: this.equippedTacticalId,
+          queuedTacticalId: this.queuedTacticalId,
+        },
+        nextTactical,
+        this.getCurrentMatchPhase(),
+        this.playerIsAlive
+      );
+      this.equippedTacticalId = outcome.loadout.equippedTacticalId;
+      this.queuedTacticalId = outcome.loadout.queuedTacticalId;
+      if (outcome.switchedImmediately) {
+        this.tacticalCharges = TACTICAL_EQUIPMENT[this.equippedTacticalId].chargesPerSpawn;
+      }
     }
     const nextChar = normalizeCharacterId(settings.selectedCharacterId);
     if (nextChar !== this.selectedCharacterId) {
@@ -1432,18 +1590,109 @@ export class EngineManager {
         b.ringMat.alpha = Math.max(0, (1 - t) * 0.9);
       }
     }
-  }
 
-  private detonateBarrageShell(pos: Vector3): void {
-    this.audio.playExplosion();
-    const distToPlayer = Vector3.Distance(this.player.collider.position, pos);
-    if (distToPlayer < 35) {
-      this.player.addCameraShake(Math.max(0.03, 0.16 * (1 - distToPlayer / 35)));
+    // Tactical throw cooldown & flash blindness decay
+    if (this.tacticalThrowCooldown > 0) {
+      this.tacticalThrowCooldown = Math.max(0, this.tacticalThrowCooldown - dt);
+    }
+    if (this.flashBlindIntensity > 0) {
+      this.flashBlindIntensity = Math.max(0, this.flashBlindIntensity - dt * 0.42);
     }
 
+    // Thrown Tactical Equipment projectiles
+    for (let i = this.tacticalProjectiles.length - 1; i >= 0; i--) {
+      const p = this.tacticalProjectiles[i];
+      p.velocity.y -= 20 * dt;
+
+      const step = p.velocity.scale(dt);
+      const stepLen = step.length();
+      if (stepLen > 0.001) {
+        this.tacticalHitRay.origin.copyFrom(p.mesh.position);
+        this.tacticalHitRay.direction.copyFrom(step).scaleInPlace(1 / stepLen);
+        this.tacticalHitRay.length = stepLen + 0.16;
+        const hit = this.scene.pickWithRay(this.tacticalHitRay, this.tacticalMeshPredicate);
+        if (hit?.hit && hit.pickedPoint) {
+          const normal = hit.getNormal(true) ?? new Vector3(0, 1, 0);
+          p.mesh.position.copyFrom(hit.pickedPoint).addInPlace(normal.scale(0.14));
+          const vn = Vector3.Dot(p.velocity, normal);
+          if (vn < 0) {
+            p.velocity.subtractInPlace(normal.scale(1.48 * vn));
+            p.velocity.scaleInPlace(0.62);
+          }
+        } else {
+          p.mesh.position.addInPlace(step);
+        }
+      }
+
+      if (p.mesh.position.y < 0.22) {
+        p.mesh.position.y = 0.22;
+        if (p.velocity.y < 0) {
+          p.velocity.y = -p.velocity.y * 0.42;
+          p.velocity.x *= 0.72;
+          p.velocity.z *= 0.72;
+        }
+      }
+      if (p.mesh.position.x > 27.5 || p.mesh.position.x < -27.5) {
+        p.mesh.position.x = Math.max(-27.5, Math.min(27.5, p.mesh.position.x));
+        p.velocity.x *= -0.5;
+      }
+      if (p.mesh.position.z > 27.5 || p.mesh.position.z < -27.5) {
+        p.mesh.position.z = Math.max(-27.5, Math.min(27.5, p.mesh.position.z));
+        p.velocity.z *= -0.5;
+      }
+
+      p.mesh.rotation.x += 7.5 * dt;
+      p.mesh.rotation.z += 5.2 * dt;
+      p.fuseRemaining -= dt;
+      if (p.fuseRemaining <= 0) {
+        const impactPos = p.mesh.position.clone();
+        const kind = p.kind;
+        p.mat.dispose();
+        p.mesh.dispose();
+        this.tacticalProjectiles.splice(i, 1);
+        this.detonateTacticalGrenade(kind, impactPos);
+      }
+    }
+
+    // Active smoke concealment clouds
+    if (this.smokeClouds.length > 0) {
+      let cloudsChanged = false;
+      for (let i = this.smokeClouds.length - 1; i >= 0; i--) {
+        const cloud = this.smokeClouds[i];
+        cloud.life -= dt;
+        if (cloud.life <= 0) {
+          for (const m of cloud.meshes) {
+            m.dispose();
+          }
+          cloud.mat.dispose();
+          this.smokeClouds.splice(i, 1);
+          cloudsChanged = true;
+        } else {
+          const age = cloud.maxLife - cloud.life;
+          const expandT = Math.min(1, age / 0.65);
+          const fadeT = cloud.life < 2.5 ? cloud.life / 2.5 : 1;
+          cloud.mat.alpha = 0.72 * fadeT;
+          const scale = 0.45 + expandT * 0.55;
+          for (const m of cloud.meshes) {
+            m.scaling.setAll(scale);
+          }
+        }
+      }
+      if (cloudsChanged) {
+        this.botManager.setSmokeClouds(this.smokeClouds);
+      }
+    }
+  }
+
+  private spawnBlastVisual(
+    pos: Vector3,
+    sphereColor: Color3,
+    ringColor: Color3,
+    maxLife = 0.48
+  ): void {
     const sphereMat = new StandardMaterial(`blastSphMat_${Date.now()}`, this.scene);
     sphereMat.disableLighting = true;
-    sphereMat.emissiveColor = new Color3(2.2, 0.95, 0.25);
+    sphereMat.emissiveColor = sphereColor;
     sphereMat.alpha = 0.85;
 
     const sphere = MeshBuilder.CreateSphere('blastSphere', { diameter: 1.4, segments: 10 }, this.scene);
@@ -1453,7 +1702,7 @@ export class EngineManager {
 
     const ringMat = new StandardMaterial(`blastRingMat_${Date.now()}`, this.scene);
     ringMat.disableLighting = true;
-    ringMat.emissiveColor = new Color3(1.8, 1.25, 0.6);
+    ringMat.emissiveColor = ringColor;
     ringMat.alpha = 0.9;
     ringMat.backFaceCulling = false;
 
@@ -1468,13 +1717,170 @@ export class EngineManager {
       ring,
       sphereMat,
       ringMat,
-      life: 0.48,
-      maxLife: 0.48,
+      life: maxLife,
+      maxLife,
     });
+  }
+
+  private detonateBarrageShell(pos: Vector3): void {
+    this.audio.playExplosion();
+    const distToPlayer = Vector3.Distance(this.player.collider.position, pos);
+    if (distToPlayer < 35) {
+      this.player.addCameraShake(Math.max(0.03, 0.16 * (1 - distToPlayer / 35)));
+    }
+
+    this.spawnBlastVisual(pos, new Color3(2.2, 0.95, 0.25), new Color3(1.8, 1.25, 0.6));
 
     if (this.sessionMode === 'offline' && this.matchManager.getPhase() === 'playing') {
       this.botManager.applyAirstrikeDamage(pos, 8.5, 130, (kill) => {
         this.handlePlayerKillCredit(false, kill.distanceMeters, kill.victimName, true);
+      });
+    }
+  }
+
+  private useTacticalEquipment(): void {
+    if (!this.playerIsAlive || this.chatOpen) return;
+    const playing =
+      this.sessionMode === 'offline'
+        ? this.matchManager.getPhase() === 'playing'
+        : this.mpSnapshot?.phase === 'playing' && !this.mpPaused;
+    if (!playing) return;
+    if (this.tacticalCharges <= 0 || this.tacticalThrowCooldown > 0) return;
+
+    const cfg = TACTICAL_EQUIPMENT[this.equippedTacticalId];
+    this.tacticalCharges -= 1;
+    this.tacticalThrowCooldown = cfg.cooldownSec;
+    this.audio.playGrenadeThrow();
+
+    const origin = this.player.camera.globalPosition.clone();
+    const fwd = this.player.camera.getDirection(Vector3.Forward()).normalize();
+    const spawnPos = origin.add(fwd.scale(0.68)).add(new Vector3(0, -0.1, 0));
+
+    const mat = new StandardMaterial(`tacProjMat_${Date.now()}`, this.scene);
+    mat.diffuseColor = Color3.FromHexString(cfg.accentHex);
+    mat.emissiveColor = Color3.FromHexString(cfg.accentHex).scale(0.45);
+
+    const mesh = MeshBuilder.CreateCylinder(
+      `tacProj_${Date.now()}`,
+      { height: 0.22, diameterTop: 0.1, diameterBottom: 0.11, tessellation: 10 },
+      this.scene
+    );
+    mesh.position.copyFrom(spawnPos);
+    mesh.material = mat;
+    mesh.isPickable = false;
+    mesh.checkCollisions = false;
+
+    const velocity = fwd.scale(18.5).add(new Vector3(0, 4.2, 0));
+    this.tacticalProjectiles.push({
+      kind: this.equippedTacticalId,
+      mesh,
+      mat,
+      velocity,
+      fuseRemaining: cfg.fuseSec,
+    });
+    this.emitHudState(true);
+  }
+
+  private detonateTacticalGrenade(kind: TacticalEquipmentId, rawPos: Vector3): void {
+    const cfg = TACTICAL_EQUIPMENT[kind];
+    const pos = new Vector3(rawPos.x, Math.max(0.25, rawPos.y), rawPos.z);
+
+    if (kind === 'smoke_grenade') {
+      this.audio.playSmokeDeploy();
+      const smokeMat = new StandardMaterial(`smokeMat_${Date.now()}`, this.scene);
+      smokeMat.diffuseColor = new Color3(0.74, 0.78, 0.84);
+      smokeMat.emissiveColor = new Color3(0.22, 0.25, 0.29);
+      smokeMat.specularColor = Color3.Black();
+      smokeMat.alpha = 0.72;
+      smokeMat.disableDepthWrite = true;
+
+      const offsets = [
+        new Vector3(0, 1.35, 0),
+        new Vector3(-1.85, 1.05, 1.15),
+        new Vector3(1.9, 1.1, 0.95),
+        new Vector3(-1.2, 1.15, -1.75),
+        new Vector3(1.5, 1.25, -1.45),
+      ];
+      const meshes = offsets.map((offset, idx) => {
+        const puff = MeshBuilder.CreateSphere(
+          `smokePuff_${Date.now()}_${idx}`,
+          { diameter: idx === 0 ? cfg.radiusMeters * 1.15 : cfg.radiusMeters * 0.86, segments: 10 },
+          this.scene
+        );
+        puff.position.copyFrom(pos).addInPlace(offset);
+        puff.material = smokeMat;
+        puff.isPickable = false;
+        puff.checkCollisions = false;
+        puff.scaling.setAll(0.45);
+        return puff;
+      });
+
+      this.smokeClouds.push({
+        meshes,
+        mat: smokeMat,
+        x: pos.x,
+        y: pos.y + 1.2,
+        z: pos.z,
+        radius: cfg.radiusMeters,
+        life: cfg.durationSec,
+        maxLife: cfg.durationSec,
+      });
+      this.botManager.setSmokeClouds(this.smokeClouds);
+      return;
+    }
+
+    if (kind === 'flashbang') {
+      this.audio.playFlashbangDetonate();
+      this.spawnBlastVisual(pos, new Color3(1.8, 2.2, 2.5), new Color3(0.55, 0.85, 1.0), 0.34);
+      const eyePos = this.player.getEyePosition();
+      const distToPlayer = Vector3.Distance(eyePos, pos);
+      if (this.playerIsAlive && distToPlayer <= cfg.radiusMeters) {
+        const toFlash = pos.subtract(eyePos);
+        if (toFlash.lengthSquared() > 0.001) {
+          toFlash.normalize();
+          const lookDir = this.player.camera.getDirection(Vector3.Forward()).normalize();
+          const facing = Vector3.Dot(lookDir, toFlash);
+          if (facing > -0.2 || distToPlayer < 3.5) {
+            const distFactor = 1 - distToPlayer / cfg.radiusMeters;
+            const viewFactor = facing > 0.15 ? 1.0 : 0.45;
+            this.flashBlindIntensity = Math.min(
+              1,
+              Math.max(this.flashBlindIntensity, Math.max(0.25, distFactor * viewFactor * 1.2))
+            );
+          }
+        }
+        this.player.addCameraShake(0.08);
+      }
+      if (this.sessionMode === 'offline' && this.matchManager.getPhase() === 'playing') {
+        this.botManager.applyTacticalDisruption(pos, cfg.radiusMeters, 'flash', cfg.durationSec);
+      }
+      this.emitHudState(true);
+      return;
+    }
+
+    if (kind === 'stun_grenade') {
+      this.audio.playStunDetonate();
+      this.spawnBlastVisual(pos, new Color3(0.35, 1.85, 1.25), new Color3(0.2, 1.35, 0.9), 0.4);
+      const distToPlayer = Vector3.Distance(this.player.collider.position, pos);
+      if (distToPlayer < 16) {
+        this.player.addCameraShake(0.08 * (1 - distToPlayer / 16));
+      }
+      if (this.sessionMode === 'offline' && this.matchManager.getPhase() === 'playing') {
+        this.botManager.applyTacticalDisruption(pos, cfg.radiusMeters, 'stun', cfg.durationSec);
+      }
+      return;
+    }
+
+    // M67 Frag Grenade
+    this.audio.playExplosion();
+    this.spawnBlastVisual(pos, new Color3(2.2, 0.95, 0.25), new Color3(1.8, 1.25, 0.6), 0.48);
+    const distToPlayer = Vector3.Distance(this.player.collider.position, pos);
+    if (distToPlayer < 28) {
+      this.player.addCameraShake(Math.max(0.03, 0.18 * (1 - distToPlayer / 28)));
+    }
+    if (this.sessionMode === 'offline' && this.matchManager.getPhase() === 'playing') {
+      this.botManager.applyExplosiveDamage(pos, cfg.radiusMeters, 145, cfg.name, (kill) => {
+        this.handlePlayerKillCredit(false, kill.distanceMeters, kill.victimName, false);
       });
     }
   }
@@ -1537,10 +1943,32 @@ export class EngineManager {
       b.ring.dispose();
     }
     this.blastEffects = [];
+    for (const p of this.tacticalProjectiles) {
+      p.mat.dispose();
+      p.mesh.dispose();
+    }
+    this.tacticalProjectiles = [];
+    for (const c of this.smokeClouds) {
+      for (const m of c.meshes) {
+        m.dispose();
+      }
+      c.mat.dispose();
+    }
+    this.smokeClouds = [];
+    this.botManager.setSmokeClouds([]);
+    this.tacticalThrowCooldown = 0;
+    this.flashBlindIntensity = 0;
+    this.stopHighlightReplay(false);
 
     if (clearSession) {
       this.sessionXpEarned = 0;
       this.matchEndXpAwarded = false;
+      this.lastKillClipByKillerId.clear();
+      this.latestKillClip = null;
+      this.mpActorPoseCache.clear();
+      this.highlightReplay.finished = false;
+      this.highlightReplay.elapsedSec = 0;
+      this.highlightReplay.clip = null;
     }
   }
 
@@ -1710,7 +2138,7 @@ export class EngineManager {
   public selectCharacter(
     id: CharacterId,
     equipSignatureGun = true
-  ): { characterId: CharacterId; signatureGunId: GunId; switchedImmediately: boolean } {
+  ): { characterId: CharacterId; signatureGunId: GunId | null; switchedImmediately: boolean } {
     const normalized = normalizeCharacterId(id);
     if (normalized !== this.selectedCharacterId) {
       this.selectedCharacterId = normalized;
@@ -1757,6 +2185,27 @@ export class EngineManager {
     this.emitHudState(true);
   }
 
+  public selectTacticalEquipment(id: TacticalEquipmentId): { switchedImmediately: boolean } {
+    const phase = this.getCurrentMatchPhase();
+    const outcome = applyTacticalEquipmentSelection(
+      {
+        equippedTacticalId: this.equippedTacticalId,
+        queuedTacticalId: this.queuedTacticalId,
+      },
+      normalizeTacticalEquipmentId(id),
+      phase,
+      this.playerIsAlive
+    );
+
+    this.equippedTacticalId = outcome.loadout.equippedTacticalId;
+    this.queuedTacticalId = outcome.loadout.queuedTacticalId;
+    if (outcome.switchedImmediately) {
+      this.tacticalCharges = TACTICAL_EQUIPMENT[this.equippedTacticalId].chargesPerSpawn;
+    }
+    this.emitHudState(true);
+    return { switchedImmediately: outcome.switchedImmediately };
+  }
+
   public selectWeapon(id: WeaponId): void {
     if (id === 'knife') {
       this.weapons.selectSlot(2);
@@ -1784,6 +2233,11 @@ export class EngineManager {
       return;
     }
 
+    if (phase === 'ended' && this.highlightReplay.isPlaying) {
+      this.updateHighlightReplay(dt);
+      return;
+    }
+
     const activeCfg = this.weapons.getActiveConfig();
     this.player.update(dt, activeCfg.adsFovRatio);
     this.weapons.update(dt);
@@ -1794,11 +2248,19 @@ export class EngineManager {
     this.updateArcadeEffects(dt);
 
     if (phase === 'playing' && this.mpSnapshot) {
+      const mpMode = normalizeGameMode(this.mpSnapshot.mode, this.gameMode);
+      if (!this.playerIsAlive) {
+        if (mpMode === 'bomb') {
+          this.playerRespawnTimer = 0;
+        } else if (this.playerRespawnTimer > 0) {
+          this.playerRespawnTimer = Math.max(0, this.playerRespawnTimer - dt);
+        }
+      }
       this.updateBombVisualsAndAudio(
         dt,
-        this.mpSnapshot.mode === 'bomb' ? (this.mpSnapshot.bombState ?? null) : null
+        mpMode === 'bomb' ? (this.mpSnapshot.bombState ?? null) : null
       );
-      if (this.mpSnapshot.mode === 'bomb') {
+      if (mpMode === 'bomb') {
         const holdingE = !this.mpPaused && this.player.isInteractHeld();
         if (holdingE !== this.lastSentBombInteract) {
           this.lastSentBombInteract = holdingE;
@@ -1815,7 +2277,7 @@ export class EngineManager {
 
     const now = performance.now();
     if (this.mpKillFeed.length > 0) {
-      this.mpKillFeed = this.mpKillFeed.filter((k) => now - k.timestamp < 4000);
+      this.mpKillFeed = this.mpKillFeed.filter((k) => now - k.timestamp < 4500);
     }
 
     if (phase === 'playing' && this.playerIsAlive && now - this.lastMoveSendTime >= 50) {
@@ -1922,17 +2384,29 @@ export class EngineManager {
 
   public respawnLocalPlayer(): boolean {
     if (this.playerIsAlive) return false;
-    const phase = this.getCurrentMatchPhase();
-    if (phase !== 'playing') return false;
-    if (this.gameMode === 'bomb') return false;
-    if (this.playerRespawnTimer > 0.05) return false;
+    const activeMode =
+      this.sessionMode === 'multiplayer'
+        ? normalizeGameMode(this.mpSnapshot?.mode, this.gameMode)
+        : this.matchManager.getMode();
+    if (activeMode === 'bomb') return false;
 
-    const queuedGun = this.weapons.getQueuedGunId();
     if (this.sessionMode === 'multiplayer') {
+      if (this.mpSnapshot?.phase !== 'playing') return false;
+      if (this.playerRespawnTimer > 0.05) return false;
+      this.mpPaused = false;
+      const queuedGun = this.weapons.getQueuedGunId();
       this.callbacks.onMultiplayerRespawnRequest?.(queuedGun);
+      this.player.setCanControl(true);
       this.player.requestPointerLock();
       this.emitHudState(true);
       return true;
+    }
+
+    const offlinePhase = this.matchManager.getPhase();
+    if (offlinePhase === 'menu' || offlinePhase === 'ended') return false;
+    if (this.playerRespawnTimer > 0.05) return false;
+    if (offlinePhase === 'paused') {
+      this.matchManager.setPhase('playing');
     }
 
     const spawn = this.botManager.pickBestSpawn('blue', 'player');
@@ -1990,6 +2464,14 @@ export class EngineManager {
       };
       this.onPlayerEliminatedCleanup(sanitizedPos);
       this.matchManager.recordKill(attackerId, 'player', weaponName, headshot, distanceMeters);
+      this.captureOfflinePlayerDeathClip(
+        attackerId,
+        attackerName,
+        weaponName,
+        headshot,
+        distanceMeters,
+        sanitizedPos
+      );
 
       if (this.matchManager.getPhase() === 'ended') {
         const snap = this.matchManager.getSnapshot();
@@ -2076,6 +2558,15 @@ export class EngineManager {
     this.lastKillerWeapon = null;
     this.killerBanner = null;
     this.damageIndicators = [];
+    const resolvedTac = resolveRespawnTacticalEquipment({
+      equippedTacticalId: this.equippedTacticalId,
+      queuedTacticalId: this.queuedTacticalId,
+    });
+    this.equippedTacticalId = resolvedTac.equippedTacticalId;
+    this.queuedTacticalId = resolvedTac.queuedTacticalId;
+    this.tacticalCharges = TACTICAL_EQUIPMENT[this.equippedTacticalId].chargesPerSpawn;
+    this.tacticalThrowCooldown = 0;
+    this.flashBlindIntensity = 0;
     this.player.setDeathLookTarget(null);
     this.player.spawnAt(spawnPos, yawRad);
     this.weapons.setViewModelVisible(true);
@@ -2771,6 +3262,39 @@ export class EngineManager {
         : -1;
     const ffaLeader = match.mode === 'ffa' ? match.participants[0] : undefined;
 
+    const localParticipant = match.participants.find((p) => p.id === localId);
+    const playerAccuracy =
+      stats.shotsFired > 0 ? Math.round((stats.shotsHit / stats.shotsFired) * 100) : 0;
+    const mvpSummary =
+      match.phase === 'ended'
+        ? selectMatchMvp(match.participants, {
+            kills: stats.eliminations,
+            deaths: localParticipant?.deaths ?? 0,
+            accuracyPct: playerAccuracy,
+            headshots: stats.headshots,
+          })
+        : null;
+    const resolvedClip = this.highlightReplay.isPlaying
+      ? this.highlightReplay.clip
+      : resolveMvpHighlightClip(
+          mvpSummary?.id,
+          this.lastKillClipByKillerId,
+          this.latestKillClip
+        );
+    const highlightReel: HighlightReelState = {
+      available: Boolean(resolvedClip),
+      isPlaying: this.highlightReplay.isPlaying,
+      finished: this.highlightReplay.finished,
+      progress:
+        this.highlightReplay.durationSec > 0
+          ? Math.min(1, this.highlightReplay.elapsedSec / this.highlightReplay.durationSec)
+          : 0,
+      elapsedSec: Math.round(this.highlightReplay.elapsedSec * 10) / 10,
+      durationSec: this.highlightReplay.durationSec,
+      timeScale: this.highlightReplay.timeScale,
+      clip: resolvedClip,
+    };
+
     this.callbacks.onHudUpdate({
       isPointerLocked: this.player.getIsPointerLocked(),
       health: this.playerHealth,
@@ -2793,6 +3317,11 @@ export class EngineManager {
       equippedGunId: this.weapons.getEquippedGunId(),
       queuedGunId: this.weapons.getQueuedGunId(),
       knifeCharmId: this.weapons.getKnifeCharmId(),
+      tacticalEquipmentId: this.equippedTacticalId,
+      queuedTacticalEquipmentId: this.queuedTacticalId,
+      tacticalCharges: this.tacticalCharges,
+      tacticalMaxCharges: TACTICAL_EQUIPMENT[this.equippedTacticalId].chargesPerSpawn,
+      flashBlindIntensity: Math.round(this.flashBlindIntensity * 1000) / 1000,
       isGunSwitchLocked,
       gunLockMessage: isGunSwitchLocked ? GUN_LOCKED_WHILE_ALIVE_MESSAGE : null,
       weaponSlots: this.weapons.getWeaponSlots(),
@@ -2834,7 +3363,6 @@ export class EngineManager {
       showOnboarding: this.showOnboarding,
       lowHealthPulse: this.playerIsAlive && this.playerHealth <= 25,
       fps: Math.round(this.engine.getFps()),
-      ping: this.pingMs,
       gameMode: match.mode,
       localTeam,
       bombSites:
@@ -2845,21 +3373,527 @@ export class EngineManager {
       ffaRank: ffaIdx >= 0 ? ffaIdx + 1 : null,
       ffaLeaderName: ffaLeader ? ffaLeader.name : null,
       ffaLeaderKills: ffaLeader ? ffaLeader.kills : 0,
+      highlightReel,
       match,
     });
+  }
+
+  private captureOfflineBotKillClip(info: {
+    killerId: string;
+    victimId: string;
+    weaponName: string;
+    headshot: boolean;
+    distanceMeters: number;
+    victimPos: { x: number; y: number; z: number };
+    victimYaw: number;
+  }): void {
+    const victimSnap = this.botManager.getActorSnapshot(info.victimId);
+    const resolvedWeaponId = resolveWeaponIdFromName(info.weaponName);
+
+    let killerName = this.settings.callsign || 'Operator';
+    let killerTeam: TeamId = 'blue';
+    let killerCharId = this.selectedCharacterId;
+    let killerPos = {
+      x: this.player.collider.position.x,
+      y: Math.max(0, this.player.collider.position.y - 0.9),
+      z: this.player.collider.position.z,
+    };
+    let killerYaw = this.player.getYawRad();
+    let killerWeaponId = resolvedWeaponId ?? this.weapons.getEquippedGunId();
+
+    if (info.killerId !== 'player') {
+      const killerSnap = this.botManager.getActorSnapshot(info.killerId);
+      if (!killerSnap) return;
+      killerName = killerSnap.name;
+      killerTeam = killerSnap.team;
+      killerCharId = killerSnap.characterId;
+      killerPos = { x: killerSnap.x, y: killerSnap.y, z: killerSnap.z };
+      killerYaw = killerSnap.yaw;
+      killerWeaponId = resolvedWeaponId ?? killerSnap.weaponId;
+    }
+
+    const clip: KillHighlightClip = {
+      id: `hl_${++this.highlightClipSeq}`,
+      killerId: info.killerId,
+      killerName,
+      killerTeam,
+      killerCharacterId: killerCharId,
+      victimId: info.victimId,
+      victimName: victimSnap?.name ?? info.victimId,
+      victimTeam: victimSnap?.team ?? 'red',
+      victimCharacterId: victimSnap?.characterId ?? 'assault',
+      weaponId: killerWeaponId,
+      weaponName: info.weaponName,
+      headshot: info.headshot,
+      distanceMeters: Math.round(info.distanceMeters * 10) / 10,
+      killerPos,
+      killerYaw,
+      victimPos: info.victimPos,
+      victimYaw: info.victimYaw,
+    };
+
+    this.lastKillClipByKillerId.set(clip.killerId, clip);
+    this.latestKillClip = clip;
+  }
+
+  private captureOfflinePlayerDeathClip(
+    attackerId: string,
+    attackerName: string,
+    weaponName: string,
+    headshot: boolean,
+    distanceMeters: number,
+    fallbackPos: Vector3 | null
+  ): void {
+    const killerSnap = this.botManager.getActorSnapshot(attackerId);
+    const killerWeaponId = resolveWeaponIdFromName(weaponName) ?? killerSnap?.weaponId ?? 'ak47';
+    const playerPos = this.player.collider.position;
+
+    const clip: KillHighlightClip = {
+      id: `hl_${++this.highlightClipSeq}`,
+      killerId: attackerId,
+      killerName: killerSnap?.name ?? attackerName,
+      killerTeam: killerSnap?.team ?? 'red',
+      killerCharacterId: killerSnap?.characterId ?? 'assault',
+      victimId: 'player',
+      victimName: this.settings.callsign || 'Operator',
+      victimTeam: 'blue',
+      victimCharacterId: this.selectedCharacterId,
+      weaponId: killerWeaponId,
+      weaponName,
+      headshot,
+      distanceMeters: Math.round(distanceMeters * 10) / 10,
+      killerPos: killerSnap
+        ? { x: killerSnap.x, y: killerSnap.y, z: killerSnap.z }
+        : fallbackPos
+          ? { x: fallbackPos.x, y: Math.max(0, fallbackPos.y), z: fallbackPos.z }
+          : { x: playerPos.x + 6, y: Math.max(0, playerPos.y - 0.9), z: playerPos.z + 6 },
+      killerYaw: killerSnap?.yaw ?? 0,
+      victimPos: {
+        x: playerPos.x,
+        y: Math.max(0, playerPos.y - 0.9),
+        z: playerPos.z,
+      },
+      victimYaw: this.player.getYawRad(),
+    };
+
+    this.lastKillClipByKillerId.set(clip.killerId, clip);
+    this.latestKillClip = clip;
+  }
+
+  private captureMultiplayerKillClip(event: NetworkKillFeedEvent): void {
+    const snap = this.mpSnapshot;
+    const localId = snap?.localPlayerId ?? 'player';
+    const killerInfo = snap?.players.find((p) => p.name === event.killerName);
+    const victimInfo = snap?.players.find((p) => p.name === event.victimName);
+
+    const resolvePose = (
+      playerId: string | undefined,
+      fallbackTeam: TeamId
+    ): {
+      id: string;
+      team: TeamId;
+      characterId: CharacterId;
+      weaponId: WeaponId;
+      x: number;
+      y: number;
+      z: number;
+      yaw: number;
+    } | null => {
+      if (!playerId) return null;
+      if (playerId === localId) {
+        return {
+          id: localId,
+          team: fallbackTeam,
+          characterId: this.selectedCharacterId,
+          weaponId: this.weapons.getEquippedGunId(),
+          x: this.player.collider.position.x,
+          y: Math.max(0, this.player.collider.position.y - 0.9),
+          z: this.player.collider.position.z,
+          yaw: this.player.getYawRad(),
+        };
+      }
+      const remoteSnap = this.remoteRenderer.getActorSnapshot(playerId);
+      if (remoteSnap) return remoteSnap;
+      const cached = this.mpActorPoseCache.get(playerId);
+      if (cached) return cached;
+      const mpPlayer = snap?.players.find((p) => p.id === playerId);
+      if (!mpPlayer) return null;
+      return {
+        id: mpPlayer.id,
+        team: mpPlayer.team,
+        characterId: mpPlayer.characterId,
+        weaponId: mpPlayer.weaponId,
+        x: mpPlayer.x,
+        y: mpPlayer.y,
+        z: mpPlayer.z,
+        yaw: mpPlayer.rotY,
+      };
+    };
+
+    const killerPose = resolvePose(killerInfo?.id, event.killerTeam);
+    const victimPose = resolvePose(victimInfo?.id, event.victimTeam);
+    const weaponId = resolveWeaponIdFromName(event.weaponName) ?? killerPose?.weaponId ?? 'ak47';
+
+    const distFallback = Math.max(4, event.distanceMeters || 10);
+    const vPos = victimPose
+      ? { x: victimPose.x, y: victimPose.y, z: victimPose.z }
+      : killerPose
+        ? {
+            x: killerPose.x + Math.sin(killerPose.yaw) * distFallback,
+            y: killerPose.y,
+            z: killerPose.z + Math.cos(killerPose.yaw) * distFallback,
+          }
+        : { x: 0, y: 0, z: 6 };
+    const kPos = killerPose
+      ? { x: killerPose.x, y: killerPose.y, z: killerPose.z }
+      : { x: vPos.x, y: vPos.y, z: vPos.z - distFallback };
+
+    const clip: KillHighlightClip = {
+      id: `hl_${++this.highlightClipSeq}`,
+      killerId: killerInfo?.id ?? event.killerName,
+      killerName: event.killerName,
+      killerTeam: event.killerTeam,
+      killerCharacterId: killerPose?.characterId ?? 'assault',
+      victimId: victimInfo?.id ?? event.victimName,
+      victimName: event.victimName,
+      victimTeam: event.victimTeam,
+      victimCharacterId: victimPose?.characterId ?? 'vanguard',
+      weaponId,
+      weaponName: event.weaponName,
+      headshot: event.headshot,
+      distanceMeters: Math.round((event.distanceMeters || distFallback) * 10) / 10,
+      killerPos: kPos,
+      killerYaw: killerPose?.yaw ?? Math.atan2(vPos.x - kPos.x, vPos.z - kPos.z),
+      victimPos: vPos,
+      victimYaw: victimPose?.yaw ?? 0,
+    };
+
+    this.lastKillClipByKillerId.set(clip.killerId, clip);
+    this.latestKillClip = clip;
+  }
+
+  public startHighlightReplay(mvpId?: string): boolean {
+    if (this.getCurrentMatchPhase() !== 'ended') return false;
+    const clip = resolveMvpHighlightClip(mvpId, this.lastKillClipByKillerId, this.latestKillClip);
+    if (!clip) return false;
+
+    this.cleanupHighlightReplayActors();
+    this.botManager.setBotsVisible(false);
+    this.remoteRenderer.setAvatarsVisible(false);
+    this.weapons.setViewModelVisible(false);
+    this.player.setOrbitPreview(false);
+    this.player.setCanControl(false);
+    this.setMenuShowcaseVisible(false);
+
+    const localId =
+      this.sessionMode === 'multiplayer' && this.mpSnapshot
+        ? this.mpSnapshot.localPlayerId
+        : 'player';
+    const localTeam: TeamId =
+      this.sessionMode === 'multiplayer' && this.mpSnapshot
+        ? (this.mpSnapshot.players.find((p) => p.id === localId)?.team ?? 'blue')
+        : 'blue';
+    const sideColors = resolveSideColors(this.settings.teamColors, localTeam, this.gameMode);
+
+    const killerPalette = createOperatorPalette(this.scene, clip.killerTeam, 'hlKillerPal');
+    const victimPalette = createOperatorPalette(this.scene, clip.victimTeam, 'hlVictimPal');
+    updateOperatorPaletteTeamColor(
+      killerPalette,
+      clip.killerTeam === 'blue' ? sideColors.blueHex : sideColors.redHex
+    );
+    updateOperatorPaletteTeamColor(
+      victimPalette,
+      clip.victimTeam === 'blue' ? sideColors.blueHex : sideColors.redHex
+    );
+
+    const killerRig = buildOperatorRig(this.scene, {
+      id: `hl_killer_${Date.now()}`,
+      team: clip.killerTeam,
+      palette: killerPalette,
+      characterId: clip.killerCharacterId,
+      initialWeaponId: clip.weaponId,
+      buildAllWeapons: false,
+      isPickableHitboxes: false,
+    });
+    killerRig.root.position.set(clip.killerPos.x, clip.killerPos.y, clip.killerPos.z);
+
+    const victimRig = buildOperatorRig(this.scene, {
+      id: `hl_victim_${Date.now()}`,
+      team: clip.victimTeam,
+      palette: victimPalette,
+      characterId: clip.victimCharacterId,
+      initialWeaponId: 'ak47',
+      buildAllWeapons: false,
+      isPickableHitboxes: false,
+    });
+    victimRig.root.position.set(clip.victimPos.x, clip.victimPos.y, clip.victimPos.z);
+    victimRig.root.rotation.y = clip.victimYaw;
+
+    const tracerMat = new StandardMaterial(`hlTracerMat_${Date.now()}`, this.scene);
+    tracerMat.disableLighting = true;
+    tracerMat.emissiveColor = new Color3(2.4, 1.65, 0.45);
+    tracerMat.alpha = 0.95;
+
+    const tracerMesh = MeshBuilder.CreateCylinder(
+      `hlTracer_${Date.now()}`,
+      { height: 1.0, diameter: 0.065, tessellation: 8 },
+      this.scene
+    );
+    tracerMesh.material = tracerMat;
+    tracerMesh.isPickable = false;
+    tracerMesh.checkCollisions = false;
+    tracerMesh.isVisible = false;
+
+    const flashMat = new StandardMaterial(`hlFlashMat_${Date.now()}`, this.scene);
+    flashMat.disableLighting = true;
+    flashMat.emissiveColor = new Color3(2.4, 1.3, 0.35);
+    flashMat.alpha = 0.85;
+
+    const flashMesh = MeshBuilder.CreateSphere(
+      `hlFlash_${Date.now()}`,
+      { diameter: 0.65, segments: 10 },
+      this.scene
+    );
+    flashMesh.material = flashMat;
+    flashMesh.isPickable = false;
+    flashMesh.checkCollisions = false;
+    flashMesh.isVisible = false;
+
+    this.highlightReplay = {
+      isPlaying: true,
+      finished: false,
+      elapsedSec: 0,
+      durationSec: HIGHLIGHT_DURATION_SEC,
+      timeScale: HIGHLIGHT_TIME_SCALE,
+      clip,
+      shotCuePlayed: false,
+      impactCuePlayed: false,
+      killerPalette,
+      victimPalette,
+      killerRig,
+      victimRig,
+      tracerMesh,
+      tracerMat,
+      flashMesh,
+      flashMat,
+      baseFovRad: (this.settings.fovDeg * Math.PI) / 180,
+    };
+
+    this.applyHighlightReplayFrame(0);
+    this.emitHudState(true);
+    return true;
+  }
+
+  public stopHighlightReplay(emitHud = true): void {
+    const wasActive = this.highlightReplay.isPlaying || Boolean(this.highlightReplay.killerRig);
+    this.cleanupHighlightReplayActors();
+    this.highlightReplay.isPlaying = false;
+    if (wasActive) {
+      this.botManager.setBotsVisible(true);
+      this.remoteRenderer.setAvatarsVisible(true);
+      this.player.camera.fov = (this.settings.fovDeg * Math.PI) / 180;
+    }
+    if (emitHud) {
+      this.emitHudState(true);
+    }
+  }
+
+  private cleanupHighlightReplayActors(): void {
+    if (this.highlightReplay.killerRig) {
+      this.highlightReplay.killerRig.root.dispose();
+      this.highlightReplay.killerRig.bodyMat.dispose();
+      this.highlightReplay.killerRig.headMat.dispose();
+      this.highlightReplay.killerRig = null;
+    }
+    if (this.highlightReplay.victimRig) {
+      this.highlightReplay.victimRig.root.dispose();
+      this.highlightReplay.victimRig.bodyMat.dispose();
+      this.highlightReplay.victimRig.headMat.dispose();
+      this.highlightReplay.victimRig = null;
+    }
+    this.highlightReplay.killerPalette?.dispose();
+    this.highlightReplay.killerPalette = null;
+    this.highlightReplay.victimPalette?.dispose();
+    this.highlightReplay.victimPalette = null;
+    this.highlightReplay.tracerMesh?.dispose();
+    this.highlightReplay.tracerMesh = null;
+    this.highlightReplay.tracerMat?.dispose();
+    this.highlightReplay.tracerMat = null;
+    this.highlightReplay.flashMesh?.dispose();
+    this.highlightReplay.flashMesh = null;
+    this.highlightReplay.flashMat?.dispose();
+    this.highlightReplay.flashMat = null;
+  }
+
+  private updateHighlightReplay(dt: number): void {
+    if (!this.highlightReplay.isPlaying || !this.highlightReplay.clip) return;
+    this.highlightReplay.elapsedSec += dt;
+    const elapsed = this.highlightReplay.elapsedSec;
+    const timeline = evaluateHighlightTimeline(
+      elapsed,
+      this.highlightReplay.durationSec,
+      this.highlightReplay.timeScale
+    );
+
+    if (timeline.hasFired && !this.highlightReplay.shotCuePlayed) {
+      this.highlightReplay.shotCuePlayed = true;
+      if (this.highlightReplay.clip.weaponId === 'knife') {
+        this.audio.playKnifeSlash();
+      } else {
+        this.audio.playGunshot(this.highlightReplay.clip.weaponId);
+      }
+    }
+    if (timeline.hasImpacted && !this.highlightReplay.impactCuePlayed) {
+      this.highlightReplay.impactCuePlayed = true;
+      this.audio.playHitMarker(this.highlightReplay.clip.headshot);
+      this.audio.playKillConfirmation();
+    }
+
+    this.applyHighlightReplayFrame(elapsed);
+
+    if (elapsed >= this.highlightReplay.durationSec) {
+      this.highlightReplay.isPlaying = false;
+      this.highlightReplay.finished = true;
+      this.highlightReplay.elapsedSec = this.highlightReplay.durationSec;
+      this.cleanupHighlightReplayActors();
+      this.botManager.setBotsVisible(true);
+      this.remoteRenderer.setAvatarsVisible(true);
+      this.player.camera.fov = (this.settings.fovDeg * Math.PI) / 180;
+      this.emitHudState(true);
+    }
+  }
+
+  private applyHighlightReplayFrame(elapsedSec: number): void {
+    const clip = this.highlightReplay.clip;
+    if (!clip) return;
+    const timeline = evaluateHighlightTimeline(
+      elapsedSec,
+      this.highlightReplay.durationSec,
+      this.highlightReplay.timeScale
+    );
+    const sample = computeHighlightPoseVectors(clip, timeline);
+
+    this.player.camera.position.set(sample.cameraPos.x, sample.cameraPos.y, sample.cameraPos.z);
+    this.player.camera.setTarget(
+      new Vector3(sample.cameraTarget.x, sample.cameraTarget.y, sample.cameraTarget.z)
+    );
+    this.player.camera.fov = this.highlightReplay.baseFovRad * sample.fovScale;
+
+    const killerRig = this.highlightReplay.killerRig;
+    if (killerRig) {
+      killerRig.root.rotation.y = sample.aimYaw;
+      const recoilKick = timeline.hasFired && timeline.progress < 0.25
+        ? Math.sin(((timeline.progress - 0.1) / 0.15) * Math.PI) * 0.14
+        : 0;
+      killerRig.upperBodyPivot.rotation.x = sample.aimPitch - recoilKick;
+      killerRig.muzzleFlash.isVisible = timeline.hasFired && timeline.progress < 0.18;
+    }
+
+    const tracer = this.highlightReplay.tracerMesh;
+    if (tracer) {
+      if (timeline.hasFired && !timeline.hasImpacted && clip.weaponId !== 'knife') {
+        tracer.isVisible = true;
+        const muzzleVec = new Vector3(sample.muzzlePos.x, sample.muzzlePos.y, sample.muzzlePos.z);
+        const impactVec = new Vector3(sample.impactPos.x, sample.impactPos.y, sample.impactPos.z);
+        const bulletPos = new Vector3(
+          sample.projectilePos.x,
+          sample.projectilePos.y,
+          sample.projectilePos.z
+        );
+        const dir = impactVec.subtract(muzzleVec);
+        const totalLen = Math.max(0.5, dir.length());
+        const segLen = Math.min(2.6, Math.max(0.65, totalLen * 0.24));
+        tracer.scaling.set(1, segLen, 1);
+        tracer.position.copyFrom(bulletPos);
+        tracer.lookAt(impactVec);
+        tracer.rotate(new Vector3(1, 0, 0), Math.PI * 0.5);
+      } else {
+        tracer.isVisible = false;
+      }
+    }
+
+    const flashMesh = this.highlightReplay.flashMesh;
+    const flashMat = this.highlightReplay.flashMat;
+    if (flashMesh && flashMat) {
+      if (timeline.hasImpacted && timeline.impactProgress < 0.45) {
+        const burstT = timeline.impactProgress / 0.45;
+        flashMesh.isVisible = true;
+        flashMesh.position.set(sample.impactPos.x, sample.impactPos.y, sample.impactPos.z);
+        flashMesh.scaling.setAll(0.35 + burstT * 1.45);
+        flashMat.alpha = Math.max(0, 0.85 * (1 - burstT));
+      } else {
+        flashMesh.isVisible = false;
+      }
+    }
+
+    const victimRig = this.highlightReplay.victimRig;
+    if (victimRig) {
+      if (timeline.hasImpacted) {
+        const fallT = Math.min(1, timeline.impactProgress * 1.35);
+        const easedFall = 1 - Math.pow(1 - fallT, 2);
+        victimRig.pivot.rotation.x = easedFall * Math.PI * 0.46;
+        victimRig.pivot.rotation.z = easedFall * 0.24;
+        victimRig.pivot.position.y = -easedFall * 0.08;
+        victimRig.legLPivot.rotation.x = -0.35 * easedFall;
+        victimRig.legRPivot.rotation.x = 0.28 * easedFall;
+        const glowDecay = Math.max(0, 1 - timeline.impactProgress * 2.2);
+        victimRig.bodyMat.emissiveColor = new Color3(0.9 * glowDecay, 0.35 * glowDecay, 0.15 * glowDecay);
+        victimRig.headMat.emissiveColor = new Color3(1.1 * glowDecay, 0.3 * glowDecay, 0.18 * glowDecay);
+      } else {
+        victimRig.pivot.rotation.set(0, 0, 0);
+        victimRig.pivot.position.set(0, 0, 0);
+      }
+    }
   }
 
   private onResize = (): void => {
     this.engine.resize();
   };
 
+  private clearInitTimers(): void {
+    if (this.initFallbackTimer !== null) {
+      window.clearTimeout(this.initFallbackTimer);
+      this.initFallbackTimer = null;
+    }
+    if (this.initRafId !== null) {
+      window.cancelAnimationFrame(this.initRafId);
+      this.initRafId = null;
+    }
+  }
+
   private onWebGLContextLost = (e: Event): void => {
     e.preventDefault();
+    this.weapons.cancelTransientActions();
+    this.player.exitPointerLock();
     this.callbacks.onContextLost(true);
   };
 
   private onWebGLContextRestored = (): void => {
+    if (this.disposed) return;
+    this.engine.resize(true);
+    this.scene.setRenderingAutoClearDepthStencil(1, false, false, false);
+    this.scene.resetCachedMaterial();
+    this.scene.markAllMaterialsAsDirty(Constants.MATERIAL_AllDirtyFlag);
+
+    if (this.renderPipeline) {
+      this.renderPipeline.dispose();
+      this.renderPipeline = null;
+    }
+    this.setupPostProcessing();
+
+    if (this.glowLayer) {
+      this.glowLayer.dispose();
+      this.glowLayer = null;
+    }
+    this.applyGraphicsQuality(this.settings.graphicsQuality);
+
+    const def = this.mapManager.getCurrentDefinition();
+    this.applyMapColorGrading(def.exposure, def.contrast);
+    this.syncTeamColorsToScene();
+    this.updateMenuShowcaseVisuals();
+
     this.callbacks.onContextLost(false);
+    this.emitHudState(true);
   };
 
   private bindLifecycleEvents(): void {
@@ -2870,10 +3904,7 @@ export class EngineManager {
 
   public dispose(): void {
     this.disposed = true;
-    if (this.initFallbackTimer !== null) {
-      window.clearTimeout(this.initFallbackTimer);
-      this.initFallbackTimer = null;
-    }
+    this.clearInitTimers();
     window.removeEventListener('resize', this.onResize);
     this.canvas.removeEventListener('webglcontextlost', this.onWebGLContextLost);
     this.canvas.removeEventListener('webglcontextrestored', this.onWebGLContextRestored);

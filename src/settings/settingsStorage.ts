@@ -3,6 +3,7 @@ import {
   normalizeCharacterId,
   normalizeGunId,
   normalizeKnifeCharmId,
+  normalizeTacticalEquipmentId,
 } from '../game/loadoutRules';
 import {
   GameSettings,
@@ -49,6 +50,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   selectedCharacterId: 'assault',
   selectedGunId: 'ak47',
   knifeCharmId: 'tactical_tag',
+  tacticalEquipmentId: 'smoke_grenade',
   slideEnabled: true,
   slideInputMode: 'tap',
   slidePostStance: 'stand',
@@ -76,6 +78,34 @@ function sanitizeCallsign(raw: unknown, fallback: string): string {
   return cleaned.length > 0 ? cleaned : fallback;
 }
 
+function resolveLegacyVsCurrent<T>(
+  currentValid: boolean,
+  currentValue: T,
+  legacyValid: boolean,
+  legacyValue: T,
+  fallbackValue: T,
+  defaultValue: T
+): T {
+  if (currentValid && legacyValid) {
+    if (currentValue === legacyValue) {
+      return currentValue;
+    }
+    if (currentValue !== fallbackValue && legacyValue === fallbackValue) {
+      return currentValue;
+    }
+    if (currentValue !== defaultValue && legacyValue === defaultValue) {
+      return currentValue;
+    }
+    if (legacyValue !== defaultValue && currentValue === defaultValue) {
+      return legacyValue;
+    }
+    return currentValue;
+  }
+  if (currentValid) return currentValue;
+  if (legacyValid) return legacyValue;
+  return fallbackValue;
+}
+
 export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_SETTINGS): GameSettings {
   const fallbackCrosshair = validateCrosshairSettingsMap(
     fallback.crosshair,
@@ -85,6 +115,10 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
   if (!raw || typeof raw !== 'object') {
     return {
       ...fallback,
+      tacticalEquipmentId: normalizeTacticalEquipmentId(
+        fallback.tacticalEquipmentId,
+        'smoke_grenade'
+      ),
       sfxEnabled: fallback.sfxEnabled ?? true,
       crosshair: fallbackCrosshair,
       teamColors: fallbackTeamColors,
@@ -103,17 +137,14 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
       : 'tap';
   const rawInputValid = VALID_SLIDE_TRIGGER.has(obj.slideInputMode as SlideTriggerMode);
   const rawLegacyTriggerValid = VALID_SLIDE_TRIGGER.has(obj.slideTrigger as SlideTriggerMode);
-  let resolvedInputMode: SlideTriggerMode = fallbackInputMode;
-  if (rawInputValid && rawLegacyTriggerValid) {
-    resolvedInputMode =
-      obj.slideTrigger !== fallback.slideTrigger && obj.slideInputMode === fallbackInputMode
-        ? (obj.slideTrigger as SlideTriggerMode)
-        : (obj.slideInputMode as SlideTriggerMode);
-  } else if (rawInputValid) {
-    resolvedInputMode = obj.slideInputMode as SlideTriggerMode;
-  } else if (rawLegacyTriggerValid) {
-    resolvedInputMode = obj.slideTrigger as SlideTriggerMode;
-  }
+  const resolvedInputMode = resolveLegacyVsCurrent<SlideTriggerMode>(
+    rawInputValid,
+    obj.slideInputMode as SlideTriggerMode,
+    rawLegacyTriggerValid,
+    obj.slideTrigger as SlideTriggerMode,
+    fallbackInputMode,
+    DEFAULT_SETTINGS.slideInputMode
+  );
 
   const fallbackPostStance: PostSlideStance = VALID_POST_SLIDE.has(fallback.slidePostStance)
     ? fallback.slidePostStance
@@ -122,17 +153,14 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
       : 'stand';
   const rawPostValid = VALID_POST_SLIDE.has(obj.slidePostStance as PostSlideStance);
   const rawLegacyPostValid = VALID_POST_SLIDE.has(obj.postSlideStance as PostSlideStance);
-  let resolvedPostStance: PostSlideStance = fallbackPostStance;
-  if (rawPostValid && rawLegacyPostValid) {
-    resolvedPostStance =
-      obj.postSlideStance !== fallback.postSlideStance && obj.slidePostStance === fallbackPostStance
-        ? (obj.postSlideStance as PostSlideStance)
-        : (obj.slidePostStance as PostSlideStance);
-  } else if (rawPostValid) {
-    resolvedPostStance = obj.slidePostStance as PostSlideStance;
-  } else if (rawLegacyPostValid) {
-    resolvedPostStance = obj.postSlideStance as PostSlideStance;
-  }
+  const resolvedPostStance = resolveLegacyVsCurrent<PostSlideStance>(
+    rawPostValid,
+    obj.slidePostStance as PostSlideStance,
+    rawLegacyPostValid,
+    obj.postSlideStance as PostSlideStance,
+    fallbackPostStance,
+    DEFAULT_SETTINGS.slidePostStance
+  );
 
   const fallbackJumpCancel =
     typeof fallback.slideJumpCancel === 'boolean'
@@ -140,18 +168,14 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
       : (fallback.jumpCancelsSlide ?? true);
   const rawJumpValid = typeof obj.slideJumpCancel === 'boolean';
   const rawLegacyJumpValid = typeof obj.jumpCancelsSlide === 'boolean';
-  let resolvedJumpCancel = fallbackJumpCancel;
-  if (rawJumpValid && rawLegacyJumpValid) {
-    resolvedJumpCancel =
-      obj.jumpCancelsSlide !== fallback.jumpCancelsSlide &&
-      obj.slideJumpCancel === fallbackJumpCancel
-        ? (obj.jumpCancelsSlide as boolean)
-        : (obj.slideJumpCancel as boolean);
-  } else if (rawJumpValid) {
-    resolvedJumpCancel = obj.slideJumpCancel as boolean;
-  } else if (rawLegacyJumpValid) {
-    resolvedJumpCancel = obj.jumpCancelsSlide as boolean;
-  }
+  const resolvedJumpCancel = resolveLegacyVsCurrent<boolean>(
+    rawJumpValid,
+    obj.slideJumpCancel as boolean,
+    rawLegacyJumpValid,
+    obj.jumpCancelsSlide as boolean,
+    fallbackJumpCancel,
+    DEFAULT_SETTINGS.slideJumpCancel
+  );
 
   const fallbackCameraTilt =
     typeof fallback.slideCameraTilt === 'boolean'
@@ -163,6 +187,7 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     1,
     fallbackCameraTilt ? 1.0 : 0
   );
+  const fallbackTiltPositive = fallbackCameraIntensity > 0;
   const rawTiltValid = typeof obj.slideCameraTilt === 'boolean';
   const rawIntensityValid =
     typeof obj.slideCameraIntensity === 'number' && Number.isFinite(obj.slideCameraIntensity);
@@ -171,17 +196,27 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
   let resolvedCameraTilt = fallbackCameraTilt;
   let resolvedCameraIntensity = fallbackCameraIntensity;
   if (rawTiltValid && rawIntensityValid) {
-    if (obj.slideCameraTilt !== fallbackCameraTilt && obj.slideCameraIntensity === fallbackCameraIntensity) {
-      resolvedCameraTilt = obj.slideCameraTilt as boolean;
+    const rawTilt = obj.slideCameraTilt as boolean;
+    const rawIntensityPositive = clampedIntensity > 0;
+    if (rawTilt === rawIntensityPositive) {
+      resolvedCameraTilt = rawTilt;
+      resolvedCameraIntensity = resolvedCameraTilt
+        ? (clampedIntensity > 0 ? clampedIntensity : (fallbackCameraIntensity > 0 ? fallbackCameraIntensity : 1.0))
+        : 0;
+    } else if (rawTilt !== fallbackCameraTilt && rawIntensityPositive === fallbackTiltPositive) {
+      resolvedCameraTilt = rawTilt;
       resolvedCameraIntensity = resolvedCameraTilt ? (fallbackCameraIntensity > 0 ? fallbackCameraIntensity : 1.0) : 0;
-    } else if (
-      obj.slideCameraIntensity !== fallbackCameraIntensity &&
-      obj.slideCameraTilt === fallbackCameraTilt
-    ) {
+    } else if (rawTilt !== DEFAULT_SETTINGS.slideCameraTilt && clampedIntensity === DEFAULT_SETTINGS.slideCameraIntensity) {
+      resolvedCameraTilt = rawTilt;
+      resolvedCameraIntensity = resolvedCameraTilt ? 1.0 : 0;
+    } else if (clampedIntensity !== DEFAULT_SETTINGS.slideCameraIntensity && rawTilt === DEFAULT_SETTINGS.slideCameraTilt) {
+      resolvedCameraIntensity = clampedIntensity;
+      resolvedCameraTilt = clampedIntensity > 0;
+    } else if (clampedIntensity !== fallbackCameraIntensity && rawTilt === fallbackCameraTilt) {
       resolvedCameraIntensity = clampedIntensity;
       resolvedCameraTilt = clampedIntensity > 0;
     } else {
-      resolvedCameraTilt = obj.slideCameraTilt as boolean;
+      resolvedCameraTilt = rawTilt;
       resolvedCameraIntensity = resolvedCameraTilt ? (clampedIntensity > 0 ? clampedIntensity : 1.0) : 0;
     }
   } else if (rawTiltValid) {
@@ -221,6 +256,10 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     ),
     selectedGunId: normalizeGunId(obj.selectedGunId, fallback.selectedGunId ?? 'ak47'),
     knifeCharmId: normalizeKnifeCharmId(obj.knifeCharmId, fallback.knifeCharmId ?? 'tactical_tag'),
+    tacticalEquipmentId: normalizeTacticalEquipmentId(
+      obj.tacticalEquipmentId,
+      fallback.tacticalEquipmentId ?? 'smoke_grenade'
+    ),
     slideEnabled: typeof obj.slideEnabled === 'boolean' ? obj.slideEnabled : (fallback.slideEnabled ?? true),
     slideInputMode: resolvedInputMode,
     slidePostStance: resolvedPostStance,

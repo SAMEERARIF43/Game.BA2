@@ -1,4 +1,4 @@
-import { type Client, CloseCode, Room, ServerError } from '@colyseus/core';
+import { type Client, Room, ServerError } from '@colyseus/core';
 import {
   isValidMapId,
   SERVER_MAP_LAYOUTS,
@@ -13,11 +13,6 @@ import {
   type PlayerSchemaType,
 } from '../schema/MatchState.ts';
 import { validateAuthoritativeHit } from '../hitValidation.ts';
-import {
-  validatePlayerShot,
-  validatePlayerMovement,
-  type PlayerValidationState,
-} from '../validation/ammoValidation.ts';
 import {
   CHAT_RATE_LIMIT_MS,
   type ChatMessage,
@@ -63,13 +58,10 @@ export interface PublicRoomSummary {
   roomCode: string;
   roomName: string;
   mapId: string;
-  mode: GameMode;
   phase: string;
   playerCount: number;
   maxPlayers: number;
   hasPassword: boolean;
-  botCount: number;
-  region: string;
 }
 
 interface BotBrain {
@@ -86,16 +78,6 @@ export function getPublicRoomSummary(code: string): PublicRoomSummary | null {
   const room = ACTIVE_ROOMS.get(normalized);
   if (!room) return null;
   return room.getPublicSummary();
-}
-
-export function getAllPublicRooms(): PublicRoomSummary[] {
-  const list: PublicRoomSummary[] = [];
-  ACTIVE_ROOMS.forEach((room) => {
-    if (room.state.phase === 'lobby' && !room.state.hasPassword) {
-      list.push(room.getPublicSummary());
-    }
-  });
-  return list;
 }
 
 function generateUniqueRoomCode(): string {
@@ -153,7 +135,6 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
   private equippedGunByPlayer = new Map<string, string>();
   private queuedGunByPlayer = new Map<string, string>();
   private bombHoldingByPlayer = new Map<string, boolean>();
-  private playerValidationStates = new Map<string, PlayerValidationState>();
   private botBrains = new Map<string, BotBrain>();
   private killFeedSeq = 0;
   private pingSeq = 0;
@@ -235,13 +216,10 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       roomCode: this.state.roomCode,
       roomName: this.state.roomName,
       mapId: this.state.mapId,
-      mode: normalizeGameMode(this.state.mode, 'tdm'),
       phase: this.state.phase,
       playerCount: this.clients.length,
       maxPlayers: this.maxClients,
       hasPassword: this.state.hasPassword,
-      botCount: this.state.botCount,
-      region: 'US-East',
     };
   }
 
@@ -304,46 +282,25 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
     this.emitSystemChat(`${player.name} joined the room (${player.team.toUpperCase()}).`);
   }
 
-  public async onLeave(client: Client, code?: number | boolean): Promise<void> {
+  public onLeave(client: Client): void {
     const leaving = this.state.players.get(client.sessionId);
-    if (!leaving) return;
-
-    const consented =
-      typeof code === 'boolean'
-        ? code
-        : code === undefined || code === CloseCode.CONSENTED;
-
-    if (consented) {
-      this.handlePlayerDeparture(client.sessionId);
-    } else {
-      try {
-        await this.allowReconnection(client, 30);
-        return;
-      } catch {
-        this.handlePlayerDeparture(client.sessionId);
-      }
-    }
-  }
-
-  private handlePlayerDeparture(sessionId: string): void {
-    const leaving = this.state.players.get(sessionId);
     if (leaving) {
-      this.state.players.delete(sessionId);
+      this.state.players.delete(client.sessionId);
       this.emitSystemChat(`${leaving.name} left the room.`);
     }
-    this.spawnProtectionUntil.delete(sessionId);
-    this.lastShotAt.delete(sessionId);
-    this.lastPingAt.delete(sessionId);
-    this.lastChatAt.delete(sessionId);
-    this.equippedGunByPlayer.delete(sessionId);
-    this.queuedGunByPlayer.delete(sessionId);
-    this.bombHoldingByPlayer.delete(sessionId);
-    if (this.state.bombCarrierId === sessionId && this.state.bombPhase === 'unplanted') {
+    this.spawnProtectionUntil.delete(client.sessionId);
+    this.lastShotAt.delete(client.sessionId);
+    this.lastPingAt.delete(client.sessionId);
+    this.lastChatAt.delete(client.sessionId);
+    this.equippedGunByPlayer.delete(client.sessionId);
+    this.queuedGunByPlayer.delete(client.sessionId);
+    this.bombHoldingByPlayer.delete(client.sessionId);
+    if (this.state.bombCarrierId === client.sessionId && this.state.bombPhase === 'unplanted') {
       this.reassignBombCarrier();
     }
 
     // Host migration if host disconnected
-    if (this.state.hostId === sessionId) {
+    if (this.state.hostId === client.sessionId) {
       let nextHost: PlayerSchemaType | null = null;
       this.state.players.forEach((p) => {
         if (!nextHost && !p.isBot) {
@@ -363,10 +320,6 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
       } else {
         this.state.hostId = '';
       }
-    }
-
-    if (this.clients.length === 0) {
-      ACTIVE_ROOMS.delete(this.roomId);
     }
   }
 
@@ -411,10 +364,6 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
   }
 
   private registerMessageHandlers(): void {
-    this.onMessage('ping', (client) => {
-      client.send('pong');
-    });
-
     this.onMessage('switch_team', (client) => {
       if (this.state.phase !== 'lobby') return;
       const p = this.state.players.get(client.sessionId);
@@ -669,30 +618,12 @@ export class MatchRoom extends Room<{ state: MatchStateType }> {
 
         const weapon = SERVER_WEAPONS[requestedWeaponId];
         if (!weapon) return;
-
-        if (!isValidMapId(this.state.mapId)) {
+        const now = Date.now();
+        const prevShot = this.lastShotAt.get(shooter.id) ?? 0;
+        if (now - prevShot < weapon.minFireIntervalMs * 0.72) {
           return;
         }
-
-        let vState = this.playerValidationStates.get(client.sessionId);
-        if (!vState) {
-          vState = {
-            ammo: {},
-            lastShotAt: {},
-            lastMoveTime: Date.now(),
-            lastX: shooter.x,
-            lastY: shooter.y,
-            lastZ: shooter.z,
-            suspiciousCount: 0,
-          };
-          this.playerValidationStates.set(client.sessionId, vState);
-        }
-
-        const shotRes = validatePlayerShot(vState, weapon.id);
-        if (!shotRes.valid) {
-          return;
-        }
-        this.lastShotAt.set(shooter.id, Date.now());
+        this.lastShotAt.set(shooter.id, now);
 
         // Broadcast visual muzzle/tracer to all other clients
         this.broadcast(

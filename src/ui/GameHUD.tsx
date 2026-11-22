@@ -13,9 +13,12 @@ import {
   HudState,
   KNIFE_CHARMS,
   KnifeCharmId,
+  TACTICAL_EQUIPMENT,
+  TacticalEquipmentId,
   TeamColorsConfig,
   WEAPONS,
 } from '../game/types';
+import { normalizeTacticalEquipmentId } from '../game/loadoutRules';
 import {
   CHAT_FADE_MS,
   CHAT_MAX_LENGTH,
@@ -44,6 +47,7 @@ interface GameHUDProps {
   teamColors?: Partial<TeamColorsConfig>;
   onSelectGun?: (id: GunId) => void;
   onSelectKnifeCharm?: (id: KnifeCharmId) => void;
+  onSelectTacticalEquipment?: (id: TacticalEquipmentId) => void;
   onRespawn?: () => void;
   isCustomMatch?: boolean;
   chatMessages?: ChatMessage[];
@@ -68,6 +72,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   teamColors,
   onSelectGun,
   onSelectKnifeCharm,
+  onSelectTacticalEquipment,
   onRespawn,
   isCustomMatch = false,
   chatMessages = [],
@@ -172,16 +177,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           : 'Sprint';
   const accuracyPct =
     hud.shotsFired > 0 ? Math.round((hud.shotsHit / hud.shotsFired) * 100) : 0;
+  const activeTacticalId = normalizeTacticalEquipmentId(hud.tacticalEquipmentId);
+  const queuedTacticalId = normalizeTacticalEquipmentId(
+    hud.queuedTacticalEquipmentId ?? activeTacticalId
+  );
+  const activeTacticalCfg = TACTICAL_EQUIPMENT[activeTacticalId];
+  const tacticalCharges = hud.tacticalCharges ?? activeTacticalCfg.chargesPerSpawn;
+  const flashIntensity = hud.flashBlindIntensity ?? 0;
 
   const now = performance.now();
   const activeKillFeed = hud.match.killFeed
-    .filter((entry) => {
-      const age =
-        entry.timestamp > 1_000_000_000
-          ? Math.max(0, Date.now() - entry.timestamp)
-          : Math.max(0, now - entry.timestamp);
-      return age < 4000;
-    })
+    .filter((entry) => now - entry.timestamp < 4500)
     .slice(0, 5);
   const damageAge = now - hud.lastDamageTimestamp;
   const damageRecent = hud.lastDamageTimestamp > 0 && damageAge < 320;
@@ -411,6 +417,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           className="heartbeat-vignette fixed inset-0 pointer-events-none transition-opacity duration-300"
           style={{
             boxShadow: 'inset 0 0 140px 48px rgba(239, 68, 68, 0.42)',
+          }}
+        />
+      )}
+
+      {/* Flashbang Concussive Blindness Overlay */}
+      {hud.isAlive && hud.match.phase === 'playing' && flashIntensity > 0.01 && (
+        <div
+          data-flash-blind-overlay="true"
+          className="pointer-events-none fixed inset-0 z-30 bg-slate-50"
+          style={{
+            opacity: Math.min(0.95, flashIntensity),
           }}
         />
       )}
@@ -733,6 +750,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           teamColors={teamColors}
           onSelectGun={(gunId) => onSelectGun?.(gunId)}
           onSelectKnifeCharm={onSelectKnifeCharm}
+          onSelectTacticalEquipment={onSelectTacticalEquipment}
           onRespawn={() => onRespawn?.()}
         />
       )}
@@ -883,25 +901,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           </div>
         )}
 
-        <div className="flex items-center gap-2">
-          {showFps && (
-            <div className="border border-slate-400/20 bg-slate-950/75 px-2.5 py-1 font-mono-tabular text-[10px] text-slate-300 backdrop-blur-sm">
-              FPS <span className="font-semibold text-emerald-300">{hud.fps}</span>
-            </div>
-          )}
-          <div className="flex items-center gap-1.5 border border-slate-400/20 bg-slate-950/75 px-2.5 py-1 font-mono-tabular text-[10px] text-slate-300 backdrop-blur-sm">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                (hud.ping ?? 24) < 60
-                  ? 'bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.8)]'
-                  : (hud.ping ?? 24) <= 120
-                    ? 'bg-amber-400 shadow-[0_0_6px_rgba(245,158,11,0.8)]'
-                    : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)] animate-pulse'
-              }`}
-            />
-            <span>{hud.ping ?? 24}ms</span>
+        {showFps && (
+          <div className="border border-slate-400/20 bg-slate-950/75 px-2.5 py-1 font-mono-tabular text-[10px] text-slate-300 backdrop-blur-sm">
+            FPS <span className="font-semibold text-emerald-300">{hud.fps}</span>
           </div>
-        </div>
+        )}
 
         {hud.killstreakBanner && (
           <div
@@ -926,7 +930,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* Top-Right Kill Feed Overlay */}
       {!hud.showScoreboard && activeKillFeed.length > 0 && (
         <div
-          className="pointer-events-none absolute right-4 top-28 z-10 flex w-[min(420px,calc(100vw-2rem))] flex-col items-end gap-1.5 md:top-4"
+          className="absolute right-4 top-28 z-10 flex w-[min(420px,calc(100vw-2rem))] flex-col items-end gap-1.5 md:top-4"
           data-killfeed-overlay="true"
           role="log"
           aria-label="Recent eliminations"
@@ -934,13 +938,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           aria-relevant="additions"
         >
           {activeKillFeed.map((entry) => {
-            const age =
-              entry.timestamp > 1_000_000_000
-                ? Math.max(0, Date.now() - entry.timestamp)
-                : Math.max(0, now - entry.timestamp);
-            const isExiting = age >= 3200;
-            const exitProgress = Math.min(1, Math.max(0, (age - 3200) / 800));
-            const opacity = Math.min(1, Math.max(0, (4000 - age) / 800));
+            const age = Math.max(0, now - entry.timestamp);
             const killerHex =
               mode === 'ffa'
                 ? localParticipantName && entry.killerName === localParticipantName
@@ -968,18 +966,13 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <div
                 key={entry.id}
                 data-killfeed-entry={entry.id}
-                data-killfeed-status={isExiting ? 'exit' : 'active'}
-                className={`killfeed-item flex max-w-full items-center justify-end gap-2 border px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md shadow-black/25 backdrop-blur-md ${
+                className={`flex max-w-full items-center justify-end gap-2 border px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md shadow-black/25 backdrop-blur-md transition-opacity duration-150 ${
                   isLocalInvolved
-                    ? 'border-amber-400/55 bg-slate-900/95 shadow-amber-400/10'
+                    ? 'border-amber-400/55 bg-slate-900/90'
                     : 'border-white/15 bg-slate-950/85'
-                } ${isExiting ? 'killfeed-item-exit' : 'killfeed-item-enter'}`}
+                }`}
                 style={{
-                  opacity,
-                  transform: isExiting
-                    ? `translate3d(${exitProgress * 20}px, 0, 0) scale(${1 - exitProgress * 0.04})`
-                    : undefined,
-                  willChange: 'transform, opacity',
+                  opacity: Math.min(1, Math.max(0, (4500 - age) / 650)),
                 }}
               >
                 <span
@@ -1530,7 +1523,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           )}
 
           <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-white/10 pt-2 text-xs">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <div
                 className={`border px-2 py-0.5 font-mono-tabular ${
                   hud.activeWeapon.slot === 1
@@ -1549,11 +1542,24 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               >
                 [{formatKeyCode(keybindings.slotKnife)}] Knife · [{formatKeyCode(keybindings.quickMelee)}]
               </div>
+              <div
+                data-tactical-slot-hud={activeTacticalId}
+                className={`border px-2 py-0.5 font-mono-tabular ${
+                  tacticalCharges > 0
+                    ? 'border-sky-400/45 bg-sky-500/15 text-sky-200'
+                    : 'border-white/10 text-slate-500'
+                }`}
+              >
+                [{formatKeyCode(keybindings.useTactical)}] {activeTacticalCfg.shortName} ×{tacticalCharges}
+              </div>
             </div>
 
-            {hud.queuedGunId !== hud.equippedGunId && (
+            {(hud.queuedGunId !== hud.equippedGunId || queuedTacticalId !== activeTacticalId) && (
               <span className="border border-sky-400/35 bg-sky-500/15 px-1.5 py-0.5 font-mono-tabular text-[10px] font-semibold text-sky-300">
-                NEXT: {WEAPONS[hud.queuedGunId].shortName}
+                NEXT:{' '}
+                {hud.queuedGunId !== hud.equippedGunId
+                  ? WEAPONS[hud.queuedGunId].shortName
+                  : TACTICAL_EQUIPMENT[queuedTacticalId].shortName}
               </span>
             )}
           </div>
@@ -1589,13 +1595,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-5">
+            <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-6">
               {[
                 {
                   key: `${formatKeyCode(keybindings.slotGun)} / ${formatKeyCode(keybindings.slotKnife)}`,
                   label: 'Gun & Knife',
                 },
                 { key: formatKeyCode(keybindings.quickMelee), label: 'Quick Knife' },
+                { key: formatKeyCode(keybindings.useTactical), label: 'Tactical' },
                 {
                   key: `${formatKeyCode(keybindings.ping)} / MMB`,
                   label: 'Team Ping',

@@ -7,6 +7,8 @@ import {
   KNIFE_CHARM_IDS,
   KnifeCharmId,
   MatchPhase,
+  TACTICAL_EQUIPMENT_IDS,
+  TacticalEquipmentId,
   WEAPON_IDS,
   WeaponId,
 } from './types';
@@ -18,6 +20,7 @@ const GUN_ID_SET = new Set<string>(GUN_IDS);
 const WEAPON_ID_SET = new Set<string>(WEAPON_IDS);
 const CHARM_ID_SET = new Set<string>(KNIFE_CHARM_IDS);
 const CHARACTER_ID_SET = new Set<string>(CHARACTER_IDS);
+const TACTICAL_ID_SET = new Set<string>(TACTICAL_EQUIPMENT_IDS);
 
 export interface LoadoutSelectionState {
   equippedGunId: GunId;
@@ -34,7 +37,7 @@ export interface GunSelectionOutcome {
 
 export interface CharacterSelectionOutcome {
   characterId: CharacterId;
-  signatureGunId: GunId;
+  signatureGunId: GunId | null;
   gunOutcome: GunSelectionOutcome | null;
 }
 
@@ -52,6 +55,10 @@ export function isKnifeCharmId(value: unknown): value is KnifeCharmId {
 
 export function isCharacterId(value: unknown): value is CharacterId {
   return typeof value === 'string' && CHARACTER_ID_SET.has(value);
+}
+
+export function isTacticalEquipmentId(value: unknown): value is TacticalEquipmentId {
+  return typeof value === 'string' && TACTICAL_ID_SET.has(value);
 }
 
 export function normalizeGunId(value: unknown, fallback: GunId = 'ak47'): GunId {
@@ -74,6 +81,13 @@ export function normalizeCharacterId(
   fallback: CharacterId = 'assault'
 ): CharacterId {
   return isCharacterId(value) ? value : fallback;
+}
+
+export function normalizeTacticalEquipmentId(
+  value: unknown,
+  fallback: TacticalEquipmentId = 'smoke_grenade'
+): TacticalEquipmentId {
+  return isTacticalEquipmentId(value) ? value : fallback;
 }
 
 export function getSignatureGunForCharacter(characterId: CharacterId): GunId {
@@ -139,10 +153,18 @@ export function applyCharacterSelection(
   isAlive: boolean
 ): CharacterSelectionOutcome {
   const characterId = normalizeCharacterId(nextCharacterId);
-  const signatureGunId = getSignatureGunForCharacter(characterId);
-  const gunOutcome = equipSignatureGun
-    ? applyGunSelection(loadout, signatureGunId, phase, isAlive)
-    : null;
+  const rawSignatureGunId = (
+    CHARACTERS[characterId] as { signatureGunId?: unknown } | undefined
+  )?.signatureGunId;
+  const signatureGunId = isGunId(rawSignatureGunId) ? rawSignatureGunId : null;
+  const alreadyHasSignatureGun =
+    signatureGunId !== null &&
+    loadout.equippedGunId === signatureGunId &&
+    loadout.queuedGunId === signatureGunId;
+  const gunOutcome =
+    equipSignatureGun && signatureGunId !== null && !alreadyHasSignatureGun
+      ? applyGunSelection(loadout, signatureGunId, phase, isAlive)
+      : null;
   return {
     characterId,
     signatureGunId,
@@ -164,4 +186,52 @@ export function toggleLoadoutSlot(currentSlot: 1 | 2): 1 | 2 {
 
 export function getActiveWeaponIdFromLoadout(loadout: LoadoutSelectionState): WeaponId {
   return loadout.activeSlot === 2 ? 'knife' : loadout.equippedGunId;
+}
+
+export interface TacticalLoadoutState {
+  equippedTacticalId: TacticalEquipmentId;
+  queuedTacticalId: TacticalEquipmentId;
+}
+
+export interface TacticalSelectionOutcome {
+  loadout: TacticalLoadoutState;
+  switchedImmediately: boolean;
+  queuedForNextSpawn: boolean;
+}
+
+export function applyTacticalEquipmentSelection(
+  loadout: TacticalLoadoutState,
+  nextTacticalId: TacticalEquipmentId,
+  phase: MatchPhase,
+  isAlive: boolean
+): TacticalSelectionOutcome {
+  const normalized = normalizeTacticalEquipmentId(nextTacticalId);
+  if (canSwitchGunImmediately(phase, isAlive)) {
+    return {
+      loadout: {
+        equippedTacticalId: normalized,
+        queuedTacticalId: normalized,
+      },
+      switchedImmediately: true,
+      queuedForNextSpawn: false,
+    };
+  }
+
+  return {
+    loadout: {
+      equippedTacticalId: loadout.equippedTacticalId,
+      queuedTacticalId: normalized,
+    },
+    switchedImmediately: false,
+    queuedForNextSpawn: true,
+  };
+}
+
+export function resolveRespawnTacticalEquipment(
+  loadout: TacticalLoadoutState
+): TacticalLoadoutState {
+  return {
+    equippedTacticalId: loadout.queuedTacticalId,
+    queuedTacticalId: loadout.queuedTacticalId,
+  };
 }

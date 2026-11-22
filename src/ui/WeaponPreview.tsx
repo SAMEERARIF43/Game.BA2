@@ -4,6 +4,8 @@ import { isOrdnanceKillName, resolveWeaponIdFromName } from '../game/ammoDisplay
 import {
   KNIFE_CHARMS,
   KnifeCharmId,
+  TACTICAL_EQUIPMENT,
+  TacticalEquipmentId,
   WeaponId,
 } from '../game/types';
 
@@ -335,4 +337,108 @@ export const KillFeedWeaponIcon: React.FC<KillFeedWeaponIconProps> = ({
     />
   );
 };
+
+export interface TacticalEquipmentPreviewProps {
+  equipmentId: TacticalEquipmentId;
+  className?: string;
+}
+
+export const TacticalEquipmentPreview: React.FC<TacticalEquipmentPreviewProps> = ({
+  equipmentId,
+  className = 'h-12 w-full',
+}) => {
+  const uid = useId().replace(/:/g, '');
+  const bodyGrad = `tac-body-${uid}`;
+  const cfg = TACTICAL_EQUIPMENT[equipmentId];
+  const accent = cfg.accentHex;
+
+  return (
+    <svg
+      viewBox="0 0 120 64"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      data-tactical-preview={equipmentId}
+      className={`select-none ${className}`}
+    >
+      <defs>
+        <linearGradient id={bodyGrad} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#475569" />
+          <stop offset="55%" stopColor="#1e293b" />
+          <stop offset="100%" stopColor="#0f172a" />
+        </linearGradient>
+      </defs>
+
+      {equipmentId === 'smoke_grenade' && (
+        <g data-tactical-art="smoke_grenade">
+          {/* Drifting smoke wisps */}
+          <circle cx="84" cy="24" r="9" fill="#94a3b8" fillOpacity="0.16" />
+          <circle cx="93" cy="18" r="6.5" fill="#cbd5e1" fillOpacity="0.14" />
+          {/* Cylindrical M18 canister */}
+          <rect x="44" y="18" width="28" height="36" rx="4" fill={`url(#${bodyGrad})`} stroke="#94a3b8" strokeOpacity="0.5" strokeWidth="1" />
+          <rect x="44" y="29" width="28" height="7" fill={accent} fillOpacity="0.72" />
+          <rect x="49" y="13" width="18" height="5" rx="1" fill="#64748b" />
+          {/* Spoon lever & pull ring */}
+          <path d="M67 16 L76 20 L76 42" stroke="#cbd5e1" strokeWidth="2.2" strokeLinecap="round" fill="none" />
+          <circle cx="43" cy="16" r="5" stroke={accent} strokeWidth="1.6" fill="none" />
+        </g>
+      )}
+
+      {equipmentId === 'flashbang' && (
+        <g data-tactical-art="flashbang">
+          {/* Concussive radial glow */}
+          <circle cx="60" cy="34" r="24" fill={accent} fillOpacity="0.1" />
+          {/* Hexagonal perforated M84 canister */}
+          <rect x="47" y="16" width="26" height="38" rx="3" fill={`url(#${bodyGrad})`} stroke={accent} strokeOpacity="0.65" strokeWidth="1.1" />
+          <rect x="45" y="20" width="30" height="5" rx="1" fill="#334155" />
+          <rect x="45" y="45" width="30" height="5" rx="1" fill="#334155" />
+          {[28, 34, 40].map((y) => (
+            <React.Fragment key={y}>
+              <circle cx="54" cy={y} r="1.7" fill={accent} />
+              <circle cx="66" cy={y} r="1.7" fill={accent} />
+            </React.Fragment>
+          ))}
+          <rect x="52" y="11" width="16" height="5" rx="1" fill="#64748b" />
+          <path d="M68 14 L77 18 L77 39" stroke="#e2e8f0" strokeWidth="2" strokeLinecap="round" fill="none" />
+          <circle cx="44" cy="15" r="4.5" stroke={accent} strokeWidth="1.6" fill="none" />
+        </g>
+      )}
+
+      {equipmentId === 'frag_grenade' && (
+        <g data-tactical-art="frag_grenade">
+          {/* Spherical M67 pineapple/frag body */}
+          <circle cx="59" cy="36" r="17" fill={`url(#${bodyGrad})`} stroke={accent} strokeOpacity="0.65" strokeWidth="1.1" />
+          <path d="M44 31 H74 M43 36 H75 M44 41 H74" stroke="#0f172a" strokeWidth="1.4" opacity="0.8" />
+          <path d="M53 20 V52 M59 19 V53 M65 20 V52" stroke="#0f172a" strokeWidth="1.4" opacity="0.8" />
+          <rect x="43" y="34" width="32" height="3.5" fill={accent} fillOpacity="0.75" />
+          {/* Fuze assembly, spoon & pin ring */}
+          <rect x="53" y="13" width="12" height="6" rx="1.2" fill="#64748b" />
+          <path d="M65 15 L76 20 L74 42" stroke="#cbd5e1" strokeWidth="2.2" strokeLinecap="round" fill="none" />
+          <circle cx="46" cy="16" r="4.5" stroke={accent} strokeWidth="1.6" fill="none" />
+        </g>
+      )}
+
+      {equipmentId === 'stun_grenade' && (
+        <g data-tactical-art="stun_grenade">
+          {/* Shockwave arcs */}
+          <path d="M35 28 C31 32 31 40 35 44" stroke={accent} strokeOpacity="0.55" strokeWidth="1.6" strokeLinecap="round" />
+          <path d="M85 28 C89 32 89 40 85 44" stroke={accent} strokeOpacity="0.55" strokeWidth="1.6" strokeLinecap="round" />
+          {/* Tapered Mk141 shock canister */}
+          <path
+            d="M46 21 L52 17 H68 L74 21 V49 L68 54 H52 L46 49 Z"
+            fill={`url(#${bodyGrad})`}
+            stroke={accent}
+            strokeOpacity="0.65"
+            strokeWidth="1.1"
+          />
+          <rect x="46" y="31" width="28" height="6" fill={accent} fillOpacity="0.72" />
+          <rect x="52" y="12" width="16" height="5" rx="1" fill="#64748b" />
+          <path d="M68 15 L77 20 L77 38" stroke="#cbd5e1" strokeWidth="2" strokeLinecap="round" fill="none" />
+          <circle cx="44" cy="15" r="4.5" stroke={accent} strokeWidth="1.6" fill="none" />
+        </g>
+      )}
+    </svg>
+  );
+};
+
 

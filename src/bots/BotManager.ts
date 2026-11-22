@@ -20,7 +20,7 @@ import {
 import { PooledTracerRingBuffer, getVfxQualityBudget } from '../game/combatVfx';
 import { GameMode, isHostile } from '../game/gameModeRules';
 import { getCharacterForWeaponId } from '../game/loadoutRules';
-import { GraphicsQuality, HitZone, MatchParticipant, WeaponId } from '../game/types';
+import { CharacterId, GraphicsQuality, HitZone, MatchParticipant, WeaponId } from '../game/types';
 import { MapDefinition, TeamId } from '../maps/types';
 import { MatchManager, RESPAWN_DELAY_SEC } from '../match/MatchManager';
 
@@ -52,6 +52,15 @@ export interface BotManagerCallbacks {
     attackerPos: Vector3,
     attackerHpRemaining: number
   ) => void;
+  onKillRecorded?: (info: {
+    killerId: string;
+    victimId: string;
+    weaponName: string;
+    headshot: boolean;
+    distanceMeters: number;
+    victimPos: { x: number; y: number; z: number };
+    victimYaw: number;
+  }) => void;
 }
 
 interface BotAgent {
@@ -109,6 +118,8 @@ interface BotAgent {
   fireCooldown: number;
   burstPauseTimer: number;
   hitFlashTimer: number;
+  blindTimer: number;
+  slowTimer: number;
   bodyMat: PBRMaterial;
   headMat: PBRMaterial;
 }
@@ -126,6 +137,7 @@ export class BotManager {
   private mapDef: MapDefinition | null = null;
   private gameMode: GameMode = 'tdm';
   private bots: BotAgent[] = [];
+  private botRays: Ray[] = [];
   private tracerPool: PooledTracerRingBuffer;
   private sharedMaterials: Material[] = [];
   private bluePalette: OperatorPalette | null = null;
@@ -136,6 +148,7 @@ export class BotManager {
   private redHex = '#ef4444';
   private blueEmissive = new Color3(0.02, 0.06, 0.14);
   private redEmissive = new Color3(0.14, 0.03, 0.03);
+  private smokeClouds: Array<{ x: number; y: number; z: number; radius: number }> = [];
   private readonly spawnGroundRay = new Ray(Vector3.Zero(), new Vector3(0, -1, 0), 3);
   private readonly collisionPickPredicate = (mesh: AbstractMesh): boolean =>
     mesh.checkCollisions && mesh.isEnabled() && !mesh.metadata?.isBot;
@@ -210,7 +223,14 @@ export class BotManager {
     this.gameMode = mode;
   }
 
+  public setSmokeClouds(
+    clouds: ReadonlyArray<{ x: number; y: number; z: number; radius: number }>
+  ): void {
+    this.smokeClouds = clouds.map((c) => ({ x: c.x, y: c.y, z: c.z, radius: c.radius }));
+  }
+
   public resetBotsForNewRound(): void {
+    this.smokeClouds = [];
     for (const bot of this.bots) {
       this.respawnBot(bot);
     }
@@ -268,15 +288,32 @@ export class BotManager {
     }
   }
 
+  private disposeRay(ray: Ray): void {
+    const disposable = ray as Ray & { dispose?: () => void };
+    disposable.dispose?.();
+    ray.origin.set(0, 0, 0);
+    ray.direction.set(0, 0, 1);
+    ray.length = 0;
+  }
+
   public clearBots(): void {
     this.tracerPool.clear();
 
     for (const bot of this.bots) {
+      this.disposeRay(bot.obstacleRay);
+      this.disposeRay(bot.groundRay);
+      this.disposeRay(bot.losRay);
+      this.disposeRay(bot.shotRay);
       bot.bodyMat.dispose();
       bot.headMat.dispose();
       bot.root.dispose();
     }
     this.bots = [];
+
+    for (const ray of this.botRays) {
+      this.disposeRay(ray);
+    }
+    this.botRays = [];
 
     for (const m of this.sharedMaterials) {
       m.dispose();
@@ -322,10 +359,59 @@ export class BotManager {
     };
   }
 
+  public getActorSnapshot(actorId: string): {
+    id: string;
+    name: string;
+    team: TeamId;
+    characterId: CharacterId;
+    weaponId: WeaponId;
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+  } | null {
+    const bot = this.bots.find((b) => b.id === actorId);
+    if (!bot) return null;
+    const weaponId = this.mapWeaponNameToId(bot.weaponName);
+    return {
+      id: bot.id,
+      name: bot.name,
+      team: bot.team,
+      characterId: getCharacterForWeaponId(weaponId),
+      weaponId,
+      x: bot.root.position.x,
+      y: bot.root.position.y,
+      z: bot.root.position.z,
+      yaw: bot.yaw,
+    };
+  }
+
+  public setBotsVisible(visible: boolean): void {
+    for (const bot of this.bots) {
+      bot.root.setEnabled(visible);
+    }
+  }
+
   public applyAirstrikeDamage(
     impactPos: Vector3,
     radius: number,
     maxDamage: number,
+    onKill: (info: { victimId: string; victimName: string; distanceMeters: number }) => void
+  ): number {
+    return this.applyExplosiveDamage(
+      impactPos,
+      radius,
+      maxDamage,
+      'Precision Barrage',
+      onKill
+    );
+  }
+
+  public applyExplosiveDamage(
+    impactPos: Vector3,
+    radius: number,
+    maxDamage: number,
+    weaponName: string,
     onKill: (info: { victimId: string; victimName: string; distanceMeters: number }) => void
   ): number {
     let hits = 0;
@@ -340,15 +426,15 @@ export class BotManager {
       );
       if (dist > radius) continue;
 
-      const falloff = 1 - (dist / radius) * 0.55;
-      const dmg = Math.max(25, Math.round(maxDamage * falloff));
+      const falloff = 1 - (dist / radius) * 0.65;
+      const dmg = Math.max(20, Math.round(maxDamage * falloff));
       const res = this.applyDamageToBot(
         bot.id,
         'body',
         dmg,
         1.0,
         'player',
-        'Precision Barrage',
+        weaponName,
         Math.round(dist * 10) / 10
       );
       if (res && res.damageApplied > 0) {
@@ -363,6 +449,42 @@ export class BotManager {
       }
     }
     return hits;
+  }
+
+  public applyTacticalDisruption(
+    center: Vector3,
+    radius: number,
+    effect: 'flash' | 'stun',
+    durationSec: number
+  ): number {
+    let affected = 0;
+    for (const bot of this.bots) {
+      if (!bot.isAlive) continue;
+      if (!isHostile(this.gameMode, { id: 'player', team: 'blue' }, { id: bot.id, team: bot.team })) {
+        continue;
+      }
+      const dist = Vector3.Distance(
+        new Vector3(bot.root.position.x, center.y, bot.root.position.z),
+        center
+      );
+      if (dist > radius) continue;
+
+      const strength = Math.max(0.45, 1 - (dist / radius) * 0.55);
+      const effectiveDur = durationSec * strength;
+      if (effect === 'flash') {
+        bot.blindTimer = Math.max(bot.blindTimer, effectiveDur);
+        bot.targetEnemyId = null;
+        bot.targetEnemyPos = null;
+        bot.hitFlashTimer = 0.25;
+        bot.headMat.emissiveColor = new Color3(0.95, 1.35, 1.85);
+      } else {
+        bot.slowTimer = Math.max(bot.slowTimer, effectiveDur);
+        bot.hitFlashTimer = 0.22;
+        bot.bodyMat.emissiveColor = new Color3(0.15, 0.95, 0.65);
+      }
+      affected += 1;
+    }
+    return affected;
   }
 
   public getLivingEnemyPositions(forTeam: TeamId, excludeBotId?: string): Vector3[] {
@@ -456,6 +578,19 @@ export class BotManager {
       bot.headMesh.isPickable = false;
       bot.bodyMesh.isPickable = false;
       this.match.recordKill(attackerId, bot.id, weaponName, zone === 'head', distanceMeters);
+      this.callbacks.onKillRecorded?.({
+        killerId: attackerId,
+        victimId: bot.id,
+        weaponName,
+        headshot: zone === 'head',
+        distanceMeters,
+        victimPos: {
+          x: bot.root.position.x,
+          y: bot.root.position.y,
+          z: bot.root.position.z,
+        },
+        victimYaw: bot.yaw,
+      });
     }
 
     return {
@@ -511,6 +646,12 @@ export class BotManager {
       if (bot.spawnProtection > 0) {
         bot.spawnProtection = Math.max(0, bot.spawnProtection - clampedDt);
       }
+      if (bot.blindTimer > 0) {
+        bot.blindTimer = Math.max(0, bot.blindTimer - clampedDt);
+      }
+      if (bot.slowTimer > 0) {
+        bot.slowTimer = Math.max(0, bot.slowTimer - clampedDt);
+      }
 
       bot.prevPos.copyFrom(bot.root.position);
       this.updateBotAI(bot, clampedDt);
@@ -550,6 +691,20 @@ export class BotManager {
   }
 
   private updateBotAI(bot: BotAgent, dt: number): void {
+    const speedScale = bot.blindTimer > 0 ? 0.35 : bot.slowTimer > 0 ? 0.48 : 1.0;
+
+    if (bot.blindTimer > 0) {
+      bot.targetEnemyId = null;
+      bot.targetEnemyPos = null;
+      bot.movementScratch.set(
+        Math.cos(bot.yaw) * bot.strafeDir * BOT_STRAFE_SPEED * speedScale,
+        0,
+        -Math.sin(bot.yaw) * bot.strafeDir * BOT_STRAFE_SPEED * speedScale
+      );
+      this.moveBotWithAvoidance(bot, bot.movementScratch, dt);
+      return;
+    }
+
     bot.losScanTimer -= dt;
     if (bot.losScanTimer <= 0) {
       bot.losScanTimer = 0.14 + Math.random() * 0.06;
@@ -582,14 +737,14 @@ export class BotManager {
 
       bot.rightScratch.set(Math.cos(bot.yaw), 0, -Math.sin(bot.yaw));
       bot.forwardScratch.set(Math.sin(bot.yaw), 0, Math.cos(bot.yaw));
-      let moveX = bot.rightScratch.x * bot.strafeDir * BOT_STRAFE_SPEED;
-      let moveZ = bot.rightScratch.z * bot.strafeDir * BOT_STRAFE_SPEED;
+      let moveX = bot.rightScratch.x * bot.strafeDir * BOT_STRAFE_SPEED * speedScale;
+      let moveZ = bot.rightScratch.z * bot.strafeDir * BOT_STRAFE_SPEED * speedScale;
       if (bot.hp < 40 || dist < 6.5) {
-        moveX -= bot.forwardScratch.x * 2.6;
-        moveZ -= bot.forwardScratch.z * 2.6;
+        moveX -= bot.forwardScratch.x * 2.6 * speedScale;
+        moveZ -= bot.forwardScratch.z * 2.6 * speedScale;
       } else if (dist > 22) {
-        moveX += bot.forwardScratch.x * 2.8;
-        moveZ += bot.forwardScratch.z * 2.8;
+        moveX += bot.forwardScratch.x * 2.8 * speedScale;
+        moveZ += bot.forwardScratch.z * 2.8 * speedScale;
       }
 
       bot.movementScratch.set(moveX, 0, moveZ);
@@ -603,7 +758,7 @@ export class BotManager {
           bot.burstShotsLeft = 3 + Math.floor(Math.random() * 3);
         }
       } else {
-        bot.fireCooldown -= dt;
+        bot.fireCooldown -= dt * (bot.slowTimer > 0 ? 0.65 : 1.0);
         if (bot.fireCooldown <= 0 && bot.burstShotsLeft > 0) {
           this.fireBotShot(bot, bot.targetEnemyPos);
           bot.burstShotsLeft -= 1;
@@ -680,7 +835,11 @@ export class BotManager {
     bot.yaw = this.lerpAngle(bot.yaw, desiredYaw, 1 - Math.exp(-7 * dt));
     bot.root.rotation.y = bot.yaw;
 
-    bot.movementScratch.set(dirX * BOT_MOVE_SPEED, 0, dirZ * BOT_MOVE_SPEED);
+    bot.movementScratch.set(
+      dirX * BOT_MOVE_SPEED * speedScale,
+      0,
+      dirZ * BOT_MOVE_SPEED * speedScale
+    );
     const moved = this.moveBotWithAvoidance(bot, bot.movementScratch, dt);
     if (!moved) {
       bot.currentWaypoint = this.pickRandomWaypoint(bot.root.position);
@@ -838,6 +997,34 @@ export class BotManager {
   }
 
   private hasLineOfSight(bot: BotAgent, from: Vector3, to: Vector3, dist: number): boolean {
+    if (dist <= 1e-4) {
+      return true;
+    }
+    if (this.smokeClouds.length > 0 && dist > 0.05) {
+      const segDx = to.x - from.x;
+      const segDy = to.y - from.y;
+      const segDz = to.z - from.z;
+      const segLenSq = segDx * segDx + segDy * segDy + segDz * segDz;
+      if (segLenSq > 0.0001) {
+        for (const cloud of this.smokeClouds) {
+          const cx = cloud.x - from.x;
+          const cy = cloud.y + 1.1 - from.y;
+          const cz = cloud.z - from.z;
+          const t = Math.max(
+            0,
+            Math.min(1, (cx * segDx + cy * segDy + cz * segDz) / segLenSq)
+          );
+          const nearX = from.x + segDx * t - cloud.x;
+          const nearY = from.y + segDy * t - (cloud.y + 1.1);
+          const nearZ = from.z + segDz * t - cloud.z;
+          const effectiveRadius = cloud.radius * 0.92;
+          if (nearX * nearX + nearY * nearY + nearZ * nearZ <= effectiveRadius * effectiveRadius) {
+            return false;
+          }
+        }
+      }
+    }
+
     bot.losDirectionScratch.set(to.x - from.x, to.y - from.y, to.z - from.z).normalize();
     bot.losRay.origin.copyFrom(from);
     bot.losRay.direction.copyFrom(bot.losDirectionScratch);
@@ -859,12 +1046,13 @@ export class BotManager {
     const toTargetY = targetPos.y - eyeOrigin.y;
     const toTargetZ = targetPos.z - eyeOrigin.z;
     const dist = Math.hypot(toTargetX, toTargetY, toTargetZ);
-    const invDist = dist > 0.01 ? 1 / dist : 1;
-    const direction = bot.shotDirectionScratch.set(
-      toTargetX * invDist,
-      toTargetY * invDist,
-      toTargetZ * invDist
-    );
+    const direction = bot.shotDirectionScratch;
+    if (dist > 1e-4) {
+      const invDist = 1 / dist;
+      direction.set(toTargetX * invDist, toTargetY * invDist, toTargetZ * invDist);
+    } else {
+      direction.set(Math.sin(bot.yaw), 0, Math.cos(bot.yaw));
+    }
 
     // Distance-dependent spread: tight at close range, wider at long range
     const distFactor = Math.max(0, Math.min(1, (dist - 5) / 30)); // 0 at ≤5m, 1 at ≥35m
@@ -995,6 +1183,8 @@ export class BotManager {
     bot.targetEnemyPos = null;
     bot.lostSightTimer = 0;
     bot.stuckTimer = 0;
+    bot.blindTimer = 0;
+    bot.slowTimer = 0;
     bot.currentWaypoint = this.pickRandomWaypoint(bot.root.position);
     this.restoreBotColors(bot);
     this.match.setParticipantAlive(bot.id, true, 0);
@@ -1124,16 +1314,20 @@ export class BotManager {
       fireCooldown: 0,
       burstPauseTimer: 0,
       hitFlashTimer: 0,
+      blindTimer: 0,
+      slowTimer: 0,
       bodyMat: rig.bodyMat,
       headMat: rig.headMat,
     };
 
+    this.botRays.push(bot.obstacleRay, bot.groundRay, bot.losRay, bot.shotRay);
     this.restoreBotColors(bot);
     this.bots.push(bot);
   }
 
   public dispose(): void {
     this.clearBots();
+    this.disposeRay(this.spawnGroundRay);
     this.tracerPool.dispose();
     this.blueTracerMat.dispose();
     this.redTracerMat.dispose();

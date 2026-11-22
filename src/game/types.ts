@@ -147,6 +147,102 @@ export const KNIFE_CHARMS: Record<KnifeCharmId, KnifeCharmConfig> = {
   },
 };
 
+export type TacticalEquipmentId =
+  | 'smoke_grenade'
+  | 'flashbang'
+  | 'frag_grenade'
+  | 'stun_grenade';
+
+export const TACTICAL_EQUIPMENT_IDS: readonly TacticalEquipmentId[] = [
+  'smoke_grenade',
+  'flashbang',
+  'frag_grenade',
+  'stun_grenade',
+];
+
+export interface TacticalEquipmentConfig {
+  id: TacticalEquipmentId;
+  slot: 3;
+  name: string;
+  shortName: string;
+  category: string;
+  chargesPerSpawn: number;
+  fuseSec: number;
+  cooldownSec: number;
+  radiusMeters: number;
+  durationSec: number;
+  accentHex: string;
+  tagline: string;
+  tooltip: string;
+}
+
+export const TACTICAL_EQUIPMENT: Record<TacticalEquipmentId, TacticalEquipmentConfig> = {
+  smoke_grenade: {
+    id: 'smoke_grenade',
+    slot: 3,
+    name: 'M18 Smoke Grenade',
+    shortName: 'Smoke',
+    category: 'Concealment',
+    chargesPerSpawn: 2,
+    fuseSec: 0.9,
+    cooldownSec: 0.5,
+    radiusMeters: 6.5,
+    durationSec: 10.0,
+    accentHex: '#94a3b8',
+    tagline: 'Deploys a dense smoke screen blocking enemy sightlines',
+    tooltip:
+      '0.9s fuse deploys a 6.5m opaque smoke screen for 10.0s, breaking enemy sightlines and bot targeting. 0.5s throw cooldown.',
+  },
+  flashbang: {
+    id: 'flashbang',
+    slot: 3,
+    name: 'M84 Flashbang',
+    shortName: 'Flashbang',
+    category: 'Disruption',
+    chargesPerSpawn: 2,
+    fuseSec: 1.0,
+    cooldownSec: 0.5,
+    radiusMeters: 9.5,
+    durationSec: 3.2,
+    accentHex: '#38bdf8',
+    tagline: 'Concussive flash burst that blinds and disorients hostiles',
+    tooltip:
+      '1.0s fuse detonates a 9.5m blinding flash burst lasting up to 3.2s, disorienting hostiles and resetting bot target lock. 0.5s throw cooldown.',
+  },
+  frag_grenade: {
+    id: 'frag_grenade',
+    slot: 3,
+    name: 'M67 Frag Grenade',
+    shortName: 'Frag',
+    category: 'Explosive',
+    chargesPerSpawn: 1,
+    fuseSec: 1.4,
+    cooldownSec: 0.8,
+    radiusMeters: 6.0,
+    durationSec: 1.4,
+    accentHex: '#f59e0b',
+    tagline: 'High-explosive fragmentation charge with lethal shrapnel',
+    tooltip:
+      '1.4s timed fuse detonates lethal shrapnel across a 6.0m blast radius (up to 145 damage). 0.8s throw cooldown.',
+  },
+  stun_grenade: {
+    id: 'stun_grenade',
+    slot: 3,
+    name: 'Mk141 Stun Grenade',
+    shortName: 'Stun',
+    category: 'Suppression',
+    chargesPerSpawn: 2,
+    fuseSec: 1.0,
+    cooldownSec: 0.5,
+    radiusMeters: 7.5,
+    durationSec: 4.0,
+    accentHex: '#10b981',
+    tagline: 'Shockwave blast that slows hostiles and disrupts aim',
+    tooltip:
+      '1.0s fuse unleashes a 7.5m concussive wave for 4.0s, slowing hostile movement and reducing enemy fire cadence. 0.5s throw cooldown.',
+  },
+};
+
 export type FireMode = 'auto' | 'semi';
 
 export type HitZone = 'head' | 'body';
@@ -524,6 +620,11 @@ export interface HudState {
   equippedGunId: GunId;
   queuedGunId: GunId;
   knifeCharmId: KnifeCharmId;
+  tacticalEquipmentId: TacticalEquipmentId;
+  queuedTacticalEquipmentId: TacticalEquipmentId;
+  tacticalCharges: number;
+  tacticalMaxCharges: number;
+  flashBlindIntensity: number;
   isGunSwitchLocked: boolean;
   gunLockMessage: string | null;
   weaponSlots: WeaponRuntimeState[];
@@ -558,7 +659,6 @@ export interface HudState {
   showOnboarding: boolean;
   lowHealthPulse: boolean;
   fps: number;
-  ping: number;
   gameMode: GameMode;
   localTeam: TeamId;
   bombSites: BombSiteHudMarker[];
@@ -571,7 +671,39 @@ export interface HudState {
   ffaRank: number | null;
   ffaLeaderName: string | null;
   ffaLeaderKills: number;
+  highlightReel?: HighlightReelState;
   match: MatchSnapshot;
+}
+
+export interface KillHighlightClip {
+  id: string;
+  killerId: string;
+  killerName: string;
+  killerTeam: TeamId;
+  killerCharacterId: CharacterId;
+  victimId: string;
+  victimName: string;
+  victimTeam: TeamId;
+  victimCharacterId: CharacterId;
+  weaponId: WeaponId;
+  weaponName: string;
+  headshot: boolean;
+  distanceMeters: number;
+  killerPos: { x: number; y: number; z: number };
+  killerYaw: number;
+  victimPos: { x: number; y: number; z: number };
+  victimYaw: number;
+}
+
+export interface HighlightReelState {
+  available: boolean;
+  isPlaying: boolean;
+  finished: boolean;
+  progress: number;
+  elapsedSec: number;
+  durationSec: number;
+  timeScale: number;
+  clip: KillHighlightClip | null;
 }
 
 export type CrosshairStyle = 'dynamic' | 'static';
@@ -610,6 +742,7 @@ export interface GameSettings {
   selectedCharacterId: CharacterId;
   selectedGunId: GunId;
   knifeCharmId: KnifeCharmId;
+  tacticalEquipmentId?: TacticalEquipmentId;
   slideEnabled: boolean;
   slideInputMode: SlideTriggerMode;
   slidePostStance: PostSlideStance;
