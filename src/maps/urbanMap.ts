@@ -63,6 +63,8 @@ export const URBAN_MAP_DEF: MapDefinition = {
   previewCameraTarget: new Vector3(0, 2.2, 0),
 };
 
+export const urbanMap = URBAN_MAP_DEF;
+
 export function buildUrbanMap(ctx: MapBuildContext): void {
   const streetMat = ctx.createProceduralMaterial('urbanStreetMat', 'asphalt', {
     size: 256,

@@ -121,7 +121,7 @@ export function getAmmoDisplayState(params: {
       reserveTextColorClass,
       barColorClass: 'bg-red-500',
       statusTextColorClass: 'text-red-400',
-      cardBorderClass: 'border-red-500/55 bg-red-950/35',
+      cardBorderClass: 'border-red-500/55 bg-red-950/88',
     };
   }
 

@@ -52,7 +52,13 @@ export type MatchMachineAction =
   | { type: 'NAVIGATE_MENU' }
   | { type: 'OPEN_MAP_SELECT' }
   | { type: 'PREVIEW_MAP'; mapId: MapId }
-  | { type: 'START_OFFLINE_MATCH'; mapId: MapId; requestLock: boolean; isCustomMatch?: boolean }
+  | {
+      type: 'START_OFFLINE_MATCH';
+      mapId: MapId;
+      requestLock: boolean;
+      isCustomMatch?: boolean;
+      startActive?: boolean;
+    }
   | { type: 'RESTART_OFFLINE_MATCH' }
   | { type: 'OPEN_CUSTOM_MATCH'; joinCode?: string }
   | { type: 'OPEN_SOLO_CUSTOM_LOBBY'; snapshot: LobbyRoomSnapshot }
@@ -331,6 +337,21 @@ export function derivePostMatchStats(hud: HudState): PostMatchStats {
   };
 }
 
+export function calculateCombatScore(
+  kills: number,
+  headshots: number,
+  accuracyPct: number
+): number {
+  const safeKills = Math.max(0, Math.round(kills));
+  const safeHeadshots = Math.max(0, Math.round(headshots));
+  const safeAccuracy = Math.max(0, Math.min(100, accuracyPct));
+  return (
+    safeKills * 100 +
+    safeHeadshots * 50 +
+    (safeKills > 0 ? Math.round(safeAccuracy * 0.5) : 0)
+  );
+}
+
 export function selectMatchMvp(
   participants: readonly MatchParticipant[],
   playerStats: PostMatchStats
@@ -339,10 +360,11 @@ export function selectMatchMvp(
     if (playerStats.kills === 0 && playerStats.deaths === 0 && playerStats.headshots === 0) {
       return null;
     }
-    const combatScore =
-      playerStats.kills * 100 +
-      playerStats.headshots * 50 +
-      (playerStats.kills > 0 ? Math.round(playerStats.accuracyPct * 0.5) : 0);
+    const combatScore = calculateCombatScore(
+      playerStats.kills,
+      playerStats.headshots,
+      playerStats.accuracyPct
+    );
     const kdRatio =
       playerStats.deaths > 0
         ? Math.round((playerStats.kills / playerStats.deaths) * 100) / 100
@@ -365,12 +387,9 @@ export function selectMatchMvp(
   const scored: MatchMvpSummary[] = participants.map((participant) => {
     const kills = participant.isPlayer ? playerStats.kills : participant.kills;
     const deaths = participant.isPlayer ? playerStats.deaths : participant.deaths;
-    const headshots = participant.isPlayer ? playerStats.headshots : null;
-    const accuracyPct = participant.isPlayer ? playerStats.accuracyPct : null;
-    const combatScore =
-      kills * 100 +
-      (headshots !== null ? headshots * 50 : 0) +
-      (accuracyPct !== null && kills > 0 ? Math.round(accuracyPct * 0.5) : 0);
+    const headshots = participant.isPlayer ? playerStats.headshots : 0;
+    const accuracyPct = participant.isPlayer ? playerStats.accuracyPct : 0;
+    const combatScore = calculateCombatScore(kills, headshots, accuracyPct);
     const kdRatio = deaths > 0 ? Math.round((kills / deaths) * 100) / 100 : kills;
 
     return {
@@ -467,7 +486,7 @@ export function matchReducer(
       const preserveLobby = action.isCustomMatch ? state.lobbySnapshot : null;
       return {
         ...state,
-        status: action.requestLock ? 'offline_playing' : 'offline_paused',
+        status: action.requestLock || action.startActive ? 'offline_playing' : 'offline_paused',
         selectedMapId: action.mapId,
         joinCode: undefined,
         lobbySnapshot: preserveLobby,

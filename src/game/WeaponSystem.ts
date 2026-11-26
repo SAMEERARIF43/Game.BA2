@@ -165,6 +165,7 @@ export class WeaponSystem {
   private reloadElapsed = 0;
   private reloadMagClickPlayed = false;
   private reloadSpeedMultiplier = 1.0;
+  private autoReload = true;
 
   private slashTimer = 0;
   private slashDuration = 0.3;
@@ -246,6 +247,18 @@ export class WeaponSystem {
     headshot: boolean;
     distanceMeters: number;
   }) => void;
+
+  // Scratch objects reused per shot to minimize GC pressure
+  private readonly shootRay = new Ray(Vector3.Zero(), Vector3.Forward(), 100);
+  private readonly originScratch = new Vector3();
+  private readonly fwdScratch = new Vector3();
+  private readonly rightScratch = new Vector3();
+  private readonly upScratch = new Vector3();
+  private readonly dirScratch = new Vector3();
+  private readonly offsetScratch = new Vector3();
+  private readonly endScratch = new Vector3();
+  private readonly normalScratch = new Vector3();
+  private readonly muzzleScratch = new Vector3();
 
   constructor(
     scene: Scene,
@@ -605,6 +618,14 @@ export class WeaponSystem {
     ];
   }
 
+  public setAutoReload(enabled: boolean): void {
+    this.autoReload = enabled;
+  }
+
+  public getAutoReload(): boolean {
+    return this.autoReload;
+  }
+
   public getIsReloading(): boolean {
     return this.isReloading;
   }
@@ -758,6 +779,13 @@ export class WeaponSystem {
       this.muzzleFlashRoot.position.setAll(0);
       this.muzzleLight.parent = activeRig.muzzlePoint;
       this.muzzleLight.position.setAll(0);
+    }
+
+    if (this.autoReload && this.viewModelVisible && normalizedId !== 'knife') {
+      const gunSlot = this.slots[this.equippedGunId];
+      if (gunSlot.ammoInMag === 0 && gunSlot.reserveAmmo > 0) {
+        this.startReload();
+      }
     }
   }
 
@@ -1078,30 +1106,47 @@ export class WeaponSystem {
     this.performHitscan(cfg, feel);
 
     this.spreadBloom = Math.min(0.032, this.spreadBloom + (cfg.id === 'smg' ? 0.0038 : 0.0055));
+
+    if (this.autoReload && state.ammoInMag === 0 && state.reserveAmmo > 0) {
+      this.startReload();
+    }
   }
 
   private performMeleeStrike(cfg: WeaponConfig): void {
-    const origin = this.camera.globalPosition.clone();
-    const forward = this.camera.getDirection(Vector3.Forward()).normalize();
-    const right = this.camera.getDirection(Vector3.Right()).normalize();
-    const up = this.camera.getDirection(Vector3.Up()).normalize();
-
-    const offsets = [
-      Vector3.Zero(),
-      right.scale(0.08),
-      right.scale(-0.08),
-      up.scale(0.06),
-      up.scale(-0.06),
-    ];
+    this.originScratch.copyFrom(this.camera.globalPosition);
+    this.camera.getDirectionToRef(Vector3.Forward(), this.fwdScratch);
+    this.fwdScratch.normalize();
+    this.camera.getDirectionToRef(Vector3.Right(), this.rightScratch);
+    this.rightScratch.normalize();
+    this.camera.getDirectionToRef(Vector3.Up(), this.upScratch);
+    this.upScratch.normalize();
 
     let bestEnemyPick: ReturnType<Scene['pickWithRay']> = null;
     let bestWorldPick: ReturnType<Scene['pickWithRay']> = null;
 
-    for (const offset of offsets) {
-      const dir = forward.add(offset).normalize();
-      const ray = new Ray(origin, dir, cfg.range);
+    for (let i = 0; i < 5; i++) {
+      this.dirScratch.copyFrom(this.fwdScratch);
+      if (i === 1) {
+        this.offsetScratch.copyFrom(this.rightScratch).scaleInPlace(0.08);
+        this.dirScratch.addInPlace(this.offsetScratch);
+      } else if (i === 2) {
+        this.offsetScratch.copyFrom(this.rightScratch).scaleInPlace(-0.08);
+        this.dirScratch.addInPlace(this.offsetScratch);
+      } else if (i === 3) {
+        this.offsetScratch.copyFrom(this.upScratch).scaleInPlace(0.06);
+        this.dirScratch.addInPlace(this.offsetScratch);
+      } else if (i === 4) {
+        this.offsetScratch.copyFrom(this.upScratch).scaleInPlace(-0.06);
+        this.dirScratch.addInPlace(this.offsetScratch);
+      }
+      this.dirScratch.normalize();
+
+      this.shootRay.origin.copyFrom(this.originScratch);
+      this.shootRay.direction.copyFrom(this.dirScratch);
+      this.shootRay.length = cfg.range;
+
       const pick = this.scene.pickWithRay(
-        ray,
+        this.shootRay,
         (mesh) => mesh.isPickable && mesh.isEnabled() && mesh !== this.player.collider
       );
       if (!pick?.hit || !pick.pickedMesh || !pick.pickedPoint) continue;
@@ -1126,15 +1171,20 @@ export class WeaponSystem {
     if (!chosenPick?.hit || !chosenPick.pickedPoint || !chosenPick.pickedMesh) {
       if (this.multiplayerMode) {
         this.onNetworkShot?.({
-          muzzle: origin.add(forward.scale(0.45)),
-          endPoint: origin.add(forward.scale(cfg.range)),
+          muzzle: this.originScratch.add(this.fwdScratch.scale(0.45)),
+          endPoint: this.originScratch.add(this.fwdScratch.scale(cfg.range)),
           weaponId: 'knife',
         });
       }
       return;
     }
 
-    const hitNormal = chosenPick.getNormal(true) ?? forward.scale(-1);
+    const pickedNormal = chosenPick.getNormal(true);
+    if (pickedNormal) {
+      this.normalScratch.copyFrom(pickedNormal);
+    } else {
+      this.normalScratch.copyFrom(this.fwdScratch).scaleInPlace(-1);
+    }
     const hitPoint = chosenPick.pickedPoint.clone();
 
     if (this.multiplayerMode) {
@@ -1155,9 +1205,9 @@ export class WeaponSystem {
       }
 
       this.audio.playKnifeHit(isTargetHit);
-      this.spawnImpact(hitPoint, isTargetHit ? 'knife_character' : 'knife_env', hitNormal);
+      this.spawnImpact(hitPoint, isTargetHit ? 'knife_character' : 'knife_env', this.normalScratch);
       this.onNetworkShot?.({
-        muzzle: origin.add(forward.scale(0.45)),
+        muzzle: this.originScratch.add(this.fwdScratch.scale(0.45)),
         endPoint: hitPoint,
         weaponId: 'knife',
         targetId: hitPlayerId,
@@ -1206,13 +1256,13 @@ export class WeaponSystem {
           timestamp: performance.now(),
         };
         this.audio.playHitMarker(result.zone === 'head');
-        this.spawnImpact(hitPoint, 'knife_character', hitNormal, result.zone === 'head');
+        this.spawnImpact(hitPoint, 'knife_character', this.normalScratch, result.zone === 'head');
         return;
       }
     }
 
     this.audio.playKnifeHit(false);
-    this.spawnImpact(hitPoint, 'knife_env', hitNormal);
+    this.spawnImpact(hitPoint, 'knife_env', this.normalScratch);
   }
 
   private performHitscan(
@@ -1220,20 +1270,28 @@ export class WeaponSystem {
     feel = getWeaponFeelProfile(cfg.id)
   ): void {
     const spread = this.computeCurrentSpread();
-    const origin = this.camera.globalPosition.clone();
-    const forward = this.camera.getDirection(Vector3.Forward()).normalize();
-    const right = this.camera.getDirection(Vector3.Right()).normalize();
-    const up = this.camera.getDirection(Vector3.Up()).normalize();
+    this.originScratch.copyFrom(this.camera.globalPosition);
+    this.camera.getDirectionToRef(Vector3.Forward(), this.fwdScratch);
+    this.fwdScratch.normalize();
+    this.camera.getDirectionToRef(Vector3.Right(), this.rightScratch);
+    this.rightScratch.normalize();
+    this.camera.getDirectionToRef(Vector3.Up(), this.upScratch);
+    this.upScratch.normalize();
 
     const rig = this.models.get(this.activeId);
-    const muzzleWorld = rig
-      ? rig.muzzlePoint.getAbsolutePosition()
-      : origin.add(forward.scale(0.6));
+    if (rig) {
+      this.muzzleScratch.copyFrom(rig.muzzlePoint.getAbsolutePosition());
+    } else {
+      this.offsetScratch.copyFrom(this.fwdScratch).scaleInPlace(0.6);
+      this.muzzleScratch.copyFrom(this.originScratch).addInPlace(this.offsetScratch);
+    }
 
     const pelletCount = Math.max(1, cfg.pellets ?? 1);
     const networkPellets: NetworkShotPellet[] = [];
 
-    let primaryEndPoint = origin.add(forward.scale(cfg.range));
+    let primaryEndPoint = this.multiplayerMode
+      ? this.originScratch.add(this.fwdScratch.scale(cfg.range))
+      : this.endScratch;
     let primaryTargetId: string | undefined;
     let primaryZone: HitZone | undefined;
 
@@ -1244,27 +1302,36 @@ export class WeaponSystem {
     for (let p = 0; p < pelletCount; p++) {
       const angle = Math.random() * Math.PI * 2;
       const radius = Math.sqrt(Math.random()) * spread;
-      const dir = forward
-        .add(right.scale(Math.cos(angle) * radius))
-        .add(up.scale(Math.sin(angle) * radius))
-        .normalize();
+      this.dirScratch.copyFrom(this.fwdScratch);
+      this.offsetScratch.copyFrom(this.rightScratch).scaleInPlace(Math.cos(angle) * radius);
+      this.dirScratch.addInPlace(this.offsetScratch);
+      this.offsetScratch.copyFrom(this.upScratch).scaleInPlace(Math.sin(angle) * radius);
+      this.dirScratch.addInPlace(this.offsetScratch);
+      this.dirScratch.normalize();
 
-      const ray = new Ray(origin, dir, cfg.range);
+      this.shootRay.origin.copyFrom(this.originScratch);
+      this.shootRay.direction.copyFrom(this.dirScratch);
+      this.shootRay.length = cfg.range;
+
       const pick = this.scene.pickWithRay(
-        ray,
+        this.shootRay,
         (mesh) => mesh.isPickable && mesh.isEnabled() && mesh !== this.player.collider
       );
 
-      const endPoint =
-        pick?.hit && pick.pickedPoint ? pick.pickedPoint.clone() : origin.add(dir.scale(cfg.range));
+      if (pick?.hit && pick.pickedPoint) {
+        this.endScratch.copyFrom(pick.pickedPoint);
+      } else {
+        this.offsetScratch.copyFrom(this.dirScratch).scaleInPlace(cfg.range);
+        this.endScratch.copyFrom(this.originScratch).addInPlace(this.offsetScratch);
+      }
 
-      if (p === 0) {
-        primaryEndPoint = endPoint;
+      if (this.multiplayerMode && p === 0) {
+        primaryEndPoint = this.endScratch.clone();
       }
 
       this.spawnTracer(
-        muzzleWorld,
-        endPoint,
+        this.muzzleScratch,
+        this.endScratch,
         cfg.suppressed,
         feel.tracerThickness,
         feel.tracerDuration
@@ -1288,16 +1355,21 @@ export class WeaponSystem {
               isTargetHit = true;
             }
           }
-          const hitNormal = pick.getNormal(true) ?? dir.scale(-1);
+          const pickedNormal = pick.getNormal(true);
+          if (pickedNormal) {
+            this.normalScratch.copyFrom(pickedNormal);
+          } else {
+            this.normalScratch.copyFrom(this.dirScratch).scaleInPlace(-1);
+          }
           this.spawnImpact(
             pick.pickedPoint,
             isTargetHit ? 'character' : 'environment',
-            hitNormal,
+            this.normalScratch,
             hitZone === 'head',
             pelletCount > 1 && p % 2 === 1
           );
           if (!meta?.isRemotePlayer && (pelletCount === 1 || p % 2 === 0)) {
-            this.spawnBulletDecal(pick.pickedPoint, hitNormal);
+            this.spawnBulletDecal(pick.pickedPoint, this.normalScratch);
           }
         }
 
@@ -1306,7 +1378,7 @@ export class WeaponSystem {
           primaryZone = hitZone;
         }
         networkPellets.push({
-          endPoint,
+          endPoint: this.endScratch.clone(),
           targetId: hitPlayerId,
           zone: hitZone,
         });
@@ -1318,7 +1390,12 @@ export class WeaponSystem {
       const meta = pick.pickedMesh.metadata as
         | { isBot?: boolean; botId?: string; team?: TeamId; zone?: HitZone }
         | undefined;
-      const hitNormal = pick.getNormal(true) ?? dir.scale(-1);
+      const pickedNormal = pick.getNormal(true);
+      if (pickedNormal) {
+        this.normalScratch.copyFrom(pickedNormal);
+      } else {
+        this.normalScratch.copyFrom(this.dirScratch).scaleInPlace(-1);
+      }
 
       if (meta?.isBot && meta.botId && meta.zone && this.isTargetHostile(meta.botId, meta.team)) {
         const distanceMeters = Math.round(pick.distance * 10) / 10;
@@ -1350,7 +1427,7 @@ export class WeaponSystem {
           this.spawnImpact(
             pick.pickedPoint,
             'character',
-            hitNormal,
+            this.normalScratch,
             result.zone === 'head',
             pelletCount > 1 && p % 2 === 1
           );
@@ -1361,18 +1438,18 @@ export class WeaponSystem {
       this.spawnImpact(
         pick.pickedPoint,
         'environment',
-        hitNormal,
+        this.normalScratch,
         false,
         pelletCount > 1 && p % 2 === 1
       );
       if (!meta?.isBot && (pelletCount === 1 || p % 2 === 0)) {
-        this.spawnBulletDecal(pick.pickedPoint, hitNormal);
+        this.spawnBulletDecal(pick.pickedPoint, this.normalScratch);
       }
     }
 
     if (this.multiplayerMode) {
       this.onNetworkShot?.({
-        muzzle: muzzleWorld,
+        muzzle: this.muzzleScratch.clone(),
         endPoint: primaryEndPoint,
         weaponId: cfg.id,
         targetId: primaryTargetId,

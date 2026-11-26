@@ -34,6 +34,7 @@ export interface PlayerInputCallbacks {
   onUseTactical?: () => void;
   onPing?: () => void;
   onOpenChat?: (channel: ChatChannel) => void;
+  onPauseToggle?: () => void;
 }
 
 const PLAYER_HALF_HEIGHT = 0.9;
@@ -1339,6 +1340,18 @@ export class PlayerController {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    if (
+      !e.repeat &&
+      this.canControl &&
+      !this.chatInputOpen &&
+      !this.isDead &&
+      (e.code === 'Escape' || (e.code === 'KeyP' && !this.boundCodes.has('KeyP')))
+    ) {
+      e.preventDefault();
+      this.callbacks.onPauseToggle?.();
+      return;
+    }
+
     if (!this.isPointerLocked || !this.canControl || this.chatInputOpen) return;
 
     if (
@@ -1549,9 +1562,12 @@ export class PlayerController {
   }
 
   private onWindowBlur = (): void => {
+    const wasLocked = this.isPointerLocked;
     this.chatInputOpen = false;
     this.clearHeldInputs();
-    this.callbacks.onFocusLost?.();
+    if (wasLocked) {
+      this.callbacks.onFocusLost?.();
+    }
   };
 
   private onVisibilityChange = (): void => {

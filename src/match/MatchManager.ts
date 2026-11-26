@@ -60,10 +60,14 @@ export class MatchManager {
   private roundNumber = 1;
   private roundsToWin = BOMB_ROUNDS_TO_WIN;
   private timeRemainingSec = MATCH_DURATION_SEC;
+  private timeLimitSec = MATCH_DURATION_SEC;
+  private matchElapsedSec = 0;
   private winner: TeamId | 'draw' | null = null;
   private winnerParticipantId: string | null = null;
   private winnerName: string | null = null;
   private participants = new Map<string, MatchParticipant>();
+  private cachedSortedParticipants: MatchParticipant[] = [];
+  private participantsSortDirty = true;
   private killFeed: KillFeedEntry[] = [];
   private killFeedSeq = 0;
   private isCustomMatch = false;
@@ -258,6 +262,8 @@ export class MatchManager {
     this.winnerName = null;
     this.killFeed = [];
     this.participants.clear();
+    this.participantsSortDirty = true;
+    this.matchElapsedSec = 0;
 
     this.bombSites =
       options?.bombSites && options.bombSites.length > 0
@@ -272,15 +278,18 @@ export class MatchManager {
         30,
         Math.min(300, options?.timeLimitSec ?? BOMB_ROUND_DURATION_SEC)
       );
+      this.timeLimitSec = this.timeRemainingSec;
     } else if (mode === 'ffa') {
       const resolvedLimit = killLimit > 0 ? killLimit : FFA_DEFAULT_KILL_LIMIT;
       this.killLimit = Math.max(5, Math.min(100, resolvedLimit));
       this.roundsToWin = 1;
       this.timeRemainingSec = Math.max(60, Math.min(1200, options?.timeLimitSec ?? MATCH_DURATION_SEC));
+      this.timeLimitSec = this.timeRemainingSec;
     } else {
       this.killLimit = Math.max(5, Math.min(100, killLimit));
       this.roundsToWin = 1;
       this.timeRemainingSec = Math.max(60, Math.min(1200, options?.timeLimitSec ?? MATCH_DURATION_SEC));
+      this.timeLimitSec = this.timeRemainingSec;
     }
 
     const playerName = options?.playerName?.trim() || 'You';
@@ -377,10 +386,14 @@ export class MatchManager {
     }
 
     if (this.mode === 'bomb') {
+      if (this.bombState.phase !== 'round_end') {
+        this.matchElapsedSec += dt;
+      }
       this.advanceBombTimers(dt);
       return;
     }
 
+    this.matchElapsedSec += dt;
     this.timeRemainingSec = Math.max(0, this.timeRemainingSec - dt);
     if (this.timeRemainingSec <= 0) {
       this.finishByTime();
@@ -627,6 +640,7 @@ export class MatchManager {
     const hostileKill = checkActorsHostile(this.mode, killer, victim, true);
     if (killer.id !== victim.id && hostileKill) {
       killer.kills += 1;
+      this.participantsSortDirty = true;
       if (this.mode === 'tdm') {
         if (killer.team === 'blue') {
           this.blueScore += 1;
@@ -781,7 +795,12 @@ export class MatchManager {
   }
 
   public getSnapshot(): MatchSnapshot {
-    const sorted = sortFfaParticipants(Array.from(this.participants.values()));
+    if (this.participantsSortDirty) {
+      this.cachedSortedParticipants = sortFfaParticipants(
+        Array.from(this.participants.values())
+      );
+      this.participantsSortDirty = false;
+    }
 
     return {
       phase: this.phase,
@@ -794,11 +813,13 @@ export class MatchManager {
       roundNumber: this.roundNumber,
       roundsToWin: this.roundsToWin,
       timeRemainingSec: this.timeRemainingSec,
+      timeLimitSec: this.timeLimitSec,
+      elapsedSec: Math.round(this.matchElapsedSec),
       winner: this.winner,
       winnerParticipantId: this.winnerParticipantId,
       winnerName: this.winnerName,
       bombState: this.mode === 'bomb' ? { ...this.bombState } : null,
-      participants: sorted.map((p) => ({ ...p })),
+      participants: this.cachedSortedParticipants.map((p) => ({ ...p })),
       killFeed: [...this.killFeed],
     };
   }

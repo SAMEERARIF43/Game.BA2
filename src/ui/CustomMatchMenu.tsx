@@ -176,7 +176,7 @@ export const CustomMatchMenu: React.FC<CustomMatchMenuProps> = ({
   };
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/80 p-3 backdrop-blur-sm sm:p-5">
+    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/90 p-3 sm:p-5">
       <div className="my-auto max-h-[calc(100vh-1.5rem)] w-full max-w-5xl overflow-y-auto border border-white/15 bg-[#0e131b]/95 p-4 shadow-2xl sm:p-6">
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">

@@ -198,7 +198,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   };
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/80 p-4 backdrop-blur-sm md:p-6">
+    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/90 p-4 md:p-6">
       <div className="my-auto max-h-[calc(100vh-2rem)] w-full max-w-5xl overflow-y-auto border border-white/15 bg-[#0e131b]/95 p-5 shadow-2xl md:p-6">
         {/* Top Lobby Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3.5">
@@ -347,7 +347,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
 
         {/* Lobby Comms Chat Panel */}
         <div
-          className="mt-4 border border-slate-400/20 bg-slate-950/75 p-3.5 backdrop-blur-md"
+          className="mt-4 border border-slate-400/20 bg-slate-950/90 p-3.5"
           role="region"
           aria-label="Lobby chat"
         >

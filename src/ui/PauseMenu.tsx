@@ -108,7 +108,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
 
   return (
     <div
-      className="pointer-events-auto fixed inset-0 z-25 flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm sm:p-6"
+      className="pointer-events-auto fixed inset-0 z-25 flex items-center justify-center bg-black/82 p-3 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="pause-menu-title"

@@ -248,8 +248,19 @@ export class BotManager {
     const blueWeaponNames = ['AK-47 Heavy Rifle', 'Vector-9 SMG', 'M870 Combat Shotgun', 'AWP-50 Sniper'];
     const redWeaponNames = ['AK-47 Heavy Rifle', 'Vector-9 SMG', 'M870 Combat Shotgun', 'AWP-50 Sniper'];
 
+    const blueSpawnPool =
+      mapDef.blueSpawns.length > 1 ? mapDef.blueSpawns.slice(1) : mapDef.blueSpawns;
     blueBots.forEach((p, idx) => {
-      const spawn = mapDef.blueSpawns[idx % mapDef.blueSpawns.length] ?? new Vector3(-16, 1, -20);
+      const baseSpawn = blueSpawnPool[idx % blueSpawnPool.length] ?? new Vector3(-16, 1, -20);
+      const stackIndex = Math.floor(idx / Math.max(1, blueSpawnPool.length));
+      const spawn =
+        stackIndex === 0
+          ? baseSpawn
+          : new Vector3(
+              baseSpawn.x + (idx % 2 === 0 ? 1.8 : -1.8) * stackIndex,
+              baseSpawn.y,
+              baseSpawn.z
+            );
       this.createBotAgent(
         p.id,
         p.name,
@@ -260,12 +271,24 @@ export class BotManager {
       );
     });
 
+    const ffaSpawns = [...mapDef.blueSpawns.slice(1), ...mapDef.redSpawns];
     redBots.forEach((p, idx) => {
       const spawns =
         this.gameMode === 'ffa'
-          ? [...mapDef.blueSpawns, ...mapDef.redSpawns]
+          ? ffaSpawns.length > 0
+            ? ffaSpawns
+            : mapDef.redSpawns
           : mapDef.redSpawns;
-      const spawn = spawns[idx % spawns.length] ?? new Vector3(16, 1, 20);
+      const baseSpawn = spawns[idx % spawns.length] ?? new Vector3(16, 1, 20);
+      const stackIndex = Math.floor(idx / Math.max(1, spawns.length));
+      const spawn =
+        stackIndex === 0
+          ? baseSpawn
+          : new Vector3(
+              baseSpawn.x + (idx % 2 === 0 ? 1.8 : -1.8) * stackIndex,
+              baseSpawn.y,
+              baseSpawn.z
+            );
       this.createBotAgent(
         p.id,
         p.name,

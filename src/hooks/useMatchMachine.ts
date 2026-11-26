@@ -360,9 +360,26 @@ export function useMatchMachine() {
     };
     document.addEventListener('click', onDocumentClick);
 
-    // Handle initial direct URL route (e.g. /map/:id)
+    // Handle initial direct URL route (e.g. /map/:id) or ?autostart=1 verification entry
+    const autostartParam =
+      typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('autostart')
+        : null;
     if (stateRef.current.status === 'offline_paused') {
       manager.startMatch(stateRef.current.selectedMapId, false);
+    } else if (autostartParam === '1' && stateRef.current.status === 'menu') {
+      const mapId = stateRef.current.selectedMapId;
+      const mode: GameMode = normalizeGameMode(stateRef.current.settings.selectedGameMode, 'tdm');
+      const nextState = dispatchAction({
+        type: 'START_OFFLINE_MATCH',
+        mapId,
+        requestLock: false,
+        isCustomMatch: false,
+        startActive: true,
+      });
+      if (nextState.status === 'offline_playing') {
+        manager.startMatch(mapId, false, { mode, startActive: true });
+      }
     }
 
     return () => {

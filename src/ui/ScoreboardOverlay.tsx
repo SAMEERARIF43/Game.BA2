@@ -219,7 +219,7 @@ export const ScoreboardOverlay: React.FC<ScoreboardOverlayProps> = ({
   if (embedded) return content;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center bg-black/45 p-6 backdrop-blur-[2px]">
+    <div className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center bg-black/70 p-6">
       {content}
     </div>
   );

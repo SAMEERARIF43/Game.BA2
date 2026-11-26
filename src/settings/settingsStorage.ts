@@ -60,6 +60,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   postSlideStance: 'stand',
   jumpCancelsSlide: true,
   slideCameraIntensity: 1.0,
+  autoReload: true,
   crosshair: cloneCrosshairSettings(DEFAULT_CROSSHAIR_SETTINGS),
   teamColors: cloneTeamColors(DEFAULT_TEAM_COLORS),
   keybindings: { ...DEFAULT_KEYBINDINGS },
@@ -120,6 +121,7 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
         'smoke_grenade'
       ),
       sfxEnabled: fallback.sfxEnabled ?? true,
+      autoReload: fallback.autoReload ?? true,
       crosshair: fallbackCrosshair,
       teamColors: fallbackTeamColors,
     };
@@ -269,6 +271,7 @@ export function validateSettings(raw: unknown, fallback: GameSettings = DEFAULT_
     postSlideStance: resolvedPostStance,
     jumpCancelsSlide: resolvedJumpCancel,
     slideCameraIntensity: resolvedCameraIntensity,
+    autoReload: typeof obj.autoReload === 'boolean' ? obj.autoReload : (fallback.autoReload ?? true),
     crosshair: validateCrosshairSettingsMap(obj.crosshair, fallbackCrosshair),
     teamColors: validateTeamColors(obj.teamColors, fallbackTeamColors),
     keybindings: validateKeybindings(obj.keybindings, fallback.keybindings ?? DEFAULT_KEYBINDINGS),

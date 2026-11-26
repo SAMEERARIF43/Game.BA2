@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Award, LogOut, RotateCcw, Trophy, Zap, Crosshair, Shield, Flame, Film, Play, X } from 'lucide-react';
 import { HighlightReelState, MatchSnapshot, TeamColorsConfig } from '../game/types';
 import { TeamId } from '../maps/types';
-import { selectMatchMvp } from '../match/matchMachine';
+import { calculateCombatScore, selectMatchMvp } from '../match/matchMachine';
 import { getRankSummary } from '../settings/progressionStorage';
 import { resolveSideColors } from '../settings/teamColorsConfig';
 import { ScoreboardOverlay, formatMatchTime } from './ScoreboardOverlay';
@@ -62,15 +62,34 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
     return () => window.removeEventListener('keydown', handleKey);
   }, [isPlayingHighlight, onStopHighlightReplay]);
 
-  const headline =
-    match.winner === 'blue'
-      ? 'Victory — Blue Task Force'
+  const matchMode = match.mode ?? 'tdm';
+  const isFfa = matchMode === 'ffa';
+  const isBomb = matchMode === 'bomb';
+  const localParticipantId = match.participants.find((p) => p.isPlayer)?.id ?? null;
+
+  const headline = isFfa
+    ? match.winnerParticipantId
+      ? match.winnerParticipantId === localParticipantId
+        ? 'Victory — Free-For-All Champion'
+        : `Match Complete — ${match.winnerName || 'Opponent'} Wins`
+      : 'Draw Match'
+    : match.winner === 'blue'
+      ? isBomb
+        ? 'Victory — Attackers'
+        : 'Victory — Blue Task Force'
       : match.winner === 'red'
-        ? 'Defeat — Red Opposition'
+        ? isBomb
+          ? 'Defeat — Defenders'
+          : 'Defeat — Red Opposition'
         : 'Draw Match';
 
-  const headlineColor =
-    match.winner === 'blue'
+  const headlineColor = isFfa
+    ? match.winnerParticipantId === localParticipantId
+      ? 'text-amber-300'
+      : match.winnerParticipantId
+        ? 'text-red-400'
+        : 'text-amber-400'
+    : match.winner === 'blue'
       ? 'text-blue-400'
       : match.winner === 'red'
         ? 'text-red-400'
@@ -85,16 +104,25 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
   const blueDeaths = blueParticipants.reduce((sum, p) => sum + p.deaths, 0);
   const redKills = redParticipants.reduce((sum, p) => sum + p.kills, 0);
   const redDeaths = redParticipants.reduce((sum, p) => sum + p.deaths, 0);
-  const matchDuration = formatMatchTime(Math.max(1, 300 - match.timeRemainingSec));
+  const elapsedSec =
+    match.elapsedSec ?? Math.max(1, (match.timeLimitSec ?? 300) - match.timeRemainingSec);
+  const matchDuration = formatMatchTime(Math.max(1, Math.round(elapsedSec)));
 
   // Compute Accolades across participants
   const participantsWithStats = match.participants.map((p) => {
     const kills = p.isPlayer ? playerStats.kills : p.kills;
     const deaths = p.isPlayer ? playerStats.deaths : p.deaths;
     const headshots = p.isPlayer ? playerStats.headshots : Math.min(kills, Math.round(kills * 0.4));
-    const accuracy = p.isPlayer ? playerStats.accuracyPct : (70 + (p.id.charCodeAt(p.id.length - 1) % 25));
-    return { ...p, kills, deaths, headshots, accuracy };
+    const accuracy = p.isPlayer
+      ? playerStats.accuracyPct
+      : 22 + (p.id.charCodeAt(p.id.length - 1) % 27);
+    const combatScore = calculateCombatScore(kills, headshots, accuracy);
+    return { ...p, kills, deaths, headshots, accuracy, combatScore };
   });
+
+  const ffaLeaderboard = [...participantsWithStats].sort(
+    (a, b) => b.kills - a.kills || a.deaths - b.deaths || b.combatScore - a.combatScore
+  );
 
   const sharpshooter = [...participantsWithStats].sort((a, b) => b.accuracy - a.accuracy)[0];
   const mostResilient = [...participantsWithStats].sort((a, b) => a.deaths - b.deaths || b.kills - a.kills)[0];
@@ -114,14 +142,22 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
   }
 
   const mvpTeamLabel = mvp
-    ? mvp.team === 'blue'
-      ? 'Blue Task Force'
-      : 'Red Opposition'
+    ? isFfa
+      ? 'Free-For-All'
+      : mvp.team === 'blue'
+        ? isBomb
+          ? 'Attackers'
+          : 'Blue Task Force'
+        : isBomb
+          ? 'Defenders'
+          : 'Red Opposition'
     : null;
   const mvpTeamColor = mvp
-    ? mvp.team === 'blue'
-      ? 'text-blue-300'
-      : 'text-red-300'
+    ? isFfa
+      ? 'text-amber-300'
+      : mvp.team === 'blue'
+        ? 'text-blue-300'
+        : 'text-red-300'
     : 'text-slate-300';
   const mvpRoleLabel = mvp ? (mvp.isPlayer ? 'You' : mvp.isBot ? 'Bot' : 'Operator') : null;
   const highlightClip = highlightReel?.clip ?? null;
@@ -209,7 +245,7 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
   }
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-30 flex items-center justify-center overflow-y-auto bg-black/75 p-3 backdrop-blur-md sm:p-6">
+    <div className="pointer-events-auto fixed inset-0 z-30 flex items-center justify-center overflow-y-auto bg-[#06090e]/90 p-3 sm:p-6">
       <div className="my-auto w-full max-w-4xl space-y-3 sm:space-y-5">
         <div className="flex flex-col items-start justify-between gap-5 border border-slate-400/20 bg-[#0e131b]/95 p-4 shadow-xl shadow-black/30 sm:flex-row sm:items-center sm:p-6">
           <div className="min-w-0">
@@ -339,8 +375,16 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
                     <div className="flex items-center gap-2 text-[10px] font-display font-bold tracking-widest text-amber-300">
                       <span>MOST FREQUENT KILLER OF THE GAME</span>
                       <span className="text-slate-500">·</span>
-                      <span className={topKiller.team === 'blue' ? 'text-blue-300' : 'text-red-300'}>
-                        {topKiller.team === 'blue' ? 'Blue Task Force' : 'Red Opposition'}
+                      <span className={isFfa ? 'text-amber-300' : topKiller.team === 'blue' ? 'text-blue-300' : 'text-red-300'}>
+                        {isFfa
+                          ? 'Free-For-All'
+                          : topKiller.team === 'blue'
+                            ? isBomb
+                              ? 'Attackers'
+                              : 'Blue Task Force'
+                            : isBomb
+                              ? 'Defenders'
+                              : 'Red Opposition'}
                       </span>
                     </div>
                     <div className="mt-0.5 truncate font-display text-2xl font-bold text-white">
@@ -563,45 +607,92 @@ export const EndMatchScreen: React.FC<EndMatchScreenProps> = ({
                   DURATION {matchDuration}
                 </span>
               </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="border border-blue-400/20 bg-blue-500/5 px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-display text-xs font-bold text-blue-400" style={{ color: sideColors.blueHex }}>
-                      Blue Task Force
-                    </span>
-                    <span className="font-mono-tabular text-base font-bold text-white">{match.blueScore} PTS</span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <span className="text-slate-400 text-[10px]">Total Kills:</span>{' '}
-                      <span className="font-mono-tabular font-semibold text-white">{blueKills}</span>
+              {isFfa ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {ffaLeaderboard.slice(0, 2).map((entry, idx) => (
+                    <div
+                      key={entry.id}
+                      className={`border px-4 py-3 ${
+                        idx === 0
+                          ? 'border-amber-400/35 bg-amber-500/8'
+                          : 'border-white/15 bg-white/[0.03]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span
+                          className={`font-display text-xs font-bold ${
+                            idx === 0 ? 'text-amber-300' : 'text-slate-300'
+                          }`}
+                        >
+                          #{idx + 1} · {entry.name}
+                          {entry.isPlayer ? ' (YOU)' : ''}
+                        </span>
+                        <span className="font-mono-tabular text-base font-bold text-white">
+                          {entry.kills} KILLS
+                        </span>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <span className="text-[10px] text-slate-400">Combat Score:</span>{' '}
+                          <span className="font-mono-tabular font-semibold text-amber-300">
+                            {entry.combatScore.toLocaleString()}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400">Deaths:</span>{' '}
+                          <span className="font-mono-tabular font-semibold text-slate-300">
+                            {entry.deaths}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-slate-400 text-[10px]">Total Deaths:</span>{' '}
-                      <span className="font-mono-tabular font-semibold text-slate-300">{blueDeaths}</span>
-                    </div>
-                  </div>
+                  ))}
                 </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="border border-blue-400/20 bg-blue-500/5 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-display text-xs font-bold text-blue-400" style={{ color: sideColors.blueHex }}>
+                        {isBomb ? 'Blue — Attackers' : 'Blue Task Force'}
+                      </span>
+                      <span className="font-mono-tabular text-base font-bold text-white">
+                        {match.blueScore} {isBomb ? 'RNDS' : 'PTS'}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-slate-400 text-[10px]">Total Kills:</span>{' '}
+                        <span className="font-mono-tabular font-semibold text-white">{blueKills}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 text-[10px]">Total Deaths:</span>{' '}
+                        <span className="font-mono-tabular font-semibold text-slate-300">{blueDeaths}</span>
+                      </div>
+                    </div>
+                  </div>
 
-                <div className="border border-red-400/20 bg-red-500/5 px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-display text-xs font-bold text-red-400" style={{ color: sideColors.redHex }}>
-                      Red Opposition
-                    </span>
-                    <span className="font-mono-tabular text-base font-bold text-white">{match.redScore} PTS</span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <span className="text-slate-400 text-[10px]">Total Kills:</span>{' '}
-                      <span className="font-mono-tabular font-semibold text-white">{redKills}</span>
+                  <div className="border border-red-400/20 bg-red-500/5 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-display text-xs font-bold text-red-400" style={{ color: sideColors.redHex }}>
+                        {isBomb ? 'Red — Defenders' : 'Red Opposition'}
+                      </span>
+                      <span className="font-mono-tabular text-base font-bold text-white">
+                        {match.redScore} {isBomb ? 'RNDS' : 'PTS'}
+                      </span>
                     </div>
-                    <div>
-                      <span className="text-slate-400 text-[10px]">Total Deaths:</span>{' '}
-                      <span className="font-mono-tabular font-semibold text-slate-300">{redDeaths}</span>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-slate-400 text-[10px]">Total Kills:</span>{' '}
+                        <span className="font-mono-tabular font-semibold text-white">{redKills}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 text-[10px]">Total Deaths:</span>{' '}
+                        <span className="font-mono-tabular font-semibold text-slate-300">{redDeaths}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              )}
             </section>
 
             <section

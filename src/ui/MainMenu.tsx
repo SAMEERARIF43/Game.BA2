@@ -93,15 +93,39 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const [hoveredTacticalId, setHoveredTacticalId] = useState<TacticalEquipmentId | null>(null);
 
   useEffect(() => {
-    const handleEscape = (event: KeyboardEvent) => {
+    const handleKeyDown = (event: KeyboardEvent) => {
       if (event.code === 'Escape' && activeTab !== 'play') {
         event.preventDefault();
         setActiveTab('play');
+        return;
+      }
+      if (
+        activeTab === 'play' &&
+        (event.code === 'Enter' || event.code === 'Space') &&
+        !event.repeat &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        const target = event.target as HTMLElement | null;
+        const tag = target?.tagName;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          tag === 'BUTTON' ||
+          tag === 'A' ||
+          target?.isContentEditable
+        ) {
+          return;
+        }
+        event.preventDefault();
+        onPlayOfflineTdm();
       }
     };
-    window.addEventListener('keydown', handleEscape);
-    return () => window.removeEventListener('keydown', handleEscape);
-  }, [activeTab]);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, onPlayOfflineTdm]);
 
   useEffect(() => {
     if (!onPreviewShowcase) return;
@@ -157,13 +181,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       }}
     >
       {/* Deadshot-Inspired Top Bar Navigation */}
-      <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-white/12 bg-[#070b11]/85 px-4 backdrop-blur-md sm:px-6">
-        <div className="flex min-w-0 items-center gap-3">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 border-b border-white/12 bg-[#070b11]/94 px-3.5 py-2 sm:h-14 sm:flex-nowrap sm:px-6 sm:py-0">
+        <div className="flex shrink-0 items-center gap-2.5 sm:min-w-0 sm:gap-3">
           <div className="grid h-8 w-8 shrink-0 place-items-center border border-amber-400/50 bg-amber-500/15 text-amber-400">
             <Crosshair className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <div className="truncate font-display text-lg font-bold tracking-tight text-white sm:text-xl">
+            <div className="whitespace-nowrap font-display text-base font-bold tracking-tight text-white sm:truncate sm:text-xl">
               STRIKE FORCE
             </div>
             <div className="hidden truncate font-mono-tabular text-[10px] tracking-wider text-slate-400 sm:block">
@@ -172,7 +196,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           </div>
         </div>
 
-        <nav className="flex h-full items-center gap-1 overflow-x-auto sm:gap-2" aria-label="Main Menu Navigation">
+        <nav className="order-3 mt-2 flex w-full items-center gap-1 overflow-x-auto border-t border-white/10 pt-1.5 sm:order-none sm:mt-0 sm:h-full sm:w-auto sm:gap-2 sm:border-t-0 sm:pt-0" aria-label="Main Menu Navigation">
           {navItems.map((item) => {
             const active = activeTab === item.id;
             return (
@@ -181,7 +205,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 type="button"
                 aria-current={active ? 'page' : undefined}
                 onClick={() => setActiveTab(item.id)}
-                className={`relative flex h-full cursor-pointer items-center gap-1.5 whitespace-nowrap px-3 font-display text-xs font-bold tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 sm:px-4 ${
+                className={`relative flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 font-display text-xs font-bold tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 sm:h-full sm:px-4 sm:py-0 ${
                   active
                     ? 'text-amber-400'
                     : 'text-slate-300 hover:bg-white/[0.04] hover:text-white'
@@ -226,14 +250,15 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       </header>
 
       {/* Main Content Stage */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3.5 sm:p-5 lg:p-6">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 pb-6 sm:p-5 lg:p-6">
         {activeTab === 'play' && (
-          <div className="flex min-h-0 flex-1 flex-col justify-between gap-4">
+          <div className="flex min-h-0 flex-1 flex-col justify-between gap-3 sm:gap-4">
             {/* Upper Side Panels Leaving Center Stage Open for the Live 3D Operator */}
-            <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+            <div className="min-h-0 flex-1 overflow-y-auto pr-0.5 lg:overflow-visible lg:pr-0">
+              <div className="flex flex-col justify-between gap-3 sm:gap-4 lg:flex-row lg:items-start">
               {/* Top-Left: Operator Identity, Current Theater & Build 12 Roster Summary */}
               <div className="flex w-full flex-col gap-3 lg:w-76">
-                <section className="border border-white/15 bg-[#0b1017]/82 p-3.5 backdrop-blur-md">
+                <section className="border border-white/15 bg-[#0b1017]/92 p-3.5">
                   <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-2">
                     <span className="font-mono-tabular text-[10px] font-semibold tracking-widest text-slate-400">
                       OPERATOR PROFILE
@@ -303,7 +328,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     <span>Rules</span>
                     <span className="text-slate-200">
                       {selectedMode === 'ffa'
-                        ? `${settings.botsPerTeam * 2 + 1} Combatants · 20 Kills`
+                        ? `${Math.min(12, Math.max(2, settings.botsPerTeam * 2))} Combatants · 20 Kills`
                         : selectedMode === 'bomb'
                           ? `${settings.botsPerTeam}v${settings.botsPerTeam} · First to 5 Rnds`
                           : `${settings.botsPerTeam}v${settings.botsPerTeam} · ${settings.killLimit} Kills`}
@@ -349,7 +374,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 </section>
 
                 {/* Compact Patch Notes / Updates Panel */}
-                <section className="hidden border border-white/12 bg-[#0b1017]/78 p-3.5 backdrop-blur-md lg:block">
+                <section className="hidden border border-white/12 bg-[#0b1017]/90 p-3.5 lg:block">
                   <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
                     <span className="font-mono-tabular text-[10px] font-bold tracking-widest text-amber-400">
                       LATEST UPDATE
@@ -377,7 +402,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
               {/* Top-Right: 4-Character Quick Selector + Active Loadout Shortcut */}
               <div className="flex w-full flex-col gap-3 lg:w-80">
-                <section className="border border-white/15 bg-[#0b1017]/82 p-3.5 backdrop-blur-md">
+                <section className="border border-white/15 bg-[#0b1017]/92 p-3.5">
                   <div className="flex items-center justify-between border-b border-white/10 pb-2">
                     <span className="inline-flex items-center gap-1.5 font-mono-tabular text-[10px] font-semibold tracking-widest text-slate-400">
                       <UserCheck className="h-3 w-3 text-amber-400" />
@@ -514,51 +539,39 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                         ×{selectedTactical.chargesPerSpawn}
                       </span>
                     </div>
-                    <div className="mt-1.5 flex items-center gap-2.5">
-                      <div className="border border-white/10 bg-slate-950/65 px-1.5 py-0.5">
+                    <div className="mt-2 flex items-center gap-2">
+                      <div className="shrink-0 border border-white/10 bg-slate-950/65 px-1.5 py-0.5">
                         <TacticalEquipmentPreview
                           equipmentId={activeTacticalId}
-                          className="h-8 w-14"
+                          className="h-7 w-12"
                         />
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-display text-xs font-semibold text-white">
-                          {selectedTactical.name}
-                        </div>
-                        <div className="truncate font-mono-tabular text-[10px] text-slate-300">
-                          {selectedTactical.radiusMeters}m Rad ·{' '}
-                          {selectedTactical.id === 'frag_grenade'
-                            ? `${selectedTactical.fuseSec}s Fuse`
-                            : `${selectedTactical.durationSec}s Dur`}{' '}
-                          · {selectedTactical.cooldownSec}s CD
-                        </div>
+                      <div className="grid min-w-0 flex-1 grid-cols-4 gap-1">
+                        {TACTICAL_EQUIPMENT_IDS.map((tacId) => {
+                          const tac = TACTICAL_EQUIPMENT[tacId];
+                          const active = activeTacticalId === tacId;
+                          return (
+                            <button
+                              key={tacId}
+                              type="button"
+                              aria-pressed={active}
+                              title={`${tac.name}: ${tac.tooltip}`}
+                              onMouseEnter={() => setHoveredTacticalId(tacId)}
+                              onMouseLeave={() => setHoveredTacticalId(null)}
+                              onFocus={() => setHoveredTacticalId(tacId)}
+                              onBlur={() => setHoveredTacticalId(null)}
+                              onClick={() => handleSelectTactical(tacId)}
+                              className={`cursor-pointer truncate border px-1 py-1.5 font-mono-tabular text-[9px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                                active
+                                  ? 'border-sky-400 bg-sky-400/20 text-sky-200'
+                                  : 'border-white/10 bg-black/45 text-slate-300 hover:border-white/25 hover:text-white'
+                              }`}
+                            >
+                              {tac.shortName}
+                            </button>
+                          );
+                        })}
                       </div>
-                    </div>
-                    <div className="mt-2 grid grid-cols-4 gap-1">
-                      {TACTICAL_EQUIPMENT_IDS.map((tacId) => {
-                        const tac = TACTICAL_EQUIPMENT[tacId];
-                        const active = activeTacticalId === tacId;
-                        return (
-                          <button
-                            key={tacId}
-                            type="button"
-                            aria-pressed={active}
-                            title={`${tac.name}: ${tac.tooltip}`}
-                            onMouseEnter={() => setHoveredTacticalId(tacId)}
-                            onMouseLeave={() => setHoveredTacticalId(null)}
-                            onFocus={() => setHoveredTacticalId(tacId)}
-                            onBlur={() => setHoveredTacticalId(null)}
-                            onClick={() => handleSelectTactical(tacId)}
-                            className={`cursor-pointer truncate border px-1.5 py-1 font-mono-tabular text-[9px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
-                              active
-                                ? 'border-sky-400 bg-sky-400/20 text-sky-200'
-                                : 'border-white/10 bg-black/45 text-slate-300 hover:border-white/25 hover:text-white'
-                            }`}
-                          >
-                            {tac.shortName}
-                          </button>
-                        );
-                      })}
                     </div>
                     <div
                       data-tactical-tooltip={inspectedTactical.id}
@@ -590,14 +603,15 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   </button>
                 </section>
               </div>
+              </div>
             </div>
 
-            {/* Bottom-Center Dominant Play CTA Dock */}
-            <div className="mx-auto flex w-full max-w-3xl flex-col items-center gap-2 sm:flex-row sm:items-stretch sm:justify-center sm:gap-3">
+            {/* Bottom-Center Dominant Play CTA Dock (always visible above fold on mobile) */}
+            <div className="mx-auto grid w-full max-w-3xl shrink-0 grid-cols-2 gap-2 border-t border-white/10 bg-[#070b11]/88 pt-2.5 sm:flex sm:flex-row sm:items-stretch sm:justify-center sm:gap-3 sm:border-t-0 sm:bg-transparent sm:pt-0">
               <button
                 type="button"
                 onClick={onOpenCustomMatch}
-                className="flex cursor-pointer items-center justify-center gap-2.5 border border-blue-400/45 bg-[#0b1322]/90 px-5 py-3 font-display text-xs font-bold tracking-wider text-blue-100 backdrop-blur-md transition-colors hover:border-blue-400 hover:bg-blue-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 whitespace-nowrap sm:min-w-[180px]"
+                className="order-2 flex cursor-pointer items-center justify-center gap-2 border border-blue-400/45 bg-[#0b1322]/94 px-3 py-2.5 font-display text-xs font-bold tracking-wider text-blue-100 transition-colors hover:border-blue-400 hover:bg-blue-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 whitespace-nowrap sm:order-1 sm:min-w-[180px] sm:px-5 sm:py-3"
               >
                 <Users className="h-4 w-4 text-blue-300" />
                 <span>MULTIPLAYER</span>
@@ -605,8 +619,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
               <button
                 type="button"
+                data-start="true"
                 onClick={onPlayOfflineTdm}
-                className="flex cursor-pointer items-center justify-center gap-3 border border-amber-300 bg-amber-500 px-8 py-3.5 font-display text-base font-bold tracking-widest text-slate-950 shadow-xl shadow-amber-950/35 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 whitespace-nowrap sm:min-w-[260px]"
+                className="col-span-2 order-1 flex cursor-pointer items-center justify-center gap-2.5 border border-amber-300 bg-amber-500 px-5 py-3 font-display text-sm font-bold tracking-widest text-slate-950 shadow-xl shadow-amber-950/35 transition-colors hover:bg-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 whitespace-nowrap sm:order-2 sm:min-w-[260px] sm:px-8 sm:py-3.5 sm:text-base"
               >
                 <Crosshair className="h-5 w-5" />
                 <span>PLAY · SOLO BOTS ({selectedModeMeta.shortLabel})</span>
@@ -615,7 +630,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               <button
                 type="button"
                 onClick={onOpenMapSelect}
-                className="flex cursor-pointer items-center justify-center gap-2.5 border border-white/20 bg-[#0b1017]/90 px-5 py-3 font-display text-xs font-bold tracking-wider text-white backdrop-blur-md transition-colors hover:border-amber-400/60 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 whitespace-nowrap sm:min-w-[180px]"
+                className="order-3 flex cursor-pointer items-center justify-center gap-2 border border-white/20 bg-[#0b1017]/94 px-3 py-2.5 font-display text-xs font-bold tracking-wider text-white transition-colors hover:border-amber-400/60 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 whitespace-nowrap sm:min-w-[180px] sm:px-5 sm:py-3"
               >
                 <Compass className="h-4 w-4 text-amber-400" />
                 <span>THEATERS</span>
@@ -626,7 +641,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
         {activeTab === 'loadout' && (
           <div className="flex min-h-0 flex-1 items-start">
-            <div className="flex max-h-full w-full max-w-[620px] flex-col overflow-y-auto border border-white/15 bg-[#0b1017]/90 p-5 backdrop-blur-md">
+            <div className="flex max-h-full w-full max-w-[620px] flex-col overflow-y-auto border border-white/15 bg-[#0b1017]/95 p-5">
               <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
                 <div>
                   <div className="font-mono-tabular text-[10px] font-bold tracking-widest text-amber-400">
@@ -942,7 +957,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
         {activeTab === 'maps' && (
           <div className="flex min-h-0 flex-1 items-start">
-            <div className="flex max-h-full w-full max-w-3xl flex-col overflow-y-auto border border-white/15 bg-[#0b1017]/92 p-4 backdrop-blur-md sm:p-5">
+            <div className="flex max-h-full w-full max-w-3xl flex-col overflow-y-auto border border-white/15 bg-[#0b1017]/95 p-4 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
                 <div>
                   <div className="font-mono-tabular text-[10px] font-bold tracking-widest text-amber-400">
@@ -1043,7 +1058,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
         {activeTab === 'settings' && (
           <div className="flex min-h-0 flex-1 items-start">
-            <div className="max-h-full w-full max-w-2xl overflow-y-auto border border-white/15 bg-[#0b1017]/92 p-5 backdrop-blur-md">
+            <div className="max-h-full w-full max-w-2xl overflow-y-auto border border-white/15 bg-[#0b1017]/95 p-5">
               <div className="mb-4 flex items-center justify-between border-b border-white/10 pb-3">
                 <h2 className="font-display text-xl font-bold text-white">Settings</h2>
                 <button
@@ -1065,7 +1080,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
         {activeTab === 'howto' && (
           <div className="flex min-h-0 flex-1 items-start">
-            <div className="max-h-full w-full max-w-2xl overflow-y-auto border border-white/15 bg-[#0b1017]/92 p-5 backdrop-blur-md">
+            <div className="max-h-full w-full max-w-2xl overflow-y-auto border border-white/15 bg-[#0b1017]/95 p-5">
               <div className="mb-4 flex items-center justify-between border-b border-white/10 pb-3">
                 <h2 className="font-display text-xl font-bold text-white">Combat Controls</h2>
                 <button
@@ -1169,6 +1184,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             </div>
           </div>
         )}
+      </div>
+
+      <div
+        data-testid="menu-version-label"
+        className="pointer-events-none fixed bottom-1.5 right-3 z-10 select-none font-mono-tabular text-[10px] tracking-widest text-slate-400/75 sm:bottom-2.5 sm:right-4"
+      >
+        v1.0.0
       </div>
     </div>
   );

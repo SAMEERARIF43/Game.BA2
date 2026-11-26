@@ -148,7 +148,11 @@ export class NetworkManager {
     expectedEpoch?: number
   ): Promise<LobbyRoomSnapshot> {
     const attemptId = ++this.connectAttemptId;
-    await this.closeActiveRoom();
+    if (this.room) {
+      await this.closeActiveRoom();
+    } else {
+      this.roomEpoch = undefined;
+    }
     if (attemptId !== this.connectAttemptId) {
       throw new Error('Connection attempt cancelled.');
     }
@@ -179,7 +183,11 @@ export class NetworkManager {
     expectedEpoch?: number
   ): Promise<LobbyRoomSnapshot> {
     const attemptId = ++this.connectAttemptId;
-    await this.closeActiveRoom();
+    if (this.room) {
+      await this.closeActiveRoom();
+    } else {
+      this.roomEpoch = undefined;
+    }
     if (attemptId !== this.connectAttemptId) {
       throw new Error('Connection attempt cancelled.');
     }

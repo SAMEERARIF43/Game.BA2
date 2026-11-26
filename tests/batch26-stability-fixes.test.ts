@@ -316,6 +316,7 @@ test('Batch 26: Connection epoch ordering & superseded NetworkManager attempts',
     },
     10
   );
+  const firstAttemptRejection = assert.rejects(firstAttempt, /superseded|cancelled/i);
 
   // Immediately supersede with second attempt on epoch 11
   const secondSnapshot = await network.createPrivateMatch(
@@ -340,7 +341,7 @@ test('Batch 26: Connection epoch ordering & superseded NetworkManager attempts',
       firstRoomLeft = true;
     })
   );
-  await assert.rejects(firstAttempt, /superseded|cancelled/i);
+  await firstAttemptRejection;
   assert.strictEqual(firstRoomLeft, true, 'Superseded room must be closed immediately');
   assert.strictEqual(secondRoomLeft, false, 'Active newer room must stay connected');
   assert.strictEqual(network.getRoomEpoch(), 11);

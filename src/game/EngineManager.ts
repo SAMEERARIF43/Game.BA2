@@ -1,5 +1,4 @@
 import {
-  AbstractMesh,
   Color3,
   Color4,
   Constants,
@@ -13,7 +12,6 @@ import {
   Mesh,
   MeshBuilder,
   PointLight,
-  Ray,
   Scene,
   ShadowGenerator,
   StandardMaterial,
@@ -69,6 +67,7 @@ import {
   createOperatorPalette,
   updateOperatorPaletteTeamColor,
 } from './OperatorMeshBuilder';
+import { TacticalEffectsManager } from './tacticalEffects';
 import { PingSystem, resolvePingRaycast } from './PingSystem';
 import { PlayerController } from './PlayerController';
 import { ARENA_HALF_EXTENT } from './minimap';
@@ -169,50 +168,23 @@ export interface EngineCallbacks {
   onMultiplayerRespawnRequest?: (weaponId: GunId) => void;
 }
 
-interface BarrageShell {
-  mesh: Mesh;
-  mat: StandardMaterial;
-  targetPos: Vector3;
-  delay: number;
-  detonated: boolean;
-}
-
-interface BlastEffect {
-  sphere: Mesh;
-  ring: Mesh;
-  sphereMat: StandardMaterial;
-  ringMat: StandardMaterial;
-  life: number;
-  maxLife: number;
-}
-
-interface TacticalProjectile {
-  kind: TacticalEquipmentId;
-  mesh: Mesh;
-  mat: StandardMaterial;
-  velocity: Vector3;
-  fuseRemaining: number;
-}
-
-interface SmokeCloudEffect {
-  meshes: Mesh[];
-  mat: StandardMaterial;
-  x: number;
-  y: number;
-  z: number;
-  radius: number;
-  life: number;
-  maxLife: number;
-}
-
 const UAV_DURATION_SEC = 20;
 const OVERDRIVE_DURATION_SEC = 15;
 const RADAR_RANGE_METERS = 32;
 const PROXIMITY_REVEAL_METERS = 12;
 
+const BARRAGE_SPHERE_COLOR = new Color3(2.2, 0.95, 0.25);
+const BARRAGE_RING_COLOR = new Color3(1.8, 1.25, 0.6);
+const FLASH_SPHERE_COLOR = new Color3(1.8, 2.2, 2.5);
+const FLASH_RING_COLOR = new Color3(0.55, 0.85, 1.0);
+const STUN_SPHERE_COLOR = new Color3(0.35, 1.85, 1.25);
+const STUN_RING_COLOR = new Color3(0.2, 1.35, 0.9);
+const HIGHLIGHT_X_AXIS = new Vector3(1, 0, 0);
+
 export class EngineManager {
   private canvas: HTMLCanvasElement;
   private engine: Engine;
+  private readonly isSoftwareGl: boolean;
   private scene: Scene;
   private sunLight!: DirectionalLight;
   private hemiLight!: HemisphericLight;
@@ -294,18 +266,19 @@ export class EngineManager {
   private killstreakBannerSeq = 0;
   private scorePopups: ScorePopup[] = [];
   private scorePopupSeq = 0;
-  private barrageShells: BarrageShell[] = [];
-  private blastEffects: BlastEffect[] = [];
-  private tacticalProjectiles: TacticalProjectile[] = [];
-  private smokeClouds: SmokeCloudEffect[] = [];
+  private tacticalEffects!: TacticalEffectsManager;
   private equippedTacticalId: TacticalEquipmentId;
   private queuedTacticalId: TacticalEquipmentId;
   private tacticalCharges = 2;
   private tacticalThrowCooldown = 0;
   private flashBlindIntensity = 0;
-  private readonly tacticalHitRay = new Ray(Vector3.Zero(), Vector3.Forward(), 2);
-  private readonly tacticalMeshPredicate = (mesh: AbstractMesh): boolean =>
-    mesh.checkCollisions && mesh.isEnabled() && !mesh.metadata?.isBot;
+  private readonly hlTargetScratch = new Vector3();
+  private readonly hlMuzzleScratch = new Vector3();
+  private readonly hlImpactScratch = new Vector3();
+  private readonly hlBulletScratch = new Vector3();
+  private readonly hlDirScratch = new Vector3();
+  private readonly tacticalOriginScratch = new Vector3();
+  private readonly tacticalFwdScratch = new Vector3();
 
   private xpTotal = 0;
   private sessionXpEarned = 0;
@@ -392,14 +365,17 @@ export class EngineManager {
       antialias: true,
       powerPreference: 'high-performance',
     });
-    this.engine.setHardwareScalingLevel(1 / Math.min(window.devicePixelRatio || 1, 2));
+    this.isSoftwareGl = EngineManager.detectSoftwareWebGl(this.engine);
+    this.engine.setHardwareScalingLevel(
+      this.isSoftwareGl ? 1.5 : 1 / Math.min(window.devicePixelRatio || 1, 2)
+    );
 
     this.scene = new Scene(this.engine);
     this.scene.clearColor = new Color4(0.11, 0.14, 0.19, 1.0);
     this.scene.collisionsEnabled = true;
 
-    // Keep the world depth buffer for the viewmodel and avoid a no-op buffer clear.
-    this.scene.setRenderingAutoClearDepthStencil(1, false, false, false);
+    // Preserve world color while clearing depth before rendering the 1P viewmodel group.
+    this.scene.setRenderingAutoClearDepthStencil(1, false, true, false);
 
     this.setupLighting();
     this.callbacks.onInitProgress?.({
@@ -428,6 +404,11 @@ export class EngineManager {
     this.matchManager = new MatchManager();
     this.remoteRenderer = new RemotePlayerRenderer(this.scene);
     this.pingSystem = new PingSystem(this.scene);
+    this.tacticalEffects = new TacticalEffectsManager(this.scene, {
+      onBarrageImpact: (pos) => this.detonateBarrageShell(pos),
+      onTacticalDetonate: (kind, pos) => this.detonateTacticalGrenade(kind, pos),
+      onSmokeCloudsChanged: (clouds) => this.botManager.setSmokeClouds(clouds),
+    });
     this.syncTeamColorsToScene('blue');
 
     this.player = new PlayerController(this.scene, this.canvas, this.audio, {
@@ -473,6 +454,18 @@ export class EngineManager {
       },
       onOpenChat: (channel) => {
         this.openChatInput(channel);
+      },
+      onPauseToggle: () => {
+        if (this.getCurrentMatchPhase() !== 'playing') return;
+        if (this.sessionMode === 'multiplayer') {
+          this.mpPaused = true;
+        } else {
+          this.matchManager.setPhase('paused');
+        }
+        this.showScoreboard = false;
+        this.weapons.cancelTransientActions();
+        this.player.exitPointerLock();
+        this.emitHudState(true);
       },
       onPointerLockChange: (locked) => {
         if (locked && this.chatOpen) {
@@ -603,6 +596,7 @@ export class EngineManager {
       normalizeGunId(initialSettings.selectedGunId),
       normalizeKnifeCharmId(initialSettings.knifeCharmId)
     );
+    this.weapons.setAutoReload(initialSettings.autoReload ?? true);
 
     this.callbacks.onInitProgress?.({
       active: true,
@@ -770,6 +764,7 @@ export class EngineManager {
       botsPerTeam?: number;
       isCustomMatch?: boolean;
       playerName?: string;
+      startActive?: boolean;
     }
   ): void {
     this.sessionMode = 'offline';
@@ -833,7 +828,6 @@ export class EngineManager {
     this.player.setOrbitPreview(false);
     this.player.setCanControl(true);
     this.weapons.setViewModelVisible(true);
-    this.updateMenuShowcaseVisuals();
     this.showScoreboard = false;
     this.showOnboarding = !this.onboardingDismissed;
     this.heartbeatCooldown = 0;
@@ -841,10 +835,13 @@ export class EngineManager {
     if (requestLock) {
       this.matchManager.setPhase('playing');
       this.player.requestPointerLock();
+    } else if (customOptions?.startActive) {
+      this.matchManager.setPhase('playing');
     } else {
       this.matchManager.setPhase('paused');
     }
 
+    this.updateMenuShowcaseVisuals();
     this.emitHudState(true);
   }
 
@@ -1185,6 +1182,7 @@ export class EngineManager {
     );
     this.syncTeamColorsToScene();
     this.applyGraphicsQuality(settings.graphicsQuality);
+    this.weapons.setAutoReload(settings.autoReload ?? true);
     if (settings.knifeCharmId !== this.weapons.getKnifeCharmId()) {
       this.weapons.setKnifeCharm(settings.knifeCharmId);
     }
@@ -1462,64 +1460,10 @@ export class EngineManager {
 
   private launchPrecisionBarrage(): void {
     const pPos = this.player.collider.position;
-    const forward = this.player.camera.getDirection(Vector3.Forward());
-    const flatFwd = new Vector3(forward.x, 0, forward.z);
-    if (flatFwd.lengthSquared() < 0.001) {
-      flatFwd.set(0, 0, 1);
-    } else {
-      flatFwd.normalize();
-    }
-
-    let center = new Vector3(pPos.x + flatFwd.x * 14, 0.2, pPos.z + flatFwd.z * 14);
-    if (this.sessionMode === 'offline') {
-      const enemies = this.botManager.getLivingEnemyPositions('blue');
-      if (enemies.length > 0) {
-        // Pick nearest living enemy ahead or closest overall to reward tactical strike placement
-        let best = enemies[0];
-        let bestScore = Infinity;
-        for (const e of enemies) {
-          const distToAim = Vector3.Distance(e, center);
-          if (distToAim < bestScore) {
-            bestScore = distToAim;
-            best = e;
-          }
-        }
-        center = new Vector3(best.x, 0.2, best.z);
-      }
-    }
-
-    center.x = Math.max(-22, Math.min(22, center.x));
-    center.z = Math.max(-22, Math.min(22, center.z));
-
-    for (let i = 0; i < 6; i++) {
-      const angle = (i / 6) * Math.PI * 2 + Math.random() * 0.5;
-      const rad = i === 0 ? 0.5 : 2.2 + Math.random() * 4.5;
-      const tx = Math.max(-24, Math.min(24, center.x + Math.cos(angle) * rad));
-      const tz = Math.max(-24, Math.min(24, center.z + Math.sin(angle) * rad));
-
-      const shellMat = new StandardMaterial(`barrageShellMat_${Date.now()}_${i}`, this.scene);
-      shellMat.disableLighting = true;
-      shellMat.emissiveColor = new Color3(2.0, 0.9, 0.28);
-
-      const shell = MeshBuilder.CreateCylinder(
-        `barrageShell_${i}`,
-        { height: 1.4, diameterTop: 0.08, diameterBottom: 0.22, tessellation: 8 },
-        this.scene
-      );
-      shell.position.set(tx, 26, tz);
-      shell.material = shellMat;
-      shell.isPickable = false;
-      shell.checkCollisions = false;
-      shell.isVisible = false;
-
-      this.barrageShells.push({
-        mesh: shell,
-        mat: shellMat,
-        targetPos: new Vector3(tx, 0.2, tz),
-        delay: 0.3 + i * 0.34,
-        detonated: false,
-      });
-    }
+    this.player.camera.getDirectionToRef(Vector3.Forward(), this.tacticalFwdScratch);
+    const livingEnemies =
+      this.sessionMode === 'offline' ? this.botManager.getLivingEnemyPositions('blue') : [];
+    this.tacticalEffects.launchBarrage(pPos, this.tacticalFwdScratch, livingEnemies);
   }
 
   private updateArcadeEffects(dt: number): void {
@@ -1550,47 +1494,6 @@ export class EngineManager {
       }
     }
 
-    // Falling Precision Barrage shells
-    for (let i = this.barrageShells.length - 1; i >= 0; i--) {
-      const s = this.barrageShells[i];
-      if (s.delay > 0) {
-        s.delay -= dt;
-        if (s.delay <= 0) {
-          s.mesh.isVisible = true;
-        }
-        continue;
-      }
-
-      s.mesh.position.y -= 42 * dt;
-      if (s.mesh.position.y <= s.targetPos.y) {
-        this.detonateBarrageShell(s.targetPos);
-        s.mat.dispose();
-        s.mesh.dispose();
-        this.barrageShells.splice(i, 1);
-      }
-    }
-
-    // Blast spheres & shockwave rings
-    for (let i = this.blastEffects.length - 1; i >= 0; i--) {
-      const b = this.blastEffects[i];
-      b.life -= dt;
-      if (b.life <= 0) {
-        b.sphereMat.dispose();
-        b.ringMat.dispose();
-        b.sphere.dispose();
-        b.ring.dispose();
-        this.blastEffects.splice(i, 1);
-      } else {
-        const t = 1 - b.life / b.maxLife;
-        const sphereScale = 0.6 + t * 5.2;
-        b.sphere.scaling.setAll(sphereScale);
-        b.sphereMat.alpha = Math.max(0, (1 - t) * 0.85);
-        const ringScale = 0.8 + t * 10.5;
-        b.ring.scaling.set(ringScale, ringScale, 1);
-        b.ringMat.alpha = Math.max(0, (1 - t) * 0.9);
-      }
-    }
-
     // Tactical throw cooldown & flash blindness decay
     if (this.tacticalThrowCooldown > 0) {
       this.tacticalThrowCooldown = Math.max(0, this.tacticalThrowCooldown - dt);
@@ -1599,127 +1502,7 @@ export class EngineManager {
       this.flashBlindIntensity = Math.max(0, this.flashBlindIntensity - dt * 0.42);
     }
 
-    // Thrown Tactical Equipment projectiles
-    for (let i = this.tacticalProjectiles.length - 1; i >= 0; i--) {
-      const p = this.tacticalProjectiles[i];
-      p.velocity.y -= 20 * dt;
-
-      const step = p.velocity.scale(dt);
-      const stepLen = step.length();
-      if (stepLen > 0.001) {
-        this.tacticalHitRay.origin.copyFrom(p.mesh.position);
-        this.tacticalHitRay.direction.copyFrom(step).scaleInPlace(1 / stepLen);
-        this.tacticalHitRay.length = stepLen + 0.16;
-        const hit = this.scene.pickWithRay(this.tacticalHitRay, this.tacticalMeshPredicate);
-        if (hit?.hit && hit.pickedPoint) {
-          const normal = hit.getNormal(true) ?? new Vector3(0, 1, 0);
-          p.mesh.position.copyFrom(hit.pickedPoint).addInPlace(normal.scale(0.14));
-          const vn = Vector3.Dot(p.velocity, normal);
-          if (vn < 0) {
-            p.velocity.subtractInPlace(normal.scale(1.48 * vn));
-            p.velocity.scaleInPlace(0.62);
-          }
-        } else {
-          p.mesh.position.addInPlace(step);
-        }
-      }
-
-      if (p.mesh.position.y < 0.22) {
-        p.mesh.position.y = 0.22;
-        if (p.velocity.y < 0) {
-          p.velocity.y = -p.velocity.y * 0.42;
-          p.velocity.x *= 0.72;
-          p.velocity.z *= 0.72;
-        }
-      }
-      if (p.mesh.position.x > 27.5 || p.mesh.position.x < -27.5) {
-        p.mesh.position.x = Math.max(-27.5, Math.min(27.5, p.mesh.position.x));
-        p.velocity.x *= -0.5;
-      }
-      if (p.mesh.position.z > 27.5 || p.mesh.position.z < -27.5) {
-        p.mesh.position.z = Math.max(-27.5, Math.min(27.5, p.mesh.position.z));
-        p.velocity.z *= -0.5;
-      }
-
-      p.mesh.rotation.x += 7.5 * dt;
-      p.mesh.rotation.z += 5.2 * dt;
-      p.fuseRemaining -= dt;
-      if (p.fuseRemaining <= 0) {
-        const impactPos = p.mesh.position.clone();
-        const kind = p.kind;
-        p.mat.dispose();
-        p.mesh.dispose();
-        this.tacticalProjectiles.splice(i, 1);
-        this.detonateTacticalGrenade(kind, impactPos);
-      }
-    }
-
-    // Active smoke concealment clouds
-    if (this.smokeClouds.length > 0) {
-      let cloudsChanged = false;
-      for (let i = this.smokeClouds.length - 1; i >= 0; i--) {
-        const cloud = this.smokeClouds[i];
-        cloud.life -= dt;
-        if (cloud.life <= 0) {
-          for (const m of cloud.meshes) {
-            m.dispose();
-          }
-          cloud.mat.dispose();
-          this.smokeClouds.splice(i, 1);
-          cloudsChanged = true;
-        } else {
-          const age = cloud.maxLife - cloud.life;
-          const expandT = Math.min(1, age / 0.65);
-          const fadeT = cloud.life < 2.5 ? cloud.life / 2.5 : 1;
-          cloud.mat.alpha = 0.72 * fadeT;
-          const scale = 0.45 + expandT * 0.55;
-          for (const m of cloud.meshes) {
-            m.scaling.setAll(scale);
-          }
-        }
-      }
-      if (cloudsChanged) {
-        this.botManager.setSmokeClouds(this.smokeClouds);
-      }
-    }
-  }
-
-  private spawnBlastVisual(
-    pos: Vector3,
-    sphereColor: Color3,
-    ringColor: Color3,
-    maxLife = 0.48
-  ): void {
-    const sphereMat = new StandardMaterial(`blastSphMat_${Date.now()}`, this.scene);
-    sphereMat.disableLighting = true;
-    sphereMat.emissiveColor = sphereColor;
-    sphereMat.alpha = 0.85;
-
-    const sphere = MeshBuilder.CreateSphere('blastSphere', { diameter: 1.4, segments: 10 }, this.scene);
-    sphere.position.copyFrom(pos).addInPlace(new Vector3(0, 0.4, 0));
-    sphere.material = sphereMat;
-    sphere.isPickable = false;
-
-    const ringMat = new StandardMaterial(`blastRingMat_${Date.now()}`, this.scene);
-    ringMat.disableLighting = true;
-    ringMat.emissiveColor = ringColor;
-    ringMat.alpha = 0.9;
-    ringMat.backFaceCulling = false;
-
-    const ring = MeshBuilder.CreateDisc('blastRing', { radius: 0.9, tessellation: 24 }, this.scene);
-    ring.position.copyFrom(pos).addInPlace(new Vector3(0, 0.08, 0));
-    ring.rotation.x = Math.PI * 0.5;
-    ring.material = ringMat;
-    ring.isPickable = false;
-
-    this.blastEffects.push({
-      sphere,
-      ring,
-      sphereMat,
-      ringMat,
-      life: maxLife,
-      maxLife,
-    });
+    this.tacticalEffects.update(dt);
   }
 
   private detonateBarrageShell(pos: Vector3): void {
@@ -1729,7 +1512,7 @@ export class EngineManager {
       this.player.addCameraShake(Math.max(0.03, 0.16 * (1 - distToPlayer / 35)));
     }
 
-    this.spawnBlastVisual(pos, new Color3(2.2, 0.95, 0.25), new Color3(1.8, 1.25, 0.6));
+    this.tacticalEffects.spawnBlastVisual(pos, BARRAGE_SPHERE_COLOR, BARRAGE_RING_COLOR);
 
     if (this.sessionMode === 'offline' && this.matchManager.getPhase() === 'playing') {
       this.botManager.applyAirstrikeDamage(pos, 8.5, 130, (kill) => {
@@ -1752,32 +1535,13 @@ export class EngineManager {
     this.tacticalThrowCooldown = cfg.cooldownSec;
     this.audio.playGrenadeThrow();
 
-    const origin = this.player.camera.globalPosition.clone();
-    const fwd = this.player.camera.getDirection(Vector3.Forward()).normalize();
-    const spawnPos = origin.add(fwd.scale(0.68)).add(new Vector3(0, -0.1, 0));
-
-    const mat = new StandardMaterial(`tacProjMat_${Date.now()}`, this.scene);
-    mat.diffuseColor = Color3.FromHexString(cfg.accentHex);
-    mat.emissiveColor = Color3.FromHexString(cfg.accentHex).scale(0.45);
-
-    const mesh = MeshBuilder.CreateCylinder(
-      `tacProj_${Date.now()}`,
-      { height: 0.22, diameterTop: 0.1, diameterBottom: 0.11, tessellation: 10 },
-      this.scene
+    this.tacticalOriginScratch.copyFrom(this.player.camera.globalPosition);
+    this.player.camera.getDirectionToRef(Vector3.Forward(), this.tacticalFwdScratch);
+    this.tacticalEffects.spawnProjectile(
+      this.equippedTacticalId,
+      this.tacticalOriginScratch,
+      this.tacticalFwdScratch
     );
-    mesh.position.copyFrom(spawnPos);
-    mesh.material = mat;
-    mesh.isPickable = false;
-    mesh.checkCollisions = false;
-
-    const velocity = fwd.scale(18.5).add(new Vector3(0, 4.2, 0));
-    this.tacticalProjectiles.push({
-      kind: this.equippedTacticalId,
-      mesh,
-      mat,
-      velocity,
-      fuseRemaining: cfg.fuseSec,
-    });
     this.emitHudState(true);
   }
 
@@ -1787,51 +1551,13 @@ export class EngineManager {
 
     if (kind === 'smoke_grenade') {
       this.audio.playSmokeDeploy();
-      const smokeMat = new StandardMaterial(`smokeMat_${Date.now()}`, this.scene);
-      smokeMat.diffuseColor = new Color3(0.74, 0.78, 0.84);
-      smokeMat.emissiveColor = new Color3(0.22, 0.25, 0.29);
-      smokeMat.specularColor = Color3.Black();
-      smokeMat.alpha = 0.72;
-      smokeMat.disableDepthWrite = true;
-
-      const offsets = [
-        new Vector3(0, 1.35, 0),
-        new Vector3(-1.85, 1.05, 1.15),
-        new Vector3(1.9, 1.1, 0.95),
-        new Vector3(-1.2, 1.15, -1.75),
-        new Vector3(1.5, 1.25, -1.45),
-      ];
-      const meshes = offsets.map((offset, idx) => {
-        const puff = MeshBuilder.CreateSphere(
-          `smokePuff_${Date.now()}_${idx}`,
-          { diameter: idx === 0 ? cfg.radiusMeters * 1.15 : cfg.radiusMeters * 0.86, segments: 10 },
-          this.scene
-        );
-        puff.position.copyFrom(pos).addInPlace(offset);
-        puff.material = smokeMat;
-        puff.isPickable = false;
-        puff.checkCollisions = false;
-        puff.scaling.setAll(0.45);
-        return puff;
-      });
-
-      this.smokeClouds.push({
-        meshes,
-        mat: smokeMat,
-        x: pos.x,
-        y: pos.y + 1.2,
-        z: pos.z,
-        radius: cfg.radiusMeters,
-        life: cfg.durationSec,
-        maxLife: cfg.durationSec,
-      });
-      this.botManager.setSmokeClouds(this.smokeClouds);
+      this.tacticalEffects.spawnSmokeCloud(pos, cfg.radiusMeters, cfg.durationSec);
       return;
     }
 
     if (kind === 'flashbang') {
       this.audio.playFlashbangDetonate();
-      this.spawnBlastVisual(pos, new Color3(1.8, 2.2, 2.5), new Color3(0.55, 0.85, 1.0), 0.34);
+      this.tacticalEffects.spawnBlastVisual(pos, FLASH_SPHERE_COLOR, FLASH_RING_COLOR, 0.34);
       const eyePos = this.player.getEyePosition();
       const distToPlayer = Vector3.Distance(eyePos, pos);
       if (this.playerIsAlive && distToPlayer <= cfg.radiusMeters) {
@@ -1860,7 +1586,7 @@ export class EngineManager {
 
     if (kind === 'stun_grenade') {
       this.audio.playStunDetonate();
-      this.spawnBlastVisual(pos, new Color3(0.35, 1.85, 1.25), new Color3(0.2, 1.35, 0.9), 0.4);
+      this.tacticalEffects.spawnBlastVisual(pos, STUN_SPHERE_COLOR, STUN_RING_COLOR, 0.4);
       const distToPlayer = Vector3.Distance(this.player.collider.position, pos);
       if (distToPlayer < 16) {
         this.player.addCameraShake(0.08 * (1 - distToPlayer / 16));
@@ -1873,7 +1599,7 @@ export class EngineManager {
 
     // M67 Frag Grenade
     this.audio.playExplosion();
-    this.spawnBlastVisual(pos, new Color3(2.2, 0.95, 0.25), new Color3(1.8, 1.25, 0.6), 0.48);
+    this.tacticalEffects.spawnBlastVisual(pos, BARRAGE_SPHERE_COLOR, BARRAGE_RING_COLOR, 0.48);
     const distToPlayer = Vector3.Distance(this.player.collider.position, pos);
     if (distToPlayer < 28) {
       this.player.addCameraShake(Math.max(0.03, 0.18 * (1 - distToPlayer / 28)));
@@ -1930,32 +1656,7 @@ export class EngineManager {
     this.player.setDeathLookTarget(null);
     this.weapons.setReloadSpeedMultiplier(1.0);
     this.matchManager.clearKillFeed();
-
-    for (const s of this.barrageShells) {
-      s.mat.dispose();
-      s.mesh.dispose();
-    }
-    this.barrageShells = [];
-    for (const b of this.blastEffects) {
-      b.sphereMat.dispose();
-      b.ringMat.dispose();
-      b.sphere.dispose();
-      b.ring.dispose();
-    }
-    this.blastEffects = [];
-    for (const p of this.tacticalProjectiles) {
-      p.mat.dispose();
-      p.mesh.dispose();
-    }
-    this.tacticalProjectiles = [];
-    for (const c of this.smokeClouds) {
-      for (const m of c.meshes) {
-        m.dispose();
-      }
-      c.mat.dispose();
-    }
-    this.smokeClouds = [];
-    this.botManager.setSmokeClouds([]);
+    this.tacticalEffects.clear();
     this.tacticalThrowCooldown = 0;
     this.flashBlindIntensity = 0;
     this.stopHighlightReplay(false);
@@ -1973,6 +1674,15 @@ export class EngineManager {
   }
 
   private setupPostProcessing(): void {
+    if (this.isSoftwareGl) {
+      this.scene.imageProcessingConfiguration.toneMappingEnabled = true;
+      this.scene.imageProcessingConfiguration.toneMappingType =
+        ImageProcessingConfiguration.TONEMAPPING_ACES;
+      this.scene.imageProcessingConfiguration.exposure = 1.12;
+      this.scene.imageProcessingConfiguration.contrast = 1.18;
+      this.renderPipeline = null;
+      return;
+    }
     const pipeline = new DefaultRenderingPipeline(
       'fpsPostProcess',
       true,
@@ -1990,12 +1700,23 @@ export class EngineManager {
   }
 
   private applyMapColorGrading(exposure = 1.12, contrast = 1.18): void {
-    if (!this.renderPipeline) return;
-    this.renderPipeline.imageProcessing.exposure = exposure;
-    this.renderPipeline.imageProcessing.contrast = contrast;
+    if (this.renderPipeline) {
+      this.renderPipeline.imageProcessing.exposure = exposure;
+      this.renderPipeline.imageProcessing.contrast = contrast;
+      return;
+    }
+    this.scene.imageProcessingConfiguration.exposure = exposure;
+    this.scene.imageProcessingConfiguration.contrast = contrast;
   }
 
   private ensureGlowLayer(kernelSize: number, intensity: number): void {
+    if (this.isSoftwareGl) {
+      if (this.glowLayer) {
+        this.glowLayer.dispose();
+        this.glowLayer = null;
+      }
+      return;
+    }
     if (!this.glowLayer) {
       const glow = new GlowLayer('tacticalGlow', this.scene, {
         mainTextureFixedSize: 512,
@@ -2022,7 +1743,51 @@ export class EngineManager {
     }
   }
 
+  private static detectSoftwareWebGl(engine: Engine): boolean {
+    try {
+      const glInfo = engine.getGlInfo?.();
+      const infoRenderer = String(glInfo?.renderer ?? '');
+      if (/swiftshader|llvmpipe|softpipe|software/i.test(infoRenderer)) {
+        return true;
+      }
+      const gl = (engine as unknown as { _gl?: WebGLRenderingContext })._gl;
+      if (!gl) return false;
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      if (ext) {
+        const unmasked = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? '');
+        if (/swiftshader|llvmpipe|softpipe|software/i.test(unmasked)) return true;
+      }
+      const renderer = String(gl.getParameter(gl.RENDERER) ?? '');
+      return /swiftshader|llvmpipe|softpipe|software/i.test(renderer);
+    } catch {
+      return false;
+    }
+  }
+
   private applyGraphicsQuality(quality: GraphicsQuality): void {
+    if (this.isSoftwareGl) {
+      this.engine.setHardwareScalingLevel(quality === 'LOW' ? 1.75 : 1.5);
+      this.scene.shadowsEnabled = false;
+      this.sunLight.shadowEnabled = false;
+      this.player.camera.maxZ = quality === 'LOW' ? 180 : 240;
+      if (this.glowLayer) {
+        this.glowLayer.dispose();
+        this.glowLayer = null;
+      }
+      if (this.renderPipeline) {
+        this.renderPipeline.samples = 1;
+        this.renderPipeline.fxaaEnabled = false;
+        this.renderPipeline.bloomEnabled = false;
+        this.renderPipeline.sharpenEnabled = false;
+        this.renderPipeline.chromaticAberrationEnabled = false;
+        this.renderPipeline.imageProcessing.vignetteEnabled = false;
+      }
+      this.weapons.setGraphicsQuality(quality);
+      this.botManager.setGraphicsQuality(quality);
+      this.remoteRenderer.setGraphicsQuality(quality);
+      return;
+    }
+
     const dprScale = 1 / Math.min(window.devicePixelRatio || 1, 2);
     if (quality === 'LOW') {
       this.engine.setHardwareScalingLevel(1.5);
@@ -2588,11 +2353,16 @@ export class EngineManager {
     this.sunLight.shadowMinZ = 2;
     this.sunLight.shadowMaxZ = 120;
 
-    this.shadowGenerator = new ShadowGenerator(2048, this.sunLight);
-    this.shadowGenerator.usePercentageCloserFiltering = true;
-    this.shadowGenerator.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
-    this.shadowGenerator.bias = 0.0006;
-    this.shadowGenerator.normalBias = 0.015;
+    if (!this.isSoftwareGl) {
+      this.shadowGenerator = new ShadowGenerator(2048, this.sunLight);
+      this.shadowGenerator.usePercentageCloserFiltering = true;
+      this.shadowGenerator.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
+      this.shadowGenerator.bias = 0.0006;
+      this.shadowGenerator.normalBias = 0.015;
+    } else {
+      this.sunLight.shadowEnabled = false;
+      this.shadowGenerator = null;
+    }
 
     const rim = new DirectionalLight('rimLight', new Vector3(0.5, -0.4, 0.6), this.scene);
     rim.intensity = 0.34;
@@ -3184,6 +2954,8 @@ export class EngineManager {
       roundNumber: snap.roundNumber ?? 1,
       roundsToWin: snap.roundsToWin ?? (resolvedMode === 'bomb' ? 5 : 1),
       timeRemainingSec: snap.timeRemaining,
+      timeLimitSec: snap.timeLimit,
+      elapsedSec: Math.max(0, Math.round(snap.timeLimit - snap.timeRemaining)),
       winner: snap.winner === '' ? null : snap.winner,
       winnerParticipantId: snap.winnerId || null,
       winnerName: snap.winnerName || null,
@@ -3241,7 +3013,7 @@ export class EngineManager {
         name: 'Barrage',
         requiredKills: 5,
         unlocked: this.unlockedStreaks.airstrike,
-        active: this.barrageShells.length > 0,
+        active: this.tacticalEffects.hasActiveBarrage(),
         remainingSec: 0,
       },
       {
@@ -3774,9 +3546,8 @@ export class EngineManager {
     const sample = computeHighlightPoseVectors(clip, timeline);
 
     this.player.camera.position.set(sample.cameraPos.x, sample.cameraPos.y, sample.cameraPos.z);
-    this.player.camera.setTarget(
-      new Vector3(sample.cameraTarget.x, sample.cameraTarget.y, sample.cameraTarget.z)
-    );
+    this.hlTargetScratch.set(sample.cameraTarget.x, sample.cameraTarget.y, sample.cameraTarget.z);
+    this.player.camera.setTarget(this.hlTargetScratch);
     this.player.camera.fov = this.highlightReplay.baseFovRad * sample.fovScale;
 
     const killerRig = this.highlightReplay.killerRig;
@@ -3793,20 +3564,20 @@ export class EngineManager {
     if (tracer) {
       if (timeline.hasFired && !timeline.hasImpacted && clip.weaponId !== 'knife') {
         tracer.isVisible = true;
-        const muzzleVec = new Vector3(sample.muzzlePos.x, sample.muzzlePos.y, sample.muzzlePos.z);
-        const impactVec = new Vector3(sample.impactPos.x, sample.impactPos.y, sample.impactPos.z);
-        const bulletPos = new Vector3(
+        this.hlMuzzleScratch.set(sample.muzzlePos.x, sample.muzzlePos.y, sample.muzzlePos.z);
+        this.hlImpactScratch.set(sample.impactPos.x, sample.impactPos.y, sample.impactPos.z);
+        this.hlBulletScratch.set(
           sample.projectilePos.x,
           sample.projectilePos.y,
           sample.projectilePos.z
         );
-        const dir = impactVec.subtract(muzzleVec);
-        const totalLen = Math.max(0.5, dir.length());
+        this.hlDirScratch.copyFrom(this.hlImpactScratch).subtractInPlace(this.hlMuzzleScratch);
+        const totalLen = Math.max(0.5, this.hlDirScratch.length());
         const segLen = Math.min(2.6, Math.max(0.65, totalLen * 0.24));
         tracer.scaling.set(1, segLen, 1);
-        tracer.position.copyFrom(bulletPos);
-        tracer.lookAt(impactVec);
-        tracer.rotate(new Vector3(1, 0, 0), Math.PI * 0.5);
+        tracer.position.copyFrom(this.hlBulletScratch);
+        tracer.lookAt(this.hlImpactScratch);
+        tracer.rotate(HIGHLIGHT_X_AXIS, Math.PI * 0.5);
       } else {
         tracer.isVisible = false;
       }
@@ -3837,8 +3608,8 @@ export class EngineManager {
         victimRig.legLPivot.rotation.x = -0.35 * easedFall;
         victimRig.legRPivot.rotation.x = 0.28 * easedFall;
         const glowDecay = Math.max(0, 1 - timeline.impactProgress * 2.2);
-        victimRig.bodyMat.emissiveColor = new Color3(0.9 * glowDecay, 0.35 * glowDecay, 0.15 * glowDecay);
-        victimRig.headMat.emissiveColor = new Color3(1.1 * glowDecay, 0.3 * glowDecay, 0.18 * glowDecay);
+        victimRig.bodyMat.emissiveColor.set(0.9 * glowDecay, 0.35 * glowDecay, 0.15 * glowDecay);
+        victimRig.headMat.emissiveColor.set(1.1 * glowDecay, 0.3 * glowDecay, 0.18 * glowDecay);
       } else {
         victimRig.pivot.rotation.set(0, 0, 0);
         victimRig.pivot.position.set(0, 0, 0);
@@ -3871,7 +3642,7 @@ export class EngineManager {
   private onWebGLContextRestored = (): void => {
     if (this.disposed) return;
     this.engine.resize(true);
-    this.scene.setRenderingAutoClearDepthStencil(1, false, false, false);
+    this.scene.setRenderingAutoClearDepthStencil(1, false, true, false);
     this.scene.resetCachedMaterial();
     this.scene.markAllMaterialsAsDirty(Constants.MATERIAL_AllDirtyFlag);
 
@@ -3910,6 +3681,7 @@ export class EngineManager {
     this.canvas.removeEventListener('webglcontextrestored', this.onWebGLContextRestored);
 
     this.resetCombatArcadeState(true);
+    this.tacticalEffects.dispose();
     this.clearBombVisuals();
     if (this.showcaseRig) {
       this.showcaseRig.root.dispose();

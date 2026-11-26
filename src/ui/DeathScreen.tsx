@@ -115,12 +115,12 @@ export const DeathScreen: React.FC<DeathScreenProps> = ({
 
   return (
     <div
-      className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-black/55 p-3 backdrop-blur-[2px] sm:p-6"
+      className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center bg-black/75 p-3 sm:p-6"
       role="dialog"
       aria-modal="false"
       aria-label="Eliminated loadout and respawn"
     >
-      <div className="w-full max-w-3xl border border-slate-400/25 bg-[#0b0f17]/94 p-4 shadow-2xl shadow-black/60 backdrop-blur-md sm:p-5">
+      <div className="w-full max-w-3xl border border-slate-400/25 bg-[#0b0f17]/96 p-4 shadow-2xl shadow-black/60 sm:p-5">
         {/* Top Elimination Header */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
           <div className="flex items-center gap-2">

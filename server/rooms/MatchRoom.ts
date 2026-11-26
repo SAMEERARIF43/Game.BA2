@@ -80,6 +80,17 @@ export function getPublicRoomSummary(code: string): PublicRoomSummary | null {
   return room.getPublicSummary();
 }
 
+export function getAllPublicRooms(): PublicRoomSummary[] {
+  const rooms: PublicRoomSummary[] = [];
+  for (const room of ACTIVE_ROOMS.values()) {
+    const summary = room.getPublicSummary();
+    if (!summary.hasPassword) {
+      rooms.push(summary);
+    }
+  }
+  return rooms;
+}
+
 function generateUniqueRoomCode(): string {
   for (let attempt = 0; attempt < 50; attempt++) {
     let code = '';

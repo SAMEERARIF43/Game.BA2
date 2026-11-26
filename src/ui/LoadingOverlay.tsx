@@ -25,7 +25,7 @@ export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({
     <div
       role="status"
       aria-live="polite"
-      className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-[#070b11]/92 p-6 backdrop-blur-md"
+      className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-[#070b11]/96 p-6"
     >
       <div className="w-full max-w-md border border-slate-400/20 bg-[#0e131b]/95 p-6 shadow-2xl shadow-black/50">
         <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-4">

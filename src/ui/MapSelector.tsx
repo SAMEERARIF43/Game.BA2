@@ -20,7 +20,7 @@ export const MapSelector: React.FC<MapSelectorProps> = ({
   const [mapViewMode, setMapViewMode] = useState<MapPreviewMode>('scenic');
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/75 p-3 backdrop-blur-sm sm:p-6 md:p-8">
+    <div className="pointer-events-auto fixed inset-0 z-20 flex items-center justify-center overflow-y-auto bg-[#090d13]/90 p-3 sm:p-6 md:p-8">
       <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto border border-slate-400/20 bg-[#0e131b]/95 p-4 shadow-2xl shadow-black/40 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
           <div>

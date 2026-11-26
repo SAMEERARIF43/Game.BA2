@@ -31,7 +31,7 @@ export const GAME_MODE_META: Record<GameMode, GameModeMeta> = {
     id: 'tdm',
     label: 'Team Deathmatch',
     shortLabel: 'TDM',
-    tagline: '6v6 tactical squad combat. First team to 30 eliminations.',
+    tagline: 'Tactical squad combat (up to 6v6). First team to 30 eliminations.',
     targetLabel: 'First to 30 Kills',
   },
   ffa: {

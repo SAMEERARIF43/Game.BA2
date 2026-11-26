@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { useEffect } from 'react';
 import { useMatchMachine } from './hooks/useMatchMachine';
 import { isOfflineMatchStatus } from './match/matchMachine';
 import { CustomMatchMenu } from './ui/CustomMatchMenu';
@@ -21,6 +22,21 @@ export default function App() {
 
   const isCustomMenuView = status === 'custom_menu' || status === 'mp_connecting';
   const isOfflineMatchView = isOfflineMatchStatus(status);
+
+  useEffect(() => {
+    let bodyState = 'title';
+    if (status === 'offline_ended' || status === 'mp_ended' || hud.match.phase === 'ended') {
+      bodyState = 'gameover';
+    } else if (
+      status === 'offline_paused' ||
+      (status === 'mp_playing' && hud.match.phase === 'paused')
+    ) {
+      bodyState = 'paused';
+    } else if (status === 'offline_playing' || status === 'mp_playing') {
+      bodyState = 'playing';
+    }
+    document.body.dataset.state = bodyState;
+  }, [hud.match.phase, status]);
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#0b0e13]">

@@ -448,10 +448,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 }}
               >
                 <div
-                  className={`flex items-center gap-1 border px-1.5 py-0.5 font-mono-tabular text-[10px] font-bold shadow-md shadow-black/40 backdrop-blur-sm ${
+                  className={`flex items-center gap-1 border px-1.5 py-0.5 font-mono-tabular text-[10px] font-bold shadow-md shadow-black/40 ${
                     site.isPlantedHere
-                      ? 'border-red-400 bg-red-950/90 text-red-200'
-                      : 'border-amber-400/75 bg-slate-950/85 text-amber-200'
+                      ? 'border-red-400 bg-red-950/94 text-red-200'
+                      : 'border-amber-400/75 bg-slate-950/92 text-amber-200'
                   } ${!site.onScreen ? 'opacity-80 ring-1 ring-white/25' : ''}`}
                 >
                   <Bomb className="h-3 w-3 shrink-0" />
@@ -482,7 +482,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               >
                 <div className="flex flex-col items-center gap-0.5">
                   <div
-                    className={`flex items-center gap-1 border px-1.5 py-0.5 font-mono-tabular text-[10px] font-bold shadow-md shadow-black/40 backdrop-blur-sm ${
+                    className={`flex items-center gap-1 border px-1.5 py-0.5 font-mono-tabular text-[10px] font-bold shadow-md shadow-black/40 ${
                       !ping.onScreen ? 'ring-1 ring-white/30' : ''
                     }`}
                     style={{
@@ -538,7 +538,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {/* Dynamic / Static Per-Weapon Center Reticle (hidden when scoped) */}
-      {hud.isPointerLocked && hud.isAlive && !hud.showScoreboard && !hideHipReticle && (
+      {(hud.isPointerLocked || hud.match.phase === 'playing') &&
+        hud.isAlive &&
+        !hud.showScoreboard &&
+        !hideHipReticle && (
         <div
           className="absolute inset-0 flex items-center justify-center"
           data-hud-reticle={hud.activeWeapon.id}
@@ -623,7 +626,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {/* Directional Hitmarker Pulse (visible across hipfire, Red Dot ADS, and Sniper Scope) */}
-      {hud.isPointerLocked && hud.isAlive && !hud.showScoreboard && hud.hitMarker && (
+      {(hud.isPointerLocked || hud.match.phase === 'playing') &&
+        hud.isAlive &&
+        !hud.showScoreboard &&
+        hud.hitMarker && (
         <div
           key={hud.hitMarker.id}
           className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
@@ -678,7 +684,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       )}
 
       {/* Floating Arcade Score Popups */}
-      {hud.isPointerLocked && hud.isAlive && !hud.showScoreboard && hud.scorePopups.length > 0 && (
+      {(hud.isPointerLocked || hud.match.phase === 'playing') &&
+        hud.isAlive &&
+        !hud.showScoreboard &&
+        hud.scorePopups.length > 0 && (
         <div className="absolute top-[55%] left-[55%] flex flex-col gap-1">
           {hud.scorePopups.map((pop) => {
             const age = Math.max(0, now - pop.timestamp);
@@ -717,7 +726,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         hud.match.phase === 'playing' &&
         !hud.showScoreboard &&
         hud.bombInteractPrompt && (
-          <div className="pointer-events-none absolute bottom-32 left-1/2 z-20 w-72 -translate-x-1/2 border border-amber-400/55 bg-slate-950/90 px-4 py-2.5 shadow-xl shadow-black/40 backdrop-blur-md">
+          <div className="pointer-events-none absolute bottom-32 left-1/2 z-20 w-72 -translate-x-1/2 border border-amber-400/55 bg-slate-950/94 px-4 py-2.5 shadow-xl shadow-black/40">
             <div className="flex items-center justify-between gap-2 font-mono-tabular text-[11px] font-bold">
               <span className="flex items-center gap-1.5 text-amber-300">
                 <Bomb className="h-3.5 w-3.5" />
@@ -758,7 +767,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* Top-Center Mode Score Bug, Compass & Killstreak Notification Banner */}
       <div className="absolute top-4 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
         {mode === 'ffa' ? (
-          <div className="flex items-center border border-slate-400/20 bg-slate-950/80 shadow-lg shadow-black/20 backdrop-blur-md">
+          <div className="flex items-center border border-slate-400/20 bg-slate-950/90 shadow-lg shadow-black/25">
             <div className="flex items-center gap-2 border-r border-white/10 px-4 py-1.5">
               <span className="text-[11px] font-medium text-amber-300">RANK</span>
               <span className="font-mono-tabular font-display text-xl font-bold text-white">
@@ -787,7 +796,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
           </div>
         ) : mode === 'bomb' ? (
-          <div className="flex items-center border border-slate-400/20 bg-slate-950/80 shadow-lg shadow-black/20 backdrop-blur-md">
+          <div className="flex items-center border border-slate-400/20 bg-slate-950/90 shadow-lg shadow-black/25">
             <div className="flex items-center gap-2.5 border-r border-white/10 px-4 py-1.5">
               <span className="text-[11px] font-medium" style={{ color: sideColors.blueHex }}>
                 ATK
@@ -829,7 +838,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
           </div>
         ) : (
-          <div className="flex items-center border border-slate-400/20 bg-slate-950/80 shadow-lg shadow-black/20 backdrop-blur-md">
+          <div className="flex items-center border border-slate-400/20 bg-slate-950/90 shadow-lg shadow-black/25">
             <div className="flex items-center gap-2.5 border-r border-white/10 px-4 py-1.5">
               <span className="text-[11px] font-medium" style={{ color: sideColors.blueHex }}>
                 BLUE
@@ -866,7 +875,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
         {mode === 'bomb' && bombState && (
           <div
-            className={`border px-3 py-1 font-mono-tabular text-[10px] font-bold tracking-wider shadow-md backdrop-blur-sm ${
+            className={`border px-3 py-1 font-mono-tabular text-[10px] font-bold tracking-wider shadow-md ${
               bombState.phase === 'round_end'
                 ? ''
                 : bombState.phase === 'planted'
@@ -902,14 +911,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         )}
 
         {showFps && (
-          <div className="border border-slate-400/20 bg-slate-950/75 px-2.5 py-1 font-mono-tabular text-[10px] text-slate-300 backdrop-blur-sm">
+          <div className="border border-slate-400/20 bg-slate-950/90 px-2.5 py-1 font-mono-tabular text-[10px] text-slate-300">
             FPS <span className="font-semibold text-emerald-300">{hud.fps}</span>
           </div>
         )}
 
         {hud.killstreakBanner && (
           <div
-            className="mt-1 max-w-[min(32rem,calc(100vw-2rem))] border-l-2 border-amber-400 bg-slate-950/90 px-4 py-2 text-center shadow-lg shadow-black/20 backdrop-blur-md animate-fade-in"
+            className="mt-1 max-w-[min(32rem,calc(100vw-2rem))] border-l-2 border-amber-400 bg-slate-950/94 px-4 py-2 text-center shadow-lg shadow-black/25 animate-fade-in"
             style={{
               opacity: Math.min(
                 1,
@@ -966,10 +975,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <div
                 key={entry.id}
                 data-killfeed-entry={entry.id}
-                className={`flex max-w-full items-center justify-end gap-2 border px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md shadow-black/25 backdrop-blur-md transition-opacity duration-150 ${
+                className={`flex max-w-full items-center justify-end gap-2 border px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md shadow-black/25 transition-opacity duration-150 ${
                   isLocalInvolved
-                    ? 'border-amber-400/55 bg-slate-900/90'
-                    : 'border-white/15 bg-slate-950/85'
+                    ? 'border-amber-400/55 bg-slate-900/94'
+                    : 'border-white/15 bg-slate-950/90'
                 }`}
                 style={{
                   opacity: Math.min(1, Math.max(0, (4500 - age) / 650)),
@@ -1023,7 +1032,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         <div className="flex items-start gap-2.5">
           {/* Real-Time 2D Minimap */}
           <div
-            className="flex flex-col border border-slate-400/25 bg-[#080c12]/85 shadow-lg shadow-black/30 backdrop-blur-md"
+            className="flex flex-col border border-slate-400/25 bg-[#080c12]/92 shadow-lg shadow-black/30"
             aria-label="Real-time 2D tactical minimap"
             data-ally-color={sideColors.allyHex}
             data-enemy-color={sideColors.enemyHex}
@@ -1184,7 +1193,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
           {/* Operator Session Telemetry */}
           <div className="flex flex-col gap-1.5">
-            <div className="border border-slate-400/20 bg-slate-950/75 px-3 py-1.5 shadow-md shadow-black/20 backdrop-blur-md">
+            <div className="border border-slate-400/20 bg-slate-950/90 px-3 py-1.5 shadow-md shadow-black/25">
               <div className="flex items-center gap-3 text-xs text-slate-300">
                 <div>
                   <span className="text-slate-400">Kills </span>
@@ -1209,7 +1218,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             </div>
 
-            <div className="border border-slate-400/20 bg-slate-950/75 px-3 py-1 font-mono-tabular text-[11px] text-slate-300 shadow-md shadow-black/20 backdrop-blur-md">
+            <div className="border border-slate-400/20 bg-slate-950/90 px-3 py-1 font-mono-tabular text-[11px] text-slate-300 shadow-md shadow-black/25">
               <span className="text-slate-400">LV {hud.rankLevel}</span>{' '}
               <span className="font-semibold text-white">{hud.rankTitle}</span>
               <span className="mx-1.5 text-slate-600">|</span>
@@ -1231,7 +1240,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           {visibleChatMessages.length > 0 && (
             <div
               ref={chatFeedRef}
-              className="max-h-36 overflow-y-auto border border-slate-400/20 bg-slate-950/80 px-2.5 py-2 shadow-lg shadow-black/30 backdrop-blur-md"
+              className="max-h-36 overflow-y-auto border border-slate-400/20 bg-slate-950/90 px-2.5 py-2 shadow-lg shadow-black/30"
             >
               <div className="space-y-1 text-[11px]">
                 {visibleChatMessages.map((msg) => {
@@ -1286,7 +1295,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           {chatOpen && (
             <form
               onSubmit={handleChatFormSubmit}
-              className="flex items-center gap-1 border border-amber-400/45 bg-slate-950/92 p-1.5 shadow-xl shadow-black/40 backdrop-blur-md"
+              className="flex items-center gap-1 border border-amber-400/45 bg-slate-950/95 p-1.5 shadow-xl shadow-black/40"
             >
               <button
                 type="button"
@@ -1344,7 +1353,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         )}
 
       {/* Bottom-Left Player Vitals & Stance */}
-      <div className="absolute bottom-4 left-4 border border-slate-400/20 bg-slate-950/80 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md">
+      <div className="absolute bottom-4 left-4 border border-slate-400/20 bg-slate-950/90 px-4 py-3 shadow-lg shadow-black/25">
         <div className="flex items-baseline justify-between gap-6">
           <span
             className={`font-mono-tabular font-display text-2xl font-bold ${
@@ -1396,7 +1405,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             return (
               <div
                 key={ks.id}
-                className={`border px-2.5 py-1 font-mono-tabular text-[11px] shadow-md shadow-black/20 backdrop-blur-sm ${stateClass}`}
+                className={`border px-2.5 py-1 font-mono-tabular text-[11px] shadow-md shadow-black/20 ${stateClass}`}
               >
                 <span className="font-bold">[{ks.key}]</span> {ks.name}{' '}
                 <span className="text-[10px] opacity-80">
@@ -1415,7 +1424,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         <div
           data-weapon-hud-card={hud.activeWeapon.id}
           data-ammo-state={ammoDisplay.level}
-          className={`border px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-md transition-colors duration-150 ${ammoDisplay.cardBorderClass}`}
+          className={`border px-4 py-3 shadow-lg shadow-black/25 transition-colors duration-150 ${ammoDisplay.cardBorderClass}`}
         >
           <div className="flex items-center justify-between gap-5">
             <div className="min-w-0">
@@ -1573,7 +1582,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         hud.isAlive &&
         hud.match.phase === 'playing' && (
           <div
-            className={`pointer-events-auto absolute bottom-24 left-1/2 w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 border border-slate-400/25 bg-slate-950/90 p-2.5 shadow-2xl shadow-black/30 backdrop-blur-md transition-[opacity,transform] duration-300 sm:p-3 ${
+            className={`pointer-events-auto absolute bottom-36 left-1/2 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 border border-slate-400/25 bg-slate-950/94 p-2.5 shadow-2xl shadow-black/35 transition-[opacity,transform] duration-300 sm:bottom-32 sm:p-3 ${
               onboardingVisible ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
             }`}
             role="region"
@@ -1595,7 +1604,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-6">
+            <div className="grid grid-cols-2 gap-1.5 pt-2 sm:grid-cols-3">
               {[
                 {
                   key: `${formatKeyCode(keybindings.slotGun)} / ${formatKeyCode(keybindings.slotKnife)}`,
@@ -1618,12 +1627,12 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               ].map((hint) => (
                 <div
                   key={hint.key}
-                  className="flex min-w-0 items-center gap-2 border border-white/[0.07] bg-white/[0.03] px-2 py-1.5"
+                  className="flex min-w-0 items-center gap-1.5 border border-white/[0.07] bg-white/[0.03] px-2 py-1.5"
                 >
                   <kbd className="shrink-0 border border-amber-400/25 bg-amber-400/10 px-1.5 py-0.5 font-mono-tabular text-[10px] font-semibold text-amber-300">
                     [{hint.key}]
                   </kbd>
-                  <span className="truncate text-[10px] text-slate-300">{hint.label}</span>
+                  <span className="whitespace-nowrap text-[10px] text-slate-300">{hint.label}</span>
                 </div>
               ))}
             </div>

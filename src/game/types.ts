@@ -495,6 +495,8 @@ export interface MatchSnapshot {
   roundNumber: number;
   roundsToWin: number;
   timeRemainingSec: number;
+  timeLimitSec?: number;
+  elapsedSec?: number;
   winner: TeamId | 'draw' | null;
   winnerParticipantId?: string | null;
   winnerName?: string | null;
@@ -752,6 +754,7 @@ export interface GameSettings {
   postSlideStance: PostSlideStance;
   jumpCancelsSlide: boolean;
   slideCameraIntensity: number;
+  autoReload?: boolean;
   crosshair?: CrosshairSettingsMap;
   teamColors?: TeamColorsConfig;
   keybindings: KeybindingsConfig;
